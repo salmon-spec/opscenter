@@ -1,0 +1,68 @@
+version: "3.8"
+
+services:
+  ops-db:
+    image: postgres:16-alpine
+    container_name: ops-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: opscenter
+      POSTGRES_USER: opscenter
+      POSTGRES_PASSWORD: OpsCenter2026
+    volumes:
+      - ops-db-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opscenter -d opscenter"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ops-net
+      - cicd_cicd-net
+
+  ops-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: ops-backend
+    restart: unless-stopped
+    depends_on:
+      ops-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://opscenter:OpsCenter2026@ops-db:5432/opscenter
+      PROMETHEUS_URL: http://prometheus:9090
+      LOCAL_HOST: "39.99.157.36"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /opt/cicd/nginx/nginx.conf:/etc/nginx-source/nginx.conf:ro
+    ports:
+      - "127.0.0.1:9091:9091"
+    networks:
+      - ops-net
+      - cicd_cicd-net
+
+  ops-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: ops-frontend
+    restart: unless-stopped
+    depends_on:
+      - ops-backend
+    ports:
+      - "127.0.0.1:9092:80"
+    networks:
+      - ops-net
+      - cicd_cicd-net
+
+volumes:
+  ops-db-data:
+
+networks:
+  ops-net:
+    driver: bridge
+  cicd_cicd-net:
+    external: true
