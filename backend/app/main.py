@@ -100,30 +100,59 @@ app.add_middleware(
 # === Startup ===
 
 # === Background Health Check ===
-async def background_health_check():
-    """Periodically check all services health status."""
+def _run_health_check():
+    """Synchronous health check - runs in thread to avoid blocking event loop."""
     import requests as req
+    import socket
+    try:
+        with get_db() as db:
+            # --- Check service health ---
+            services = db.query(Service).all()
+            for svc in services:
+                if not svc.url or svc.url == "/":
+                    continue
+                try:
+                    url = svc.url
+                    if url.startswith("/"):
+                        srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                        host = srv.host if srv else LOCAL_HOST
+                        url = f"http://{host}{url}"
+                    resp = req.head(url, timeout=5, allow_redirects=True, verify=False)
+                    svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
+                except Exception:
+                    svc.status = ServiceStatus.down.value
+            db.commit()
+
+            # --- Check server reachability ---
+            servers = db.query(Server).all()
+            for srv in servers:
+                if srv.is_local:
+                    srv.status = ServerStatus.online.value
+                    srv.last_seen = datetime.utcnow()
+                    continue
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(3)
+                    result = sock.connect_ex((srv.host, srv.ssh_port or 22))
+                    sock.close()
+                    if result == 0:
+                        srv.status = ServerStatus.online.value
+                        srv.last_seen = datetime.utcnow()
+                    else:
+                        srv.status = ServerStatus.offline.value
+                except Exception:
+                    srv.status = ServerStatus.offline.value
+            db.commit()
+    except Exception as e:
+        print(f"Health check error: {e}")
+
+
+async def background_health_check():
+    """Periodically check all services and servers health status."""
     while True:
-        try:
-            with get_db() as db:
-                services = db.query(Service).all()
-                for svc in services:
-                    if not svc.url or svc.url == "/":
-                        continue
-                    try:
-                        url = svc.url
-                        if url.startswith("/"):
-                            srv = db.query(Server).filter(Server.id == svc.server_id).first()
-                            host = srv.host if srv else LOCAL_HOST
-                            url = f"http://{host}{url}"
-                        resp = req.head(url, timeout=5, allow_redirects=True, verify=False)
-                        svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
-                    except Exception:
-                        svc.status = ServiceStatus.down.value
-                db.commit()
-        except Exception as e:
-            print(f"Health check error: {e}")
+        await asyncio.to_thread(_run_health_check)
         await asyncio.sleep(60)
+
 
 @app.on_event("startup")
 async def startup():
