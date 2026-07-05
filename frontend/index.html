@@ -632,11 +632,34 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                 <input v-model="newServer.username" class="w-full px-3 py-2 rounded-lg text-sm border"
                        style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="root">
               </div>
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">SSH 密码</label>
+                <div class="relative">
+                  <input v-model="newServer.password" :type="showServerPwd?'text':'password'" class="w-full px-3 py-2 pr-9 rounded-lg text-sm border"
+                         style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="可选，用于远程连接">
+                  <button @click="showServerPwd=!showServerPwd" type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs opacity-50 hover:opacity-100" style="color:var(--text2)">
+                    <i :class="['fas', showServerPwd?'fa-eye-slash':'fa-eye']"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+            <!-- SSH Test Result -->
+            <div v-if="sshTestResult.success!==null" class="mb-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2"
+                 :style="{background: sshTestResult.success ? 'rgba(34,197,94,.1)' : 'rgba(239,68,68,.1)', color: sshTestResult.success ? '#22c55e' : '#ef4444'}">
+              <i :class="['fas', sshTestResult.success?'fa-check-circle':'fa-times-circle']"></i>
+              {{ sshTestResult.message }}
             </div>
             <div class="flex gap-2">
               <button @click="addServer" :disabled="!newServer.name||!newServer.host"
-                      class="px-4 py-2 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition disabled:opacity-50">保存</button>
-              <button @click="showAddServer=false" class="px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
+                      class="px-4 py-2 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition disabled:opacity-50">
+                <i class="fas fa-plus mr-1"></i>保存并扫描
+              </button>
+              <button @click="testConnection()" :disabled="!newServer.host||sshTestResult.testing"
+                      class="px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
+                      style="background:var(--bg);color:var(--text1);border-color:var(--border)">
+                <i :class="['fas', sshTestResult.testing?'fa-spinner fa-spin':'fa-plug']" class="mr-1"></i>测试连接
+              </button>
+              <button @click="showAddServer=false; sshTestResult.success=null; sshTestResult.message=''" class="px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
                       style="background:var(--bg);color:var(--text1);border-color:var(--border)">取消</button>
             </div>
           </div>
@@ -646,14 +669,25 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               <div class="flex items-center gap-3">
                 <span class="w-2.5 h-2.5 rounded-full" :class="s.status==='online'?'bg-emerald-500':s.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
                 <div>
-                  <div class="text-sm font-medium" style="color:var(--text1)">{{ s.name }}</div>
-                  <div class="text-xs" style="color:var(--text2)">{{ s.host }}:{{ s.ssh_port||22 }} · {{ s.username||'root' }}</div>
+                  <div class="text-sm font-medium flex items-center gap-1.5" style="color:var(--text1)">
+                    {{ s.name }}
+                    <span v-if="s.is_local" class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">本地</span>
+                    <span v-if="s.has_credentials && !s.is_local" class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400">SSH</span>
+                    <span v-if="!s.has_credentials && !s.is_local" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">未配置</span>
+                  </div>
+                  <div class="text-xs" style="color:var(--text2)">{{ s.host }}:{{ s.ssh_port||22 }} · {{ s.ssh_user||s.username||'root' }}</div>
                 </div>
               </div>
-              <button @click="deleteServer(s.id)" class="text-xs px-2.5 py-1.5 rounded-lg border hover:bg-red-500 hover:text-white hover:border-red-500 transition"
-                      style="color:var(--text2);border-color:var(--border)">
-                <i class="fas fa-trash"></i>
-              </button>
+              <div class="flex items-center gap-1.5">
+                <button v-if="!s.is_local && s.has_credentials" @click="scanServer(s.id)" class="text-xs px-2.5 py-1.5 rounded-lg border hover:bg-emerald-500 hover:text-white hover:border-emerald-500 transition"
+                        style="color:var(--text2);border-color:var(--border)" title="扫描服务">
+                  <i class="fas fa-search"></i>
+                </button>
+                <button @click="deleteServer(s.id)" class="text-xs px-2.5 py-1.5 rounded-lg border hover:bg-red-500 hover:text-white hover:border-red-500 transition"
+                        style="color:var(--text2);border-color:var(--border)">
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
             </div>
             <div v-if="!servers.length" class="px-5 py-6 text-center text-xs" style="color:var(--text2)">暂无服务器</div>
           </div>
@@ -791,7 +825,10 @@ createApp({
     });
 
     const showAddServer = ref(false);
-    const newServer = reactive({ name: '', host: '', ssh_port: 22, username: 'root' });
+    const newServer = reactive({ name: '', host: '', ssh_port: 22, username: 'root', password: '' });
+    const sshTesting = ref(false);
+    const showServerPwd = ref(false);
+    const sshTestResult = reactive({ testing: false, success: null, message: '' });
     const newService = reactive({ name: '', url: '', category: '', icon: '', description: '' });
     const scanning = ref(false);
     const stats = reactive({ servers: 0, services: 0, categories: 0, containers: 0 });
@@ -879,16 +916,80 @@ createApp({
 
     async function addServer() {
       try {
-        await apiFetch('/servers', {
+        const payload = { name: newServer.name, host: newServer.host, ssh_port: newServer.ssh_port, ssh_user: newServer.username };
+        if (newServer.password) payload.ssh_password = newServer.password;
+        const res = await apiFetch('/servers', {
           method: 'POST',
-          body: JSON.stringify(newServer),
+          body: JSON.stringify(payload),
         });
         toast('服务器添加成功', 'success');
         showAddServer.value = false;
-        Object.assign(newServer, { name: '', host: '', ssh_port: 22, username: 'root' });
+        Object.assign(newServer, { name: '', host: '', ssh_port: 22, username: 'root', password: '' });
+        sshTestResult.success = null; sshTestResult.message = '';
         await loadServers();
+        // Auto-scan if password was provided
+        if (newServer.password === undefined && res.id) {
+          // password already cleared, but res contains server id
+        }
+        if (res.id && payload.ssh_password) {
+          toast('正在自动扫描远程服务...', 'info');
+          try {
+            await apiFetch(`/servers/${res.id}/scan`, { method: 'POST' });
+            toast('远程服务扫描完成', 'success');
+            await loadServices();
+            await loadServers();
+          } catch(e) { toast('自动扫描失败: ' + e.message, 'error'); }
+        }
       } catch (e) {
         toast('添加失败: ' + e.message, 'error');
+      }
+    }
+
+    async function scanServer(serverId) {
+      try {
+        toast('正在扫描远程服务...', 'info');
+        const res = await apiFetch(`/servers/${serverId}/scan`, { method: 'POST' });
+        const data = res.discovered !== undefined ? res : await res.json();
+        toast(`扫描完成，发现 ${data.discovered || 0} 个服务`, 'success');
+        await loadServices();
+        await loadServers();
+      } catch(e) {
+        toast('扫描失败: ' + e.message, 'error');
+      }
+    }
+
+    async function testConnection() {
+      if (!newServer.host) { toast('请先填写主机地址', 'error'); return; }
+      sshTestResult.testing = true; sshTestResult.success = null; sshTestResult.message = '';
+      try {
+        // First create the server temporarily or use the test endpoint
+        // We need a server_id to test. So let's test directly first.
+        const payload = { name: newServer.name || 'test', host: newServer.host, ssh_port: newServer.ssh_port, ssh_user: newServer.username };
+        if (newServer.password) payload.ssh_password = newServer.password;
+        // Create server first, then test
+        const res = await apiFetch('/servers', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        // Test SSH connection
+        const testRes = await apiFetch(`/servers/${res.id}/ssh-test`, {
+          method: 'POST',
+          body: JSON.stringify({ password: newServer.password }),
+        });
+        const data = await testRes.json || testRes;
+        sshTestResult.testing = false;
+        sshTestResult.success = data.success;
+        sshTestResult.message = data.message || (data.success ? '连接成功' : '连接失败');
+        if (data.success) {
+          toast('SSH 连接测试成功', 'success');
+        } else {
+          toast('SSH 连接失败: ' + sshTestResult.message, 'error');
+        }
+      } catch (e) {
+        sshTestResult.testing = false;
+        sshTestResult.success = false;
+        sshTestResult.message = e.message;
+        toast('测试失败: ' + e.message, 'error');
       }
     }
 
@@ -1417,7 +1518,7 @@ createApp({
       navItems, loading, servers, allServices, categories, categoryExpanded, pinnedIds, toasts,
       monitor, historyMetric, refreshCountdown, historyChart,
       terminalLines, terminalInput, terminalHistoryIdx,
-      tools, showAddServer, newServer, newService, scanning, stats, confirmModal,
+      tools, showAddServer, newServer, newService, scanning, stats, confirmModal, showServerPwd, sshTestResult,
       currentServer, filteredServices, pinnedServices, categoriesWithServices,
       metricCards, statsCards, passwordStrengthLabel, passwordStrengthColor,
       toggleTheme, onServerChange, addServer, deleteServer, addService,

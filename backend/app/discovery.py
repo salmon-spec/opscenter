@@ -6,12 +6,14 @@ from app.models import Service, Server, ServiceSource, ServiceStatus
 # Image -> category auto-classification
 IMAGE_CATEGORIES = {
     "代码与CI/CD": ["gitea", "gitlab", "jenkins", "drone", "runner", "woodpecker"],
-    "监控与日志": ["prometheus", "grafana", "loki", "promtail", "alertmanager", "node-exporter", "cadvisor"],
+    "监控与日志": ["prometheus", "grafana", "loki", "promtail", "alertmanager", "node-exporter", "cadvisor", "kibana"],
     "网络与代理": ["nginx", "traefik", "caddy"],
-    "数据存储": ["postgres", "mysql", "redis", "mongo", "mariadb", "registry"],
+    "数据存储": ["postgres", "mysql", "redis", "mongo", "mariadb", "registry", "elasticsearch"],
+    "消息与注册": ["rabbitmq", "nacos", "zookeeper", "consul", "kafka"],
     "自动化工作流": ["n8n", "airflow", "temporal"],
     "运维管理": ["1panel", "portainer"],
-    "应用服务": ["collector", "s-pdf", "frooodle", "it-tools", "corentinth"],
+    "前端应用": ["mall-admin-web", "mall-app-web"],
+    "应用服务": ["collector", "s-pdf", "frooodle", "it-tools", "corentinth", "mall-admin", "mall-search", "mall-portal", "mall-gateway", "mall-auth", "mall-monitor"],
 }
 
 # Image -> icon mapping
@@ -26,6 +28,13 @@ IMAGE_ICONS = {
     "promtail": "fa-arrow-right", "registry": "fa-cubes",
     "traefik": "fa-route", "portainer": "fa-docker",
     "harbor": "fa-anchor", "trivy": "fa-shield-halved",
+    "kibana": "fa-chart-bar", "elasticsearch": "fa-search", "rabbitmq": "fa-envelope",
+    "nacos": "fa-sitemap", "mysql": "fa-database",
+    "mall-admin": "fa-cogs", "mall-search": "fa-search",
+    "mall-portal": "fa-store", "mall-gateway": "fa-door-open",
+    "mall-auth": "fa-key", "mall-monitor": "fa-heartbeat",
+    "mall-admin-web": "fa-desktop", "mall-app-web": "fa-mobile-screen",
+    "mongo": "fa-leaf",
 }
 
 # Image -> description mapping
@@ -39,6 +48,12 @@ IMAGE_DESCS = {
     "registry": "镜像仓库", "harbor": "容器镜像仓库",
     "postgres": "PostgreSQL数据库", "redis": "Redis缓存",
     "trivy": "漏洞扫描器",
+    "kibana": "ES可视化平台", "elasticsearch": "搜索引擎", "rabbitmq": "消息队列",
+    "nacos": "服务注册与配置中心", "mysql": "MySQL数据库", "mongo": "MongoDB文档数据库",
+    "mall-admin": "后台管理服务", "mall-search": "商品搜索服务",
+    "mall-portal": "会员门户服务", "mall-gateway": "API网关服务",
+    "mall-auth": "认证授权服务", "mall-monitor": "服务监控",
+    "mall-admin-web": "管理后台前端", "mall-app-web": "商城顾客端前端",
 }
 
 # Container name -> URL mapping (based on nginx routes)

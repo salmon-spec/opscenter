@@ -12,6 +12,7 @@ from sqlalchemy.pool import QueuePool
 
 from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource
 from app.discovery import discover_docker_services, parse_nginx_config
+from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
@@ -36,6 +37,7 @@ class ServerCreate(BaseModel):
     ssh_port: int = 22
     ssh_user: str = "ops"
     ssh_key: Optional[str] = None
+    ssh_password: Optional[str] = None
     tags: List[str] = []
     is_local: bool = False
 
@@ -45,6 +47,7 @@ class ServerUpdate(BaseModel):
     ssh_port: Optional[int] = None
     ssh_user: Optional[str] = None
     ssh_key: Optional[str] = None
+    ssh_password: Optional[str] = None
     tags: Optional[List[str]] = None
 
 class ServiceCreate(BaseModel):
@@ -187,6 +190,7 @@ def list_servers():
         result = []
         for s in servers:
             svc_count = db.query(Service).filter(Service.server_id == s.id).count()
+            has_creds = bool(s.ssh_key and (s.ssh_key.startswith("__password__") or "BEGIN" in s.ssh_key))
             result.append({
                 "id": str(s.id),
                 "name": s.name,
@@ -199,15 +203,19 @@ def list_servers():
                 "is_local": s.is_local,
                 "last_seen": s.last_seen.isoformat() if s.last_seen else None,
                 "service_count": svc_count,
+                "has_credentials": has_creds,
             })
         return result
 
 @app.post("/api/v2/servers", status_code=201)
 def create_server(data: ServerCreate):
     with get_db() as db:
+        ssh_key_val = data.ssh_key
+        if data.ssh_password and not data.ssh_key:
+            ssh_key_val = f"__password__{data.ssh_password}"
         srv = Server(
             name=data.name, host=data.host, ssh_port=data.ssh_port,
-            ssh_user=data.ssh_user, ssh_key=data.ssh_key,
+            ssh_user=data.ssh_user, ssh_key=ssh_key_val,
             tags=data.tags, is_local=data.is_local,
         )
         db.add(srv)
@@ -254,16 +262,76 @@ def delete_server(server_id: str):
         return {"ok": True}
 
 @app.post("/api/v2/servers/{server_id}/scan")
-def scan_server(server_id: str):
+def scan_server(server_id: str, password: Optional[str] = None):
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        discovered = discover_docker_services(srv, db, srv.host)
-        return {"discovered": len(discovered)}
+        
+        if srv.is_local:
+            discovered = discover_docker_services(srv, db, srv.host)
+            return {"discovered": len(discovered)}
+        
+        # Remote server: need SSH credentials
+        client = get_ssh_client(srv, password=password)
+        if not client:
+            raise HTTPException(400, "Cannot connect to server. Check SSH credentials.")
+        try:
+            containers = discover_remote_docker_services(client, host=srv.host)
+            count = 0
+            from app.discovery import classify_image, get_icon, get_desc, get_url
+            for c in containers:
+                name = c.get('name', '')
+                image = c.get('image', '')
+                status_str = c.get('status', '')
+                ports = c.get('ports', '')
+                is_running = c.get('is_running', 'Up' in status_str)
+                
+                short_image = image.split(':')[0].split('/')[-1] if image else ''
+                svc_name = name.replace('-', ' ').replace('_', ' ').title()
+                svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
+                svc_category = classify_image(short_image)
+                svc_icon = get_icon(short_image)
+                svc_desc = get_desc(short_image, name)
+                
+                if not svc_url:
+                    continue
+                
+                existing = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.container_name == name,
+                ).first()
+                if existing:
+                    for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category), ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
+                        if val and getattr(existing, field) != val:
+                            setattr(existing, field, val)
+                    existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+                else:
+                    svc = Service(
+                        server_id=srv.id, name=svc_name, url=svc_url,
+                        category=svc_category, icon=svc_icon, description=svc_desc,
+                        source=ServiceSource.docker_auto.value,
+                        status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                        container_name=name, image=image, ports=ports,
+                    )
+                    db.add(svc)
+                count += 1
+            
+            srv.status = ServerStatus.online.value
+            srv.last_seen = datetime.utcnow()
+            srv.docker_available = True
+            db.commit()
+            return {"discovered": count}
+        except Exception as e:
+            raise HTTPException(500, f"Scan failed: {e}")
+        finally:
+            try:
+                client.close()
+            except:
+                pass
 
 @app.post("/api/v2/servers/{server_id}/test")
-def test_server(server_id: str):
+def test_server(server_id: str, password: Optional[str] = None):
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
@@ -273,8 +341,19 @@ def test_server(server_id: str):
             srv.last_seen = datetime.utcnow()
             db.commit()
             return {"status": "online", "message": "Local server is always accessible"}
-        # For remote servers, try SSH (Phase 2)
-        return {"status": "unknown", "message": "SSH probe not yet implemented"}
+        
+        # Remote server: test SSH connection
+        client = get_ssh_client(srv, password=password)
+        if client:
+            srv.status = ServerStatus.online.value
+            srv.last_seen = datetime.utcnow()
+            # Store password if provided (for future auto-scans)
+            if password:
+                srv.ssh_key = f"__password__{password}"
+            db.commit()
+            client.close()
+            return {"status": "online", "message": "SSH connection successful"}
+        return {"status": "offline", "message": "Cannot connect via SSH. Check credentials."}
 
 
 # === Service APIs ===
@@ -382,29 +461,204 @@ def trigger_health_check():
         db.commit()
     return {"checked": checked, "message": f"Health check completed for {checked} services"}
 
+
+@app.post("/api/v2/servers/{server_id}/ssh-test")
+def ssh_test(server_id: str, password: Optional[str] = None):
+    """Test SSH connection and auto-scan if successful."""
+    from app.discovery import classify_image, get_icon, get_desc, get_url
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            return {"success": True, "message": "Local server, no SSH needed"}
+        
+        client = get_ssh_client(srv, password=password)
+        if not client:
+            return {"success": False, "message": "SSH连接失败，请检查账号密码"}
+        
+        # Save credentials
+        if password:
+            srv.ssh_key = f"__password__{password}"
+        srv.status = ServerStatus.online.value
+        srv.last_seen = datetime.utcnow()
+        
+        # Auto-discover
+        containers = discover_remote_docker_services(client, host=srv.host)
+        count = 0
+        for c in containers:
+            name = c.get('name', '')
+            image = c.get('image', '')
+            status_str = c.get('status', '')
+            ports = c.get('ports', '')
+            is_running = c.get('is_running', 'Up' in status_str)
+            
+            short_image = image.split(':')[0].split('/')[-1] if image else ''
+            svc_name = name.replace('-', ' ').replace('_', ' ').title()
+            svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
+            svc_category = classify_image(short_image)
+            svc_icon = get_icon(short_image)
+            svc_desc = get_desc(short_image, name)
+            
+            if not svc_url:
+                continue
+            
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == name,
+            ).first()
+            if existing:
+                for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category), ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
+                    if val and getattr(existing, field) != val:
+                        setattr(existing, field, val)
+                existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+            else:
+                svc = Service(
+                    server_id=srv.id, name=svc_name, url=svc_url,
+                    category=svc_category, icon=svc_icon, description=svc_desc,
+                    source=ServiceSource.docker_auto.value,
+                    status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                    container_name=name, image=image, ports=ports,
+                )
+                db.add(svc)
+            count += 1
+        
+        srv.docker_available = True
+        db.commit()
+        client.close()
+        return {"success": True, "message": f"SSH连接成功，发现 {count} 个服务", "discovered": count}
+
 # === Scan & Discovery ===
 @app.post("/api/v2/scan")
 def scan_all():
     with get_db() as db:
         count = 0
+        # Local servers
         servers = db.query(Server).filter(Server.is_local == True).all()
         for srv in servers:
             if srv.docker_available:
                 discovered = discover_docker_services(srv, db, srv.host)
                 count += len(discovered)
+        # Remote servers with credentials
+        remote_servers = db.query(Server).filter(Server.is_local == False).all()
+        for srv in remote_servers:
+            if not srv.ssh_key and not hasattr(srv, '_password'):
+                continue
+            client = get_ssh_client(srv)
+            if not client:
+                continue
+            try:
+                containers = discover_remote_docker_services(client, host=srv.host)
+                for c in containers:
+                    name = c.get('name', '')
+                    image = c.get('image', '')
+                    status_str = c.get('status', '')
+                    ports = c.get('ports', '')
+                    is_running = c.get('is_running', 'Up' in status_str)
+                    
+                    # Auto-classify
+                    short_image = image.split(':')[0].split('/')[-1] if image else ''
+                    from app.discovery import classify_image, get_icon, get_desc, get_url
+                    svc_name = name.replace('-', ' ').replace('_', ' ').title()
+                    svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
+                    svc_category = classify_image(short_image)
+                    svc_icon = get_icon(short_image)
+                    svc_desc = get_desc(short_image, name)
+                    
+                    if not svc_url:
+                        continue
+                    
+                    # Upsert
+                    existing = db.query(Service).filter(
+                        Service.server_id == srv.id,
+                        Service.container_name == name,
+                    ).first()
+                    if existing:
+                        updated = False
+                        for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category), ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
+                            if val and getattr(existing, field) != val:
+                                setattr(existing, field, val)
+                                updated = True
+                        if updated:
+                            count += 1
+                    else:
+                        svc = Service(
+                            server_id=srv.id,
+                            name=svc_name,
+                            url=svc_url,
+                            category=svc_category,
+                            icon=svc_icon,
+                            description=svc_desc,
+                            source=ServiceSource.docker_auto.value,
+                            status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                            container_name=name,
+                            image=image,
+                            ports=ports,
+                        )
+                        db.add(svc)
+                        count += 1
+                # Update server status
+                srv.status = ServerStatus.online.value
+                srv.last_seen = datetime.utcnow()
+                db.commit()
+            except Exception as e:
+                print(f"Remote scan error for {srv.host}: {e}")
+            finally:
+                try:
+                    client.close()
+                except:
+                    pass
         return {"discovered": count, "message": f"Scan complete, {count} services updated/added"}
 
 
 # === Monitor (Prometheus proxy) ===
 @app.get("/api/v2/monitor/{server_id}")
 def get_monitor(server_id: str):
-    """Get real monitoring data from Prometheus for a server."""
+    """Get real monitoring data for a server (local via Prometheus, remote via SSH)."""
     import requests as req
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
     
+    # Remote server: collect via SSH
+    if not srv.is_local:
+        password = None
+        if srv.ssh_key and srv.ssh_key.startswith("__password__"):
+            password = srv.ssh_key[len("__password__"):]
+        client = get_ssh_client(srv, password=password)
+        if not client:
+            return {
+                "server_id": server_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metrics": {"cpu_percent": 0, "memory_percent": 0, "disk_percent": 0, "cpu_count": 0,
+                           "memory_total": 0, "memory_used": 0, "disk_total": 0, "disk_used": 0, "disk_avail": 0,
+                           "load1": 0, "load5": 0, "load15": 0, "net_rx_bytes": 0, "net_tx_bytes": 0, "containers": 0},
+                "containers": [],
+                "error": "Cannot connect via SSH",
+            }
+        try:
+            m = collect_remote_metrics(client)
+            containers = get_remote_containers(client)
+            client.close()
+            return {
+                "server_id": server_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metrics": m,
+                "containers": containers,
+            }
+        except Exception as e:
+            try: client.close()
+            except: pass
+            return {
+                "server_id": server_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metrics": {},
+                "containers": [],
+                "error": str(e),
+            }
+    
+    # Local server: use Prometheus
     prom_url = os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090")
     
     queries = {
