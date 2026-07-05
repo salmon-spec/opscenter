@@ -156,7 +156,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                class="w-full pl-9 pr-3 py-2 rounded-lg text-sm border"
                style="background:var(--card);color:var(--text1);border-color:var(--border)">
         <kbd v-if="!searchQuery" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs px-1.5 py-0.5 rounded border"
-             style="color:var(--text2);border-color:var(--border);background:var(--bg)">⌘K</kbd>
+             style="color:var(--text2);border-color:var(--border);background:var(--bg)">{{ isMac ? '⌘K' : 'Ctrl+K' }}</kbd>
       </div>
 
       <!-- Pinned Services Quick Bar -->
@@ -184,6 +184,25 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     <div class="p-4 md:p-6">
       <!-- ===================== 服务导航 ===================== -->
       <div v-if="currentPage==='nav'">
+        <!-- Quick Access (Pinned Services) -->
+        <div v-if="pinnedServices.length" class="mb-5">
+          <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
+            <i class="fas fa-bookmark"></i> 快捷访问
+          </h2>
+          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
+            <div v-for="ps in pinnedServices" :key="ps.id" @click="openService(ps)"
+                 :title="ps.url"
+                 class="rounded-lg p-3 border card-hover cursor-pointer text-center"
+                 style="background:var(--card);border-color:var(--border)">
+              <div class="flex items-center justify-center gap-1.5">
+                <i :class="['fas', ps.icon||'fa-cube', 'text-base']" :style="{color: ps.icon_color||'var(--accent)'}"></i>
+                <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="ps.status==='up'?'bg-emerald-500':ps.status==='down'?'bg-red-500':'bg-amber-500'"></span>
+              </div>
+              <div class="text-xs font-medium mt-1.5 truncate" style="color:var(--text1)">{{ ps.name }}</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Server Cards -->
         <div class="mb-6">
           <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
@@ -242,6 +261,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div v-for="svc in filteredServices" :key="svc.id"
                    @click="openService(svc)"
+                   :title="svc.url"
                    class="rounded-xl p-4 border card-hover cursor-pointer relative group"
                    style="background:var(--card);border-color:var(--border)">
                 <button @click.stop="togglePin(svc)"
@@ -256,12 +276,12 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
                       <span class="font-medium text-sm truncate" style="color:var(--text1)">{{ svc.name }}</span>
-                      <span class="w-2 h-2 rounded-full flex-shrink-0" :class="svc.status==='online'?'bg-emerald-500':svc.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
+                      <span class="w-2 h-2 rounded-full flex-shrink-0" :class="statusClass(svc.status)"></span>
                     </div>
                     <div class="text-xs truncate" style="color:var(--text2)">{{ svc.description||svc.url||'' }}</div>
                   </div>
                 </div>
-                <div v-if="svc.category" class="text-xs mt-1 px-2 py-0.5 rounded-full inline-block" style="background:rgba(16,185,129,.1);color:#10b981">{{ svc.category }}</div>
+                <div v-if="svc.category" class="text-xs mt-1 px-2 py-0.5 rounded-full inline-block" :style="{background: (getCategoryColor(svc.category)||'#10b981')+'18', color: getCategoryColor(svc.category)||'#10b981'}">{{ svc.category }}</div>
               </div>
             </div>
           </div>
@@ -276,12 +296,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               <button @click="toggleCategory(cat.name)"
                       class="flex items-center gap-2 mb-3 w-full text-left group">
                 <i :class="['fas fa-chevron-right text-xs transition-transform', categoryExpanded[cat.name]?'rotate-90':'']" style="color:var(--accent)"></i>
+                <i :class="['fas', cat.icon||'fa-folder', 'text-xs']" :style="{color: cat.color||'var(--accent)'}"></i>
                 <span class="text-sm font-semibold" style="color:var(--text1)">{{ cat.name }}</span>
-                <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--card);color:var(--text2)">{{ cat.services.length }}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full" :style="{background: (cat.color||'#10b981')+'18', color: cat.color||'var(--text2)'}">{{ cat.services.length }}</span>
               </button>
               <div v-show="categoryExpanded[cat.name]" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div v-for="svc in cat.services" :key="svc.id"
                      @click="openService(svc)"
+                     :title="svc.url"
                      class="rounded-xl p-4 border card-hover cursor-pointer relative group"
                      style="background:var(--card);border-color:var(--border)">
                   <button @click.stop="togglePin(svc)"
@@ -296,7 +318,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2">
                         <span class="font-medium text-sm truncate" style="color:var(--text1)">{{ svc.name }}</span>
-                        <span class="w-2 h-2 rounded-full flex-shrink-0" :class="svc.status==='online'?'bg-emerald-500':svc.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
+                        <span class="w-2 h-2 rounded-full flex-shrink-0" :class="statusClass(svc.status)"></span>
                       </div>
                       <div class="text-xs truncate" style="color:var(--text2)">{{ svc.description||svc.url||'' }}</div>
                     </div>
@@ -724,6 +746,7 @@ createApp({
     const sidebarCollapsed = ref(localStorage.getItem('oc-sidebar-collapsed') === 'true');
     const searchQuery = ref('');
     const mobileView = ref(window.innerWidth < 769);
+    const isMac = ref(navigator.platform.toUpperCase().indexOf('MAC') >= 0);
 
     const navItems = [
       { key: 'nav', label: '服务导航', icon: 'fa-compass' },
@@ -836,8 +859,8 @@ createApp({
           ...s, pinned: pinnedIds.value.includes(s.id),
         }));
         categories.value = catData.categories || catData || [];
-        categories.value.forEach(c => {
-          if (categoryExpanded[c.name] === undefined) categoryExpanded[c.name] = true;
+        categories.value.forEach((c, i) => {
+          if (categoryExpanded[c.name] === undefined) categoryExpanded[c.name] = (i === 0);
         });
       } catch (e) {
         toast('加载服务列表失败: ' + e.message, 'error');
@@ -934,6 +957,16 @@ createApp({
         const data = await apiFetch('/stats');
         Object.assign(stats, data.stats || data);
       } catch (e) { /* silent */ }
+    }
+
+    function statusClass(status) {
+      return status === 'up' || status === 'online' ? 'bg-emerald-500' :
+             status === 'down' || status === 'offline' ? 'bg-red-500' : 'bg-amber-500';
+    }
+
+    function getCategoryColor(category) {
+      const cat = categories.value.find(c => (c.name || c) === category);
+      return (cat && cat.color) ? cat.color : null;
     }
 
     function openService(svc) {
@@ -1286,10 +1319,12 @@ createApp({
     const pinnedServices = computed(() => allServices.value.filter(s => s.pinned));
 
     const categoriesWithServices = computed(() => {
+      // Handle both old format (string) and new format (object with metadata)
       return categories.value.map(cat => {
-        const catName = cat.name || cat;
+        const catObj = typeof cat === 'string' ? { name: cat, icon: 'fa-folder', color: '#94a3b8', order: 99 } : cat;
+        const catName = catObj.name;
         const svcs = allServices.value.filter(s => s.category === catName);
-        return { name: catName, services: svcs };
+        return { ...catObj, services: svcs };
       }).filter(c => c.services.length > 0);
     });
 
@@ -1378,7 +1413,7 @@ createApp({
     });
 
     return {
-      isDark, currentPage, currentServerId, sidebarCollapsed, searchQuery, mobileView,
+      isDark, currentPage, currentServerId, sidebarCollapsed, searchQuery, mobileView, isMac,
       navItems, loading, servers, allServices, categories, categoryExpanded, pinnedIds, toasts,
       monitor, historyMetric, refreshCountdown, historyChart,
       terminalLines, terminalInput, terminalHistoryIdx,
@@ -1386,7 +1421,7 @@ createApp({
       currentServer, filteredServices, pinnedServices, categoriesWithServices,
       metricCards, statsCards, passwordStrengthLabel, passwordStrengthColor,
       toggleTheme, onServerChange, addServer, deleteServer, addService,
-      togglePin, triggerScan, openService, toggleCategory,
+      togglePin, triggerScan, openService, toggleCategory, statusClass, getCategoryColor,
       loadServers, loadServices, loadMonitor,
       executeTerminal, terminalHistoryUp, terminalHistoryDown,
       convertTimestamp, encodeBase64, decodeBase64,

@@ -1,4 +1,4 @@
-import os, uuid
+import os, uuid, asyncio
 from datetime import datetime
 from typing import Optional, List
 from contextlib import contextmanager
@@ -71,6 +71,21 @@ class PinToggle(BaseModel):
 # === App ===
 app = FastAPI(title="OpsCenter API", version="2.0")
 
+
+
+# Category metadata for enhanced UI
+CATEGORY_META = {
+    "代码与CI/CD": {"icon": "fa-code", "color": "#8b5cf6", "order": 1},
+    "应用服务": {"icon": "fa-cube", "color": "#3b82f6", "order": 2},
+    "监控与日志": {"icon": "fa-chart-area", "color": "#22c55e", "order": 3},
+    "网络与代理": {"icon": "fa-network-wired", "color": "#f59e0b", "order": 4},
+    "自动化工作流": {"icon": "fa-robot", "color": "#ec4899", "order": 5},
+    "数据存储": {"icon": "fa-database", "color": "#06b6d4", "order": 6},
+    "运维管理": {"icon": "fa-gauge-high", "color": "#f97316", "order": 7},
+    "安全": {"icon": "fa-shield-halved", "color": "#ef4444", "order": 8},
+    "未分类": {"icon": "fa-folder", "color": "#94a3b8", "order": 99},
+}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -80,8 +95,35 @@ app.add_middleware(
 )
 
 # === Startup ===
+
+# === Background Health Check ===
+async def background_health_check():
+    """Periodically check all services health status."""
+    import requests as req
+    while True:
+        try:
+            with get_db() as db:
+                services = db.query(Service).all()
+                for svc in services:
+                    if not svc.url or svc.url == "/":
+                        continue
+                    try:
+                        url = svc.url
+                        if url.startswith("/"):
+                            srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                            host = srv.host if srv else LOCAL_HOST
+                            url = f"http://{host}{url}"
+                        resp = req.head(url, timeout=5, allow_redirects=True, verify=False)
+                        svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
+                    except Exception:
+                        svc.status = ServiceStatus.down.value
+                db.commit()
+        except Exception as e:
+            print(f"Health check error: {e}")
+        await asyncio.sleep(60)
+
 @app.on_event("startup")
-def startup():
+async def startup():
     # Wait for DB and create tables
     import time
     for i in range(30):
@@ -132,6 +174,9 @@ def startup():
                 )
                 db.add(svc)
         db.commit()
+
+    # Start background health check
+    asyncio.create_task(background_health_check())
 
 
 # === Server APIs ===
@@ -301,15 +346,41 @@ def delete_service(service_id: str):
         return {"ok": True}
 
 @app.patch("/api/v2/services/{service_id}/pin")
-def toggle_pin(service_id: str, data: PinToggle):
+def toggle_pin(service_id: str):
+    """Toggle service pin status."""
     with get_db() as db:
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
         if not svc:
             raise HTTPException(404, "Service not found")
-        svc.pinned = data.pinned
+        svc.pinned = not svc.pinned
         db.commit()
         return {"ok": True, "pinned": svc.pinned}
 
+
+# === Health Check Trigger ===
+@app.post("/api/v2/health-check")
+def trigger_health_check():
+    """Manually trigger health check for all services."""
+    import requests as req
+    checked = 0
+    with get_db() as db:
+        services = db.query(Service).all()
+        for svc in services:
+            if not svc.url or svc.url == "/":
+                continue
+            try:
+                url = svc.url
+                if url.startswith("/"):
+                    srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                    host = srv.host if srv else LOCAL_HOST
+                    url = f"http://{host}{url}"
+                resp = req.head(url, timeout=5, allow_redirects=True, verify=False)
+                svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
+            except Exception:
+                svc.status = ServiceStatus.down.value
+            checked += 1
+        db.commit()
+    return {"checked": checked, "message": f"Health check completed for {checked} services"}
 
 # === Scan & Discovery ===
 @app.post("/api/v2/scan")
@@ -438,7 +509,22 @@ def list_categories(server_id: Optional[str] = None):
         if server_id:
             q = q.filter(Service.server_id == uuid.UUID(server_id))
         cats = [r[0] for r in q.all()]
-        return cats
+        result = []
+        for name in cats:
+            meta = CATEGORY_META.get(name, CATEGORY_META["未分类"])
+            q2 = db.query(Service).filter(Service.category == name)
+            if server_id:
+                q2 = q2.filter(Service.server_id == uuid.UUID(server_id))
+            svc_count = q2.count()
+            result.append({
+                "name": name,
+                "icon": meta["icon"],
+                "color": meta["color"],
+                "order": meta["order"],
+                "count": svc_count,
+            })
+        result.sort(key=lambda x: x["order"])
+        return result
 
 
 # === Health ===
