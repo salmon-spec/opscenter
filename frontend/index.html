@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v2.0</title>
+<title>OpsCenter v2.1</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <script src="https://cdn.tailwindcss.com"></script>
@@ -122,7 +122,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <div v-show="!sidebarCollapsed" class="text-xs" style="color:var(--text2)">
         <div class="flex items-center gap-1.5 mb-1">
           <span class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>
-          <span>v2.0</span>
+          <span>v2.1</span>
         </div>
         <div>{{ servers.length }} 服务器 · {{ allServices.length }} 服务</div>
       </div>
@@ -184,6 +184,23 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     <div class="p-4 md:p-6">
       <!-- ===================== 服务导航 ===================== -->
       <div v-if="currentPage==='nav'">
+        <!-- Recent Access -->
+        <div v-if="recentServices.length" class="mb-5">
+          <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
+            <i class="fas fa-clock-rotate-left"></i> 最近访问
+          </h2>
+          <div class="flex gap-2 overflow-x-auto pb-1">
+            <div v-for="rs in recentServices" :key="rs.id" @click="openService(rs)"
+                 :title="rs.url"
+                 class="flex items-center gap-2 px-3 py-2 rounded-lg border card-hover cursor-pointer whitespace-nowrap flex-shrink-0"
+                 style="background:var(--card);border-color:var(--border)">
+              <i :class="['fas', rs.icon||'fa-cube', 'text-sm']" :style="{color: rs.icon_color||'var(--accent)'}"></i>
+              <span class="text-xs font-medium" style="color:var(--text1)">{{ rs.name }}</span>
+              <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="statusClass(rs.status)"></span>
+            </div>
+          </div>
+        </div>
+
         <!-- Quick Access (Pinned Services) -->
         <div v-if="pinnedServices.length" class="mb-5">
           <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
@@ -226,6 +243,20 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               <div class="text-xs" style="color:var(--text2)">
                 <div class="flex items-center gap-1 mb-1"><i class="fas fa-globe w-4"></i>{{ s.host }}</div>
                 <div class="flex items-center gap-1"><i class="fas fa-cube w-4"></i>{{ s.service_count||0 }} 服务</div>
+                <div v-if="serverMetrics[s.id]" class="flex items-center gap-3 mt-1 text-xs">
+                  <span v-if="serverMetrics[s.id].cpu !== null" class="flex items-center gap-1">
+                    <i class="fas fa-microphone w-3 text-[10px]" style="color:#22c55e"></i>
+                    CPU {{ serverMetrics[s.id].cpu.toFixed(1) }}%
+                  </span>
+                  <span v-if="serverMetrics[s.id].memory !== null" class="flex items-center gap-1">
+                    <i class="fas fa-memory w-3 text-[10px]" style="color:#3b82f6"></i>
+                    内存 {{ serverMetrics[s.id].memory.toFixed(1) }}%
+                  </span>
+                  <span v-if="serverMetrics[s.id].container_count !== null" class="flex items-center gap-1">
+                    <i class="fas fa-box w-3 text-[10px]" style="color:#f59e0b"></i>
+                    {{ serverMetrics[s.id].container_count }} 容器
+                  </span>
+                </div>
               </div>
             </div>
             <div v-if="!servers.length && !loading.servers" class="col-span-full text-center py-8 rounded-xl border"
@@ -336,6 +367,37 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <i class="fas fa-hand-pointer text-4xl mb-3 block opacity-30"></i>
           <p class="text-sm">请选择一个服务器查看服务</p>
         </div>
+
+        <!-- Quick Entry Cards (P1-05) -->
+        <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <a @click.prevent="currentPage='monitor'" class="rounded-xl p-4 border card-hover cursor-pointer flex items-center gap-3 group" style="background:var(--card);border-color:var(--border)">
+            <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:rgba(59,130,246,.15)">
+              <i class="fas fa-chart-line text-base" style="color:#3b82f6"></i>
+            </div>
+            <div>
+              <div class="text-sm font-semibold group-hover:text-blue-500 transition-colors" style="color:var(--text1)">系统监控</div>
+              <div class="text-xs" style="color:var(--text2)">CPU/内存/磁盘/网络</div>
+            </div>
+          </a>
+          <a @click.prevent="currentPage='tools'" class="rounded-xl p-4 border card-hover cursor-pointer flex items-center gap-3 group" style="background:var(--card);border-color:var(--border)">
+            <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:rgba(236,72,153,.15)">
+              <i class="fas fa-toolbox text-base" style="color:#ec4899"></i>
+            </div>
+            <div>
+              <div class="text-sm font-semibold group-hover:text-pink-500 transition-colors" style="color:var(--text1)">运维工具</div>
+              <div class="text-xs" style="color:var(--text2)">终端/时间戳/Base64/JSON</div>
+            </div>
+          </a>
+          <a @click.prevent="currentPage='settings'" class="rounded-xl p-4 border card-hover cursor-pointer flex items-center gap-3 group" style="background:var(--card);border-color:var(--border)">
+            <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:rgba(245,158,11,.15)">
+              <i class="fas fa-cog text-base" style="color:#f59e0b"></i>
+            </div>
+            <div>
+              <div class="text-sm font-semibold group-hover:text-amber-500 transition-colors" style="color:var(--text1)">设置管理</div>
+              <div class="text-xs" style="color:var(--text2)">服务器/服务/主题</div>
+            </div>
+          </a>
+        </div>
       </div>
 
       <!-- ===================== 系统监控 ===================== -->
@@ -426,56 +488,54 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         </template>
       </div>
 
-      <!-- ===================== 终端 ===================== -->
-      <div v-if="currentPage==='terminal'">
-        <div v-if="!currentServerId" class="text-center py-16" style="color:var(--text2)">
-          <i class="fas fa-terminal text-4xl mb-3 block opacity-30"></i>
-          <p class="text-sm">请先选择服务器</p>
-        </div>
-        <template v-else>
-          <div class="flex items-center justify-between mb-4">
-            <h2 class="text-lg font-semibold flex items-center gap-2" style="color:var(--text1)">
-              <i class="fas fa-terminal" style="color:var(--accent)"></i> 终端
-            </h2>
-            <span class="text-xs px-2 py-1 rounded-full" style="background:rgba(245,158,11,.15);color:#f59e0b">Phase 1 - 模拟模式</span>
-          </div>
-
-          <div class="rounded-xl border overflow-hidden" style="background:var(--card);border-color:var(--border)">
-            <!-- Terminal Header -->
-            <div class="flex items-center gap-2 px-4 py-2.5 border-b" style="border-color:var(--border);background:rgba(0,0,0,.2)">
-              <span class="w-3 h-3 rounded-full bg-red-500"></span>
-              <span class="w-3 h-3 rounded-full bg-yellow-500"></span>
-              <span class="w-3 h-3 rounded-full bg-green-500"></span>
-              <span class="ml-2 text-xs font-mono" style="color:var(--text2)">{{ currentServer?.name }} - SSH</span>
-            </div>
-            <!-- Terminal Body -->
-            <div ref="terminalBody" class="terminal-window p-4 h-96 overflow-y-auto text-sm" style="background:#0c0c0c">
-              <div v-for="(line,i) in terminalLines" :key="i" class="mb-1">
-                <div v-if="line.type==='cmd'" class="terminal-line" style="color:#e2e8f0">{{ line.text }}</div>
-                <div v-else-if="line.type==='output'" class="terminal-output" style="color:#94a3b8" v-html="line.text"></div>
-                <div v-else-if="line.type==='info'" style="color:#10b981">{{ line.text }}</div>
-                <div v-else-if="line.type==='error'" style="color:#ef4444">{{ line.text }}</div>
-              </div>
-              <div class="flex items-center gap-2 mt-1">
-                <span style="color:#10b981" class="font-semibold">$</span>
-                <input v-model="terminalInput" @keydown.enter="executeTerminal" @keydown.up="terminalHistoryUp" @keydown.down="terminalHistoryDown"
-                       class="flex-1 bg-transparent border-none text-sm" style="color:#e2e8f0;outline:none"
-                       placeholder="输入命令..." autocomplete="off" spellcheck="false">
-              </div>
-            </div>
-          </div>
-          <div class="mt-3 text-xs rounded-lg p-3 border" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);color:var(--text2)">
-            <i class="fas fa-info-circle mr-1" style="color:#f59e0b"></i>
-            Phase 1 模拟终端：可尝试 ls, pwd, whoami, date, uname, uptime, df, free, docker ps, cat /etc/os-release, help 等命令。Phase 2 将支持真实 SSH 连接。
-          </div>
-        </template>
-      </div>
-
       <!-- ===================== 工具箱 ===================== -->
       <div v-if="currentPage==='tools'">
         <h2 class="text-lg font-semibold flex items-center gap-2 mb-5" style="color:var(--text1)">
-          <i class="fas fa-toolbox" style="color:var(--accent)"></i> 工具箱
+          <i class="fas fa-toolbox" style="color:var(--accent)"></i> 运维工具
         </h2>
+        <!-- Terminal Tool Card (P1-04: moved from sidebar) -->
+        <div class="mb-5">
+          <details class="rounded-xl border" style="background:var(--card);border-color:var(--border)">
+            <summary class="px-5 py-4 cursor-pointer flex items-center gap-3" style="color:var(--text1)">
+              <i class="fas fa-terminal" style="color:var(--accent)"></i>
+              <span class="text-sm font-semibold">终端</span>
+              <span class="text-xs px-2 py-0.5 rounded-full" style="background:rgba(245,158,11,.15);color:#f59e0b">模拟模式</span>
+              <span class="ml-auto text-xs" style="color:var(--text2)">点击展开</span>
+            </summary>
+            <div class="px-5 pb-4">
+              <div v-if="!currentServerId" class="text-center py-8" style="color:var(--text2)">
+                <i class="fas fa-terminal text-2xl mb-2 block opacity-30"></i>
+                <p class="text-sm">请先选择服务器</p>
+              </div>
+              <template v-else>
+                <div class="rounded-xl border overflow-hidden mb-3" style="border-color:var(--border)">
+                  <div class="flex items-center gap-2 px-4 py-2 border-b" style="border-color:var(--border);background:rgba(0,0,0,.2)">
+                    <span class="w-3 h-3 rounded-full bg-red-500"></span>
+                    <span class="w-3 h-3 rounded-full bg-yellow-500"></span>
+                    <span class="w-3 h-3 rounded-full bg-green-500"></span>
+                    <span class="ml-2 text-xs font-mono" style="color:var(--text2)">{{ currentServer?.name }} - SSH</span>
+                    <span class="ml-auto text-xs px-2 py-0.5 rounded font-medium" style="background:rgba(245,158,11,.2);color:#f59e0b">模拟模式 - 输出非真实数据</span>
+                  </div>
+                  <div ref="terminalBody" class="terminal-window p-4 h-72 overflow-y-auto text-sm" style="background:#0c0c0c">
+                    <div v-for="(line,i) in terminalLines" :key="i" class="mb-1">
+                      <div v-if="line.type==='cmd'" class="terminal-line" style="color:#e2e8f0">{{ line.text }}</div>
+                      <div v-else-if="line.type==='output'" class="terminal-output" style="color:#94a3b8" v-html="line.text"></div>
+                      <div v-else-if="line.type==='info'" style="color:#10b981">{{ line.text }}</div>
+                      <div v-else-if="line.type==='error'" style="color:#ef4444">{{ line.text }}</div>
+                    </div>
+                    <div class="flex items-center gap-2 mt-1">
+                      <span style="color:#10b981" class="font-semibold">$</span>
+                      <input v-model="terminalInput" @keydown.enter="executeTerminal" @keydown.up="terminalHistoryUp" @keydown.down="terminalHistoryDown"
+                             class="flex-1 bg-transparent border-none text-sm" style="color:#e2e8f0;outline:none"
+                             placeholder="输入命令..." autocomplete="off" spellcheck="false">
+                    </div>
+                  </div>
+                </div>
+                <div class="text-xs" style="color:var(--text2)">可尝试: ls, pwd, whoami, date, docker ps, help 等</div>
+              </template>
+            </div>
+          </details>
+        </div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <!-- Timestamp -->
           <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
@@ -785,8 +845,7 @@ createApp({
     const navItems = [
       { key: 'nav', label: '服务导航', icon: 'fa-compass' },
       { key: 'monitor', label: '系统监控', icon: 'fa-chart-line' },
-      { key: 'terminal', label: '终端', icon: 'fa-terminal' },
-      { key: 'tools', label: '工具箱', icon: 'fa-toolbox' },
+      { key: 'tools', label: '运维工具', icon: 'fa-toolbox' },
       { key: 'settings', label: '设置', icon: 'fa-cog' },
     ];
 
@@ -796,6 +855,7 @@ createApp({
     const categories = ref([]);
     const categoryExpanded = reactive({});
     const pinnedIds = ref(JSON.parse(localStorage.getItem('oc-pinned') || '[]'));
+    const recentIds = ref(JSON.parse(localStorage.getItem('oc-recent') || '[]'));
     const toasts = ref([]);
 
     const monitor = reactive({
@@ -833,6 +893,7 @@ createApp({
     const scanning = ref(false);
     const stats = reactive({ servers: 0, services: 0, categories: 0, containers: 0 });
     const confirmModal = reactive({ show: false, title: '', message: '', action: () => {} });
+    const serverMetrics = reactive({});  // P1-03: { serverId: { cpu, memory, container_count } }
 
     function applyTheme() {
       document.documentElement.classList.toggle('light', !isDark.value);
@@ -873,14 +934,17 @@ createApp({
       try {
         const data = await apiFetch('/servers');
         servers.value = data.servers || data || [];
-        if (!currentServerId.value && servers.value.length) {
-          currentServerId.value = localStorage.getItem('oc-server') || servers.value[0].id;
+        // Auto-select last server (P1-02)
+        if (servers.value.length) {
+          const savedServer = localStorage.getItem('oc-server');
+          currentServerId.value = (savedServer && servers.value.find(s => s.id === savedServer)) ? savedServer : servers.value[0].id;
           await loadServices();
         }
       } catch (e) {
         toast('加载服务器列表失败: ' + e.message, 'error');
       } finally {
         loading.servers = false;
+        loadServerMetrics(); // P1-03
       }
     }
 
@@ -1071,11 +1135,35 @@ createApp({
     }
 
     function openService(svc) {
-      if (svc.url) window.open(svc.url, '_blank');
+      if (svc.url) {
+        // Record recent access
+        const rid = svc.id;
+        recentIds.value = [rid, ...recentIds.value.filter(id => id !== rid)].slice(0, 10);
+        localStorage.setItem('oc-recent', JSON.stringify(recentIds.value));
+        window.open(svc.url, '_blank');
+      }
     }
 
     function toggleCategory(name) {
       categoryExpanded[name] = !categoryExpanded[name];
+    }
+
+
+    async function loadServerMetrics() {
+      // P1-03: Load lightweight metrics for all servers
+      for (const s of servers.value) {
+        try {
+          const data = await apiFetch(`/monitor/${s.id}`);
+          const m = data.metrics || data.monitor || data;
+          serverMetrics[s.id] = {
+            cpu: m.cpu_percent ?? m.cpu ?? null,
+            memory: m.memory_percent ?? m.memory ?? null,
+            container_count: (data.containers || m.containers || []).length
+          };
+        } catch (e) {
+          serverMetrics[s.id] = { cpu: null, memory: null, container_count: null };
+        }
+      }
     }
 
     // ========== Monitor ==========
@@ -1419,6 +1507,12 @@ createApp({
 
     const pinnedServices = computed(() => allServices.value.filter(s => s.pinned));
 
+    const recentServices = computed(() => {
+      if (!recentIds.value.length) return [];
+      const recent = recentIds.value.map(id => allServices.value.find(s => s.id === id)).filter(Boolean);
+      return recent.slice(0, 5);
+    });
+
     const categoriesWithServices = computed(() => {
       // Handle both old format (string) and new format (object with metadata)
       return categories.value.map(cat => {
@@ -1518,10 +1612,11 @@ createApp({
       navItems, loading, servers, allServices, categories, categoryExpanded, pinnedIds, toasts,
       monitor, historyMetric, refreshCountdown, historyChart,
       terminalLines, terminalInput, terminalHistoryIdx,
-      tools, showAddServer, newServer, newService, scanning, stats, confirmModal, showServerPwd, sshTestResult,
+      tools, showAddServer, newServer, newService, scanning, stats, confirmModal, showServerPwd, sshTestResult, serverMetrics,
       currentServer, filteredServices, pinnedServices, categoriesWithServices,
       metricCards, statsCards, passwordStrengthLabel, passwordStrengthColor,
       toggleTheme, onServerChange, addServer, deleteServer, addService,
+      recentIds, recentServices,
       togglePin, triggerScan, openService, toggleCategory, statusClass, getCategoryColor,
       loadServers, loadServices, loadMonitor,
       executeTerminal, terminalHistoryUp, terminalHistoryDown,
