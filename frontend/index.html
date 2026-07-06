@@ -3,14 +3,18 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v2.1</title>
+<title>OpsCenter v2.2</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-<script src="https://cdn.tailwindcss.com"></script>
+<!-- P2-02: Font Awesome CDN removed - using inline SVG sprite -->
+
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<!-- P2-03: ECharts removed from head - loaded on-demand -->
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* P2-01: Tailwind CSS (pre-compiled, inlined) */
+*,:after,:before{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/*! tailwindcss v3.4.19 | MIT License | https://tailwindcss.com*/*,:after,:before{box-sizing:border-box;border:0 solid #e5e7eb}:after,:before{--tw-content:""}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;-o-tab-size:4;tab-size:4;font-family:ui-sans-serif,system-ui,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0}fieldset,legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::-moz-placeholder,textarea::-moz-placeholder{opacity:1;color:#9ca3af}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}.fixed{position:fixed}.absolute{position:absolute}.relative{position:relative}.sticky{position:sticky}.inset-0{inset:0}.bottom-0{bottom:0}.left-0{left:0}.left-3{left:.75rem}.right-0{right:0}.right-2{right:.5rem}.right-3{right:.75rem}.right-4{right:1rem}.top-0{top:0}.top-1\/2{top:50%}.top-2{top:.5rem}.top-4{top:1rem}.z-30{z-index:30}.z-40{z-index:40}.z-50{z-index:50}.col-span-full{grid-column:1/-1}.mb-1{margin-bottom:.25rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}.mb-4{margin-bottom:1rem}.mb-5{margin-bottom:1.25rem}.mb-6{margin-bottom:1.5rem}.ml-1{margin-left:.25rem}.ml-2{margin-left:.5rem}.ml-auto{margin-left:auto}.mr-1{margin-right:.25rem}.mt-1{margin-top:.25rem}.mt-1\.5{margin-top:.375rem}.mt-2{margin-top:.5rem}.mt-8{margin-top:2rem}.block{display:block}.inline-block{display:inline-block}.flex{display:flex}.inline-flex{display:inline-flex}.table{display:table}.grid{display:grid}.hidden{display:none}.h-1\.5{height:.375rem}.h-10{height:2.5rem}.h-2{height:.5rem}.h-2\.5{height:.625rem}.h-20{height:5rem}.h-28{height:7rem}.h-3{height:.75rem}.h-6{height:1.5rem}.h-72{height:18rem}.h-8{height:2rem}.h-9{height:2.25rem}.h-full{height:100%}.min-h-screen{min-height:100vh}.w-1\.5{width:.375rem}.w-10{width:2.5rem}.w-2{width:.5rem}.w-2\.5{width:.625rem}.w-3{width:.75rem}.w-4{width:1rem}.w-5{width:1.25rem}.w-6{width:1.5rem}.w-8{width:2rem}.w-9{width:2.25rem}.w-full{width:100%}.min-w-0{min-width:0}.max-w-lg{max-width:32rem}.max-w-md{max-width:28rem}.max-w-sm{max-width:24rem}.flex-1{flex:1 1 0%}.flex-shrink-0{flex-shrink:0}.-translate-y-1\/2{--tw-translate-y:-50%}.-translate-y-1\/2,.rotate-90{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}.rotate-90{--tw-rotate:90deg}.transform{transform:translate(var(--tw-translate-x),var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y))}.cursor-pointer{cursor:pointer}.resize-none{resize:none}.resize{resize:both}.grid-cols-1{grid-template-columns:repeat(1,minmax(0,1fr))}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.flex-col{flex-direction:column}.flex-wrap{flex-wrap:wrap}.items-center{align-items:center}.justify-end{justify-content:flex-end}.justify-center{justify-content:center}.justify-between{justify-content:space-between}.justify-around{justify-content:space-around}.gap-0\.5{gap:.125rem}.gap-1{gap:.25rem}.gap-1\.5{gap:.375rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.space-y-0\.5>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.125rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.125rem*var(--tw-space-y-reverse))}.space-y-1>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}.space-y-2>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.5rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.5rem*var(--tw-space-y-reverse))}.space-y-3>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}.divide-y>:not([hidden])~:not([hidden]){--tw-divide-y-reverse:0;border-top-width:calc(1px*(1 - var(--tw-divide-y-reverse)));border-bottom-width:calc(1px*var(--tw-divide-y-reverse))}.overflow-hidden{overflow:hidden}.overflow-x-auto{overflow-x:auto}.overflow-y-auto{overflow-y:auto}.truncate{overflow:hidden;text-overflow:ellipsis}.truncate,.whitespace-nowrap{white-space:nowrap}.rounded{border-radius:.25rem}.rounded-full{border-radius:9999px}.rounded-lg{border-radius:.5rem}.rounded-xl{border-radius:.75rem}.rounded-l{border-top-left-radius:.25rem;border-bottom-left-radius:.25rem}.border{border-width:1px}.border-2{border-width:2px}.border-b{border-bottom-width:1px}.border-t{border-top-width:1px}.border-none{border-style:none}.border-emerald-500{--tw-border-opacity:1;border-color:rgb(16 185 129/var(--tw-border-opacity,1))}.bg-amber-500{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}.bg-amber-500\/20{background-color:rgba(245,158,11,.2)}.bg-blue-500{--tw-bg-opacity:1;background-color:rgb(59 130 246/var(--tw-bg-opacity,1))}.bg-blue-500\/20{background-color:rgba(59,130,246,.2)}.bg-blue-600{--tw-bg-opacity:1;background-color:rgb(37 99 235/var(--tw-bg-opacity,1))}.bg-emerald-500{--tw-bg-opacity:1;background-color:rgb(16 185 129/var(--tw-bg-opacity,1))}.bg-emerald-500\/20{background-color:rgba(16,185,129,.2)}.bg-emerald-600{--tw-bg-opacity:1;background-color:rgb(5 150 105/var(--tw-bg-opacity,1))}.bg-green-500{--tw-bg-opacity:1;background-color:rgb(34 197 94/var(--tw-bg-opacity,1))}.bg-red-500{--tw-bg-opacity:1;background-color:rgb(239 68 68/var(--tw-bg-opacity,1))}.bg-red-600{--tw-bg-opacity:1;background-color:rgb(220 38 38/var(--tw-bg-opacity,1))}.bg-transparent{background-color:transparent}.bg-yellow-500{--tw-bg-opacity:1;background-color:rgb(234 179 8/var(--tw-bg-opacity,1))}.p-3{padding:.75rem}.p-4{padding:1rem}.p-5{padding:1.25rem}.p-6{padding:1.5rem}.px-1\.5{padding-left:.375rem;padding-right:.375rem}.px-2{padding-left:.5rem;padding-right:.5rem}.px-2\.5{padding-left:.625rem;padding-right:.625rem}.px-3{padding-left:.75rem;padding-right:.75rem}.px-4{padding-left:1rem;padding-right:1rem}.px-5{padding-left:1.25rem;padding-right:1.25rem}.py-0\.5{padding-top:.125rem;padding-bottom:.125rem}.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-1\.5{padding-top:.375rem;padding-bottom:.375rem}.py-12{padding-top:3rem;padding-bottom:3rem}.py-16{padding-top:4rem;padding-bottom:4rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-2\.5{padding-top:.625rem;padding-bottom:.625rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-4{padding-top:1rem;padding-bottom:1rem}.py-6{padding-top:1.5rem;padding-bottom:1.5rem}.py-8{padding-top:2rem;padding-bottom:2rem}.pb-1{padding-bottom:.25rem}.pb-2{padding-bottom:.5rem}.pb-4{padding-bottom:1rem}.pl-9{padding-left:2.25rem}.pr-3{padding-right:.75rem}.pr-9{padding-right:2.25rem}.text-left{text-align:left}.text-center{text-align:center}.font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace}.text-2xl{font-size:1.5rem;line-height:2rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-4xl{font-size:2.25rem;line-height:2.5rem}.text-\[10px\]{font-size:10px}.text-base{font-size:1rem;line-height:1.5rem}.text-lg{font-size:1.125rem;line-height:1.75rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:.75rem;line-height:1rem}.font-bold{font-weight:700}.font-medium{font-weight:500}.font-semibold{font-weight:600}.text-amber-400{--tw-text-opacity:1;color:rgb(251 191 36/var(--tw-text-opacity,1))}.text-blue-400{--tw-text-opacity:1;color:rgb(96 165 250/var(--tw-text-opacity,1))}.text-emerald-400{--tw-text-opacity:1;color:rgb(52 211 153/var(--tw-text-opacity,1))}.text-red-400{--tw-text-opacity:1;color:rgb(248 113 113/var(--tw-text-opacity,1))}.text-white{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.accent-emerald-500{accent-color:#10b981}.opacity-0{opacity:0}.opacity-30{opacity:.3}.opacity-50{opacity:.5}.shadow-lg{--tw-shadow:0 10px 15px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1);--tw-shadow-colored:0 10px 15px -3px var(--tw-shadow-color),0 4px 6px -4px var(--tw-shadow-color);box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}.outline{outline-style:solid}.ring-2{--tw-ring-offset-shadow:var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);--tw-ring-shadow:var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);box-shadow:var(--tw-ring-offset-shadow),var(--tw-ring-shadow),var(--tw-shadow,0 0 #0000)}.ring-emerald-500{--tw-ring-opacity:1;--tw-ring-color:rgb(16 185 129/var(--tw-ring-opacity,1))}.filter{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}.transition{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,-webkit-backdrop-filter;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter,-webkit-backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}.transition-all{transition-property:all;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}.transition-colors{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}.transition-opacity{transition-property:opacity;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}.transition-transform{transition-property:transform;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}.duration-500{transition-duration:.5s}.hover\:border-emerald-500:hover{--tw-border-opacity:1;border-color:rgb(16 185 129/var(--tw-border-opacity,1))}.hover\:border-red-500:hover{--tw-border-opacity:1;border-color:rgb(239 68 68/var(--tw-border-opacity,1))}.hover\:bg-blue-600:hover{--tw-bg-opacity:1;background-color:rgb(37 99 235/var(--tw-bg-opacity,1))}.hover\:bg-emerald-500:hover{--tw-bg-opacity:1;background-color:rgb(16 185 129/var(--tw-bg-opacity,1))}.hover\:bg-emerald-600:hover{--tw-bg-opacity:1;background-color:rgb(5 150 105/var(--tw-bg-opacity,1))}.hover\:bg-red-500:hover{--tw-bg-opacity:1;background-color:rgb(239 68 68/var(--tw-bg-opacity,1))}.hover\:bg-red-600:hover{--tw-bg-opacity:1;background-color:rgb(220 38 38/var(--tw-bg-opacity,1))}.hover\:bg-opacity-80:hover{--tw-bg-opacity:0.8}.hover\:text-white:hover{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.hover\:opacity-100:hover{opacity:1}.disabled\:opacity-50:disabled{opacity:.5}.group:hover .group-hover\:text-amber-500{--tw-text-opacity:1;color:rgb(245 158 11/var(--tw-text-opacity,1))}.group:hover .group-hover\:text-blue-500{--tw-text-opacity:1;color:rgb(59 130 246/var(--tw-text-opacity,1))}.group:hover .group-hover\:text-pink-500{--tw-text-opacity:1;color:rgb(236 72 153/var(--tw-text-opacity,1))}.group:hover .group-hover\:opacity-100{opacity:1}@media (min-width:640px){.sm\:col-span-2{grid-column:span 2/span 2}.sm\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.sm\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}}@media (min-width:768px){.md\:flex{display:flex}.md\:hidden{display:none}.md\:p-6{padding:1.5rem}}@media (min-width:1024px){.lg\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.lg\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.lg\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}}@media (min-width:1280px){.xl\:grid-cols-6{grid-template-columns:repeat(6,minmax(0,1fr))}}
+/* End Tailwind */
+
+/* P2-04: Google Fonts removed - using system font stack */
 :root {
   --bg: #0f172a; --sidebar: #0f172a; --card: #1e293b; --border: #334155;
   --text1: #e2e8f0; --text2: #94a3b8; --accent: #10b981;
@@ -22,7 +26,7 @@
   --online: #16a34a; --offline: #dc2626; --unknown: #d97706;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; font-family: 'Inter', sans-serif; }
+html, body { height: 100%; font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
 body { background: var(--bg); color: var(--text1); transition: background .3s, color .3s; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -45,7 +49,12 @@ body { background: var(--bg); color: var(--text1); transition: background .3s, c
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 .terminal-line::before { content: '$ '; color: #10b981; font-weight: 600; }
 .terminal-output { color: #94a3b8; }
-.terminal-window { font-family: 'JetBrains Mono', monospace; }
+
+/* P2-02: SVG Icon System (replaces Font Awesome) */
+.icon { display: inline-block; width: 1em; height: 1em; vertical-align: -.125em; fill: currentColor; }
+.icon use { pointer-events: none; }
+
+.terminal-window { font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; }
 .toast-enter { animation: slideInRight .3s ease; }
 .toast-leave { animation: slideOutRight .3s ease; }
 @keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
@@ -67,6 +76,34 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 </style>
 </head>
 <body>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+<symbol id="fa-angles-left" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160zm352-160l-160 160c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L301.3 256 438.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0z"/></symbol>
+<symbol id="fa-angles-right" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M470.6 278.6c12.5-12.5 12.5-32.8 0-45.3l-160-160c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L402.7 256 265.4 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l160-160zm-352 160l160-160c12.5-12.5 12.5-32.8 0-45.3l-160-160c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L210.7 256 73.4 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0z"/></symbol>
+<symbol id="fa-bookmark" viewBox="0 0 384 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M0 48V487.7C0 501.1 10.9 512 24.3 512c5 0 9.9-1.5 14-4.4L192 400 345.7 507.6c4.1 2.9 9 4.4 14 4.4c13.4 0 24.3-10.9 24.3-24.3V48c0-26.5-21.5-48-48-48H48C21.5 0 0 21.5 0 48z"/></symbol>
+<symbol id="fa-box" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M50.7 58.5L0 160l208 0 0-128L93.7 32C75.5 32 58.9 42.3 50.7 58.5zM240 160l208 0L397.3 58.5C389.1 42.3 372.5 32 354.3 32L240 32l0 128zm208 32L0 192 0 416c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-224z"/></symbol>
+<symbol id="fa-chart-line" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M64 64c0-17.7-14.3-32-32-32S0 46.3 0 64L0 400c0 44.2 35.8 80 80 80l400 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L80 416c-8.8 0-16-7.2-16-16L64 64zm406.6 86.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L320 210.7l-57.4-57.4c-12.5-12.5-32.8-12.5-45.3 0l-112 112c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L240 221.3l57.4 57.4c12.5 12.5 32.8 12.5 45.3 0l128-128z"/></symbol>
+<symbol id="fa-chevron-right" viewBox="0 0 320 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M310.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-192 192c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L242.7 256 73.4 86.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l192 192z"/></symbol>
+<symbol id="fa-clock-rotate-left" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9L0 168c0 13.3 10.7 24 24 24l110.1 0c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24l0 104c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65 0-94.1c0-13.3-10.7-24-24-24z"/></symbol>
+<symbol id="fa-clock" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M256 0a256 256 0 1 1 0 512A256 256 0 1 1 256 0zM232 120l0 136c0 8 4 15.5 10.7 20l96 64c11 7.4 25.9 4.4 33.3-6.7s4.4-25.9-6.7-33.3L280 243.2 280 120c0-13.3-10.7-24-24-24s-24 10.7-24 24z"/></symbol>
+<symbol id="fa-code" viewBox="0 0 640 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M392.8 1.2c-17-4.9-34.7 5-39.6 22l-128 448c-4.9 17 5 34.7 22 39.6s34.7-5 39.6-22l128-448c4.9-17-5-34.7-22-39.6zm80.6 120.1c-12.5 12.5-12.5 32.8 0 45.3L562.7 256l-89.4 89.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l112-112c12.5-12.5 12.5-32.8 0-45.3l-112-112c-12.5-12.5-32.8-12.5-45.3 0zm-306.7 0c-12.5-12.5-32.8-12.5-45.3 0l-112 112c-12.5 12.5-12.5 32.8 0 45.3l112 112c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L77.3 256l89.4-89.4c12.5-12.5 12.5-32.8 0-45.3z"/></symbol>
+<symbol id="fa-cog" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M495.9 166.6c3.2 8.7 .5 18.4-6.4 24.6l-43.3 39.4c1.1 8.3 1.7 16.8 1.7 25.4s-.6 17.1-1.7 25.4l43.3 39.4c6.9 6.2 9.6 15.9 6.4 24.6c-4.4 11.9-9.7 23.3-15.8 34.3l-4.7 8.1c-6.6 11-14 21.4-22.1 31.2c-5.9 7.2-15.7 9.6-24.5 6.8l-55.7-17.7c-13.4 10.3-28.2 18.9-44 25.4l-12.5 57.1c-2 9.1-9 16.3-18.2 17.8c-13.8 2.3-28 3.5-42.5 3.5s-28.7-1.2-42.5-3.5c-9.2-1.5-16.2-8.7-18.2-17.8l-12.5-57.1c-15.8-6.5-30.6-15.1-44-25.4L83.1 425.9c-8.8 2.8-18.6 .3-24.5-6.8c-8.1-9.8-15.5-20.2-22.1-31.2l-4.7-8.1c-6.1-11-11.4-22.4-15.8-34.3c-3.2-8.7-.5-18.4 6.4-24.6l43.3-39.4C64.6 273.1 64 264.6 64 256s.6-17.1 1.7-25.4L22.4 191.2c-6.9-6.2-9.6-15.9-6.4-24.6c4.4-11.9 9.7-23.3 15.8-34.3l4.7-8.1c6.6-11 14-21.4 22.1-31.2c5.9-7.2 15.7-9.6 24.5-6.8l55.7 17.7c13.4-10.3 28.2-18.9 44-25.4l12.5-57.1c2-9.1 9-16.3 18.2-17.8C227.3 1.2 241.5 0 256 0s28.7 1.2 42.5 3.5c9.2 1.5 16.2 8.7 18.2 17.8l12.5 57.1c15.8 6.5 30.6 15.1 44 25.4l55.7-17.7c8.8-2.8 18.6-.3 24.5 6.8c8.1 9.8 15.5 20.2 22.1 31.2l4.7 8.1c6.1 11 11.4 22.4 15.8 34.3zM256 336a80 80 0 1 0 0-160 80 80 0 1 0 0 160z"/></symbol>
+<symbol id="fa-copy" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M208 0L332.1 0c12.7 0 24.9 5.1 33.9 14.1l67.9 67.9c9 9 14.1 21.2 14.1 33.9L448 336c0 26.5-21.5 48-48 48l-192 0c-26.5 0-48-21.5-48-48l0-288c0-26.5 21.5-48 48-48zM48 128l80 0 0 64-64 0 0 256 192 0 0-32 64 0 0 48c0 26.5-21.5 48-48 48L48 512c-26.5 0-48-21.5-48-48L0 176c0-26.5 21.5-48 48-48z"/></symbol>
+<symbol id="fa-cube" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M234.5 5.7c13.9-5 29.1-5 43.1 0l192 68.6C495 83.4 512 107.5 512 134.6l0 242.9c0 27-17 51.2-42.5 60.3l-192 68.6c-13.9 5-29.1 5-43.1 0l-192-68.6C17 428.6 0 404.5 0 377.4L0 134.6c0-27 17-51.2 42.5-60.3l192-68.6zM256 66L82.3 128 256 190l173.7-62L256 66zm32 368.6l160-57.1 0-188L288 246.6l0 188z"/></symbol>
+<symbol id="fa-globe" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M352 256c0 22.2-1.2 43.6-3.3 64l-185.3 0c-2.2-20.4-3.3-41.8-3.3-64s1.2-43.6 3.3-64l185.3 0c2.2 20.4 3.3 41.8 3.3 64zm28.8-64l123.1 0c5.3 20.5 8.1 41.9 8.1 64s-2.8 43.5-8.1 64l-123.1 0c2.1-20.6 3.2-42 3.2-64s-1.1-43.4-3.2-64zm112.6-32l-116.7 0c-10-63.9-29.8-117.4-55.3-151.6c78.3 20.7 142 77.5 171.9 151.6zm-149.1 0l-176.6 0c6.1-36.4 15.5-68.6 27-94.7c10.5-23.6 22.2-40.7 33.5-51.5C239.4 3.2 248.7 0 256 0s16.6 3.2 27.8 13.8c11.3 10.8 23 27.9 33.5 51.5c11.6 26 20.9 58.2 27 94.7zm-209 0L18.6 160C48.6 85.9 112.2 29.1 190.6 8.4C165.1 42.6 145.3 96.1 135.3 160zM8.1 192l123.1 0c-2.1 20.6-3.2 42-3.2 64s1.1 43.4 3.2 64L8.1 320C2.8 299.5 0 278.1 0 256s2.8-43.5 8.1-64zM194.7 446.6c-11.6-26-20.9-58.2-27-94.6l176.6 0c-6.1 36.4-15.5 68.6-27 94.6c-10.5 23.6-22.2 40.7-33.5 51.5C272.6 508.8 263.3 512 256 512s-16.6-3.2-27.8-13.8c-11.3-10.8-23-27.9-33.5-51.5zM135.3 352c10 63.9 29.8 117.4 55.3 151.6C112.2 482.9 48.6 426.1 18.6 352l116.7 0zm358.1 0c-30 74.1-93.6 130.9-171.9 151.6c25.5-34.2 45.2-87.7 55.3-151.6l116.7 0z"/></symbol>
+<symbol id="fa-hand-pointer" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M128 40c0-22.1 17.9-40 40-40s40 17.9 40 40l0 148.2c8.5-7.6 19.7-12.2 32-12.2c20.6 0 38.2 13 45 31.2c8.8-9.3 21.2-15.2 35-15.2c25.3 0 46 19.5 47.9 44.3c8.5-7.7 19.8-12.3 32.1-12.3c26.5 0 48 21.5 48 48l0 48 0 16 0 48c0 70.7-57.3 128-128 128l-16 0-64 0-.1 0-5.2 0c-5 0-9.9-.3-14.7-1c-55.3-5.6-106.2-34-140-79L8 336c-13.3-17.7-9.7-42.7 8-56s42.7-9.7 56 8l56 74.7L128 40zM240 304c0-8.8-7.2-16-16-16s-16 7.2-16 16l0 96c0 8.8 7.2 16 16 16s16-7.2 16-16l0-96zm48-16c-8.8 0-16 7.2-16 16l0 96c0 8.8 7.2 16 16 16s16-7.2 16-16l0-96c0-8.8-7.2-16-16-16zm80 16c0-8.8-7.2-16-16-16s-16 7.2-16 16l0 96c0 8.8 7.2 16 16 16s16-7.2 16-16l0-96z"/></symbol>
+<symbol id="fa-key" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M336 352c97.2 0 176-78.8 176-176S433.2 0 336 0S160 78.8 160 176c0 18.7 2.9 36.8 8.3 53.7L7 391c-4.5 4.5-7 10.6-7 17l0 80c0 13.3 10.7 24 24 24l80 0c13.3 0 24-10.7 24-24l0-40 40 0c13.3 0 24-10.7 24-24l0-40 40 0c6.4 0 12.5-2.5 17-7l33.3-33.3c16.9 5.4 35 8.3 53.7 8.3zM376 96a40 40 0 1 1 0 80 40 40 0 1 1 0-80z"/></symbol>
+<symbol id="fa-memory" viewBox="0 0 576 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M64 64C28.7 64 0 92.7 0 128l0 7.4c0 6.8 4.4 12.6 10.1 16.3C23.3 160.3 32 175.1 32 192s-8.7 31.7-21.9 40.3C4.4 236 0 241.8 0 248.6L0 320l576 0 0-71.4c0-6.8-4.4-12.6-10.1-16.3C552.7 223.7 544 208.9 544 192s8.7-31.7 21.9-40.3c5.7-3.7 10.1-9.5 10.1-16.3l0-7.4c0-35.3-28.7-64-64-64L64 64zM576 352L0 352l0 64c0 17.7 14.3 32 32 32l48 0 0-32c0-8.8 7.2-16 16-16s16 7.2 16 16l0 32 96 0 0-32c0-8.8 7.2-16 16-16s16 7.2 16 16l0 32 96 0 0-32c0-8.8 7.2-16 16-16s16 7.2 16 16l0 32 96 0 0-32c0-8.8 7.2-16 16-16s16 7.2 16 16l0 32 48 0c17.7 0 32-14.3 32-32l0-64zM192 160l0 64c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-64c0-17.7 14.3-32 32-32s32 14.3 32 32zm128 0l0 64c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-64c0-17.7 14.3-32 32-32s32 14.3 32 32zm128 0l0 64c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-64c0-17.7 14.3-32 32-32s32 14.3 32 32z"/></symbol>
+<symbol id="fa-microphone" viewBox="0 0 384 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M192 0C139 0 96 43 96 96l0 160c0 53 43 96 96 96s96-43 96-96l0-160c0-53-43-96-96-96zM64 216c0-13.3-10.7-24-24-24s-24 10.7-24 24l0 40c0 89.1 66.2 162.7 152 174.4l0 33.6-48 0c-13.3 0-24 10.7-24 24s10.7 24 24 24l72 0 72 0c13.3 0 24-10.7 24-24s-10.7-24-24-24l-48 0 0-33.6c85.8-11.7 152-85.3 152-174.4l0-40c0-13.3-10.7-24-24-24s-24 10.7-24 24l0 40c0 70.7-57.3 128-128 128s-128-57.3-128-128l0-40z"/></symbol>
+<symbol id="fa-plus" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M256 80c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 144L48 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l144 0 0 144c0 17.7 14.3 32 32 32s32-14.3 32-32l0-144 144 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-144 0 0-144z"/></symbol>
+<symbol id="fa-search" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352a144 144 0 1 0 0-288 144 144 0 1 0 0 288z"/></symbol>
+<symbol id="fa-server" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M64 32C28.7 32 0 60.7 0 96l0 64c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-64c0-35.3-28.7-64-64-64L64 32zm280 72a24 24 0 1 1 0 48 24 24 0 1 1 0-48zm48 24a24 24 0 1 1 48 0 24 24 0 1 1 -48 0zM64 288c-35.3 0-64 28.7-64 64l0 64c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-64c0-35.3-28.7-64-64-64L64 288zm280 72a24 24 0 1 1 0 48 24 24 0 1 1 0-48zm56 24a24 24 0 1 1 48 0 24 24 0 1 1 -48 0z"/></symbol>
+<symbol id="fa-sync-alt" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M105.1 202.6c7.7-21.8 20.2-42.3 37.8-59.8c62.5-62.5 163.8-62.5 226.3 0L386.3 160 352 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l111.5 0c0 0 0 0 0 0l.4 0c17.7 0 32-14.3 32-32l0-112c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 35.2L414.4 97.6c-87.5-87.5-229.3-87.5-316.8 0C73.2 122 55.6 150.7 44.8 181.4c-5.9 16.7 2.9 34.9 19.5 40.8s34.9-2.9 40.8-19.5zM39 289.3c-5 1.5-9.8 4.2-13.7 8.2c-4 4-6.7 8.8-8.1 14c-.3 1.2-.6 2.5-.8 3.8c-.3 1.7-.4 3.4-.4 5.1L16 432c0 17.7 14.3 32 32 32s32-14.3 32-32l0-35.1 17.6 17.5c0 0 0 0 0 0c87.5 87.4 229.3 87.4 316.7 0c24.4-24.4 42.1-53.1 52.9-83.8c5.9-16.7-2.9-34.9-19.5-40.8s-34.9 2.9-40.8 19.5c-7.7 21.8-20.2 42.3-37.8 59.8c-62.5 62.5-163.8 62.5-226.3 0l-.1-.1L125.6 352l34.4 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L48.4 288c-1.6 0-3.2 .1-4.8 .3s-3.1 .5-4.6 1z"/></symbol>
+<symbol id="fa-terminal" viewBox="0 0 576 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M9.4 86.6C-3.1 74.1-3.1 53.9 9.4 41.4s32.8-12.5 45.3 0l192 192c12.5 12.5 12.5 32.8 0 45.3l-192 192c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L178.7 256 9.4 86.6zM256 416l288 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-288 0c-17.7 0-32-14.3-32-32s14.3-32 32-32z"/></symbol>
+<symbol id="fa-th-large" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M448 96l0 128-160 0 0-128 160 0zm0 192l0 128-160 0 0-128 160 0zM224 224L64 224 64 96l160 0 0 128zM64 288l160 0 0 128L64 416l0-128zM64 32C28.7 32 0 60.7 0 96L0 416c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-320c0-35.3-28.7-64-64-64L64 32z"/></symbol>
+<symbol id="fa-thumbtack" viewBox="0 0 384 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M32 32C32 14.3 46.3 0 64 0L320 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-29.5 0 11.4 148.2c36.7 19.9 65.7 53.2 79.5 94.7l1 3c3.3 9.8 1.6 20.5-4.4 28.8s-15.7 13.3-26 13.3L32 352c-10.3 0-19.9-4.9-26-13.3s-7.7-19.1-4.4-28.8l1-3c13.8-41.5 42.8-74.8 79.5-94.7L93.5 64 64 64C46.3 64 32 49.7 32 32zM160 384l64 0 0 96c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-96z"/></symbol>
+<symbol id="fa-toolbox" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M176 88l0 40 160 0 0-40c0-4.4-3.6-8-8-8L184 80c-4.4 0-8 3.6-8 8zm-48 40l0-40c0-30.9 25.1-56 56-56l144 0c30.9 0 56 25.1 56 56l0 40 28.1 0c12.7 0 24.9 5.1 33.9 14.1l51.9 51.9c9 9 14.1 21.2 14.1 33.9l0 92.1-128 0 0-32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 32-128 0 0-32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 32L0 320l0-92.1c0-12.7 5.1-24.9 14.1-33.9l51.9-51.9c9-9 21.2-14.1 33.9-14.1l28.1 0zM0 416l0-64 128 0c0 17.7 14.3 32 32 32s32-14.3 32-32l128 0c0 17.7 14.3 32 32 32s32-14.3 32-32l128 0 0 64c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64z"/></symbol>
+<symbol id="fa-trash" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M135.2 17.7L128 32 32 32C14.3 32 0 46.3 0 64S14.3 96 32 96l384 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-96 0-7.2-14.3C307.4 6.8 296.3 0 284.2 0L163.8 0c-12.1 0-23.2 6.8-28.6 17.7zM416 128L32 128 53.2 467c1.6 25.3 22.6 45 47.9 45l245.8 0c25.3 0 46.3-19.7 47.9-45L416 128z"/></symbol>
+</svg>
 <div id="app">
   <!-- Toast Notifications -->
   <div class="fixed top-4 right-4 z-50 space-y-2">
@@ -88,11 +125,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <div class="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">OC</div>
       <span v-show="!sidebarCollapsed" class="font-semibold text-sm whitespace-nowrap" style="color: var(--text1)">OpsCenter</span>
       <button v-show="!sidebarCollapsed" @click="sidebarCollapsed=true" class="ml-auto text-xs opacity-50 hover:opacity-100" style="color:var(--text2)">
-        <i class="fas fa-angles-left"></i>
+        <svg class="icon"><use href="#fa-angles-left"></use></svg>
       </button>
     </div>
     <button v-if="sidebarCollapsed" @click="sidebarCollapsed=false" class="px-4 py-3 text-xs opacity-50 hover:opacity-100" style="color:var(--text2)">
-      <i class="fas fa-angles-right"></i>
+      <svg class="icon"><use href="#fa-angles-right"></use></svg>
     </button>
 
     <!-- Server Selector -->
@@ -122,7 +159,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <div v-show="!sidebarCollapsed" class="text-xs" style="color:var(--text2)">
         <div class="flex items-center gap-1.5 mb-1">
           <span class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>
-          <span>v2.1</span>
+          <span>v2.2</span>
         </div>
         <div>{{ servers.length }} 服务器 · {{ allServices.length }} 服务</div>
       </div>
@@ -149,7 +186,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             style="background:var(--bg);border-color:var(--border)">
       <!-- Search -->
       <div class="relative flex-1 max-w-md">
-        <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-xs" style="color:var(--text2)"></i>
+        <svg class="icon absolute left-3 top-1/2 -translate-y-1/2 text-xs" style="color:var(--text2)"><use href="#fa-search"></use></svg>
         <input v-model="searchQuery" @keydown.ctrl.k.prevent="$refs.searchInput?.focus()"
                ref="searchInput"
                placeholder="搜索服务... (Ctrl+K)"
@@ -187,7 +224,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         <!-- Recent Access -->
         <div v-if="recentServices.length" class="mb-5">
           <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
-            <i class="fas fa-clock-rotate-left"></i> 最近访问
+            <svg class="icon"><use href="#fa-clock-rotate-left"></use></svg> 最近访问
           </h2>
           <div class="flex gap-2 overflow-x-auto pb-1">
             <div v-for="rs in recentServices" :key="rs.id" @click="openService(rs)"
@@ -204,7 +241,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         <!-- Quick Access (Pinned Services) -->
         <div v-if="pinnedServices.length" class="mb-5">
           <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
-            <i class="fas fa-bookmark"></i> 快捷访问
+            <svg class="icon"><use href="#fa-bookmark"></use></svg> 快捷访问
           </h2>
           <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
             <div v-for="ps in pinnedServices" :key="ps.id" @click="openService(ps)"
@@ -223,8 +260,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         <!-- Server Cards -->
         <div class="mb-6">
           <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
-            <i class="fas fa-server"></i> 服务器
-            <button @click="loadServers" class="text-xs opacity-50 hover:opacity-100 ml-1"><i class="fas fa-sync-alt" :class="{'loading-spinner':loading.servers}"></i></button>
+            <svg class="icon"><use href="#fa-server"></use></svg> 服务器
+            <button @click="loadServers" class="text-xs opacity-50 hover:opacity-100 ml-1"><svg class="icon" :class={'loading-spinner':loading.servers}><use href="#fa-sync-alt"></use></svg></button>
           </h2>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div v-for="s in servers" :key="s.id" @click="currentServerId=s.id;onServerChange()"
@@ -241,19 +278,19 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                 </span>
               </div>
               <div class="text-xs" style="color:var(--text2)">
-                <div class="flex items-center gap-1 mb-1"><i class="fas fa-globe w-4"></i>{{ s.host }}</div>
-                <div class="flex items-center gap-1"><i class="fas fa-cube w-4"></i>{{ s.service_count||0 }} 服务</div>
+                <div class="flex items-center gap-1 mb-1"><svg class="icon w-4"><use href="#fa-globe"></use></svg>{{ s.host }}</div>
+                <div class="flex items-center gap-1"><svg class="icon w-4"><use href="#fa-cube"></use></svg>{{ s.service_count||0 }} 服务</div>
                 <div v-if="serverMetrics[s.id]" class="flex items-center gap-3 mt-1 text-xs">
                   <span v-if="serverMetrics[s.id].cpu !== null" class="flex items-center gap-1">
-                    <i class="fas fa-microphone w-3 text-[10px]" style="color:#22c55e"></i>
+                    <svg class="icon w-3 text-[10px]" style="color:#22c55e"><use href="#fa-microphone"></use></svg>
                     CPU {{ serverMetrics[s.id].cpu.toFixed(1) }}%
                   </span>
                   <span v-if="serverMetrics[s.id].memory !== null" class="flex items-center gap-1">
-                    <i class="fas fa-memory w-3 text-[10px]" style="color:#3b82f6"></i>
+                    <svg class="icon w-3 text-[10px]" style="color:#3b82f6"><use href="#fa-memory"></use></svg>
                     内存 {{ serverMetrics[s.id].memory.toFixed(1) }}%
                   </span>
                   <span v-if="serverMetrics[s.id].container_count !== null" class="flex items-center gap-1">
-                    <i class="fas fa-box w-3 text-[10px]" style="color:#f59e0b"></i>
+                    <svg class="icon w-3 text-[10px]" style="color:#f59e0b"><use href="#fa-box"></use></svg>
                     {{ serverMetrics[s.id].container_count }} 容器
                   </span>
                 </div>
@@ -261,7 +298,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             </div>
             <div v-if="!servers.length && !loading.servers" class="col-span-full text-center py-8 rounded-xl border"
                  style="background:var(--card);border-color:var(--border);color:var(--text2)">
-              <i class="fas fa-server text-3xl mb-2 block opacity-30"></i>
+              <svg class="icon text-3xl mb-2 block opacity-30"><use href="#fa-server"></use></svg>
               <p class="text-sm">暂无服务器，请在设置中添加</p>
             </div>
           </div>
@@ -271,8 +308,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         <div v-if="currentServerId">
           <div class="flex items-center justify-between mb-4">
             <h2 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text2)">
-              <i class="fas fa-th-large"></i> 服务列表
-              <button @click="loadServices" class="text-xs opacity-50 hover:opacity-100 ml-1"><i class="fas fa-sync-alt" :class="{'loading-spinner':loading.services}"></i></button>
+              <svg class="icon"><use href="#fa-th-large"></use></svg> 服务列表
+              <button @click="loadServices" class="text-xs opacity-50 hover:opacity-100 ml-1"><svg class="icon" :class={'loading-spinner':loading.services}><use href="#fa-sync-alt"></use></svg></button>
             </h2>
             <span class="text-xs" style="color:var(--text2)">{{ filteredServices.length }} 个服务</span>
           </div>
@@ -317,7 +354,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             </div>
           </div>
           <div v-else-if="searchQuery && !filteredServices.length" class="text-center py-12" style="color:var(--text2)">
-            <i class="fas fa-search text-3xl mb-2 block opacity-30"></i>
+            <svg class="icon text-3xl mb-2 block opacity-30"><use href="#fa-search"></use></svg>
             <p class="text-sm">未找到匹配的服务</p>
           </div>
 
@@ -326,7 +363,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             <div v-for="cat in categoriesWithServices" :key="cat.name" class="mb-5">
               <button @click="toggleCategory(cat.name)"
                       class="flex items-center gap-2 mb-3 w-full text-left group">
-                <i :class="['fas fa-chevron-right text-xs transition-transform', categoryExpanded[cat.name]?'rotate-90':'']" style="color:var(--accent)"></i>
+                <svg :class="['icon text-xs transition-transform', categoryExpanded[cat.name]?'rotate-90':'']" style="color:var(--accent)"><use href="#fa-chevron-right"></use></svg>
                 <i :class="['fas', cat.icon||'fa-folder', 'text-xs']" :style="{color: cat.color||'var(--accent)'}"></i>
                 <span class="text-sm font-semibold" style="color:var(--text1)">{{ cat.name }}</span>
                 <span class="text-xs px-2 py-0.5 rounded-full" :style="{background: (cat.color||'#10b981')+'18', color: cat.color||'var(--text2)'}">{{ cat.services.length }}</span>
@@ -340,7 +377,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                   <button @click.stop="togglePin(svc)"
                           class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                           :style="{color: svc.pinned?'#f59e0b':'var(--text2)', background:'var(--bg)'}">
-                    <i class="fas fa-thumbtack" :style="{transform:svc.pinned?'none':'rotate(45deg)'}"></i>
+                    <svg class="icon" :style="{transform:svc.pinned?'none':'rotate(45deg)'}"><use href="#fa-thumbtack"></use></svg>
                   </button>
                   <div class="flex items-center gap-3 mb-2">
                     <div class="w-9 h-9 rounded-lg flex items-center justify-center" :style="{background:(svc.icon_color||'#10b981')+'20'}">
@@ -358,13 +395,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               </div>
             </div>
             <div v-if="!categoriesWithServices.length && !loading.services" class="text-center py-12" style="color:var(--text2)">
-              <i class="fas fa-cube text-3xl mb-2 block opacity-30"></i>
+              <svg class="icon text-3xl mb-2 block opacity-30"><use href="#fa-cube"></use></svg>
               <p class="text-sm">该服务器暂无服务数据</p>
             </div>
           </div>
         </div>
         <div v-else class="text-center py-16" style="color:var(--text2)">
-          <i class="fas fa-hand-pointer text-4xl mb-3 block opacity-30"></i>
+          <svg class="icon text-4xl mb-3 block opacity-30"><use href="#fa-hand-pointer"></use></svg>
           <p class="text-sm">请选择一个服务器查看服务</p>
         </div>
 
@@ -372,7 +409,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         <div class="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3">
           <a @click.prevent="currentPage='monitor'" class="rounded-xl p-4 border card-hover cursor-pointer flex items-center gap-3 group" style="background:var(--card);border-color:var(--border)">
             <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:rgba(59,130,246,.15)">
-              <i class="fas fa-chart-line text-base" style="color:#3b82f6"></i>
+              <svg class="icon text-base" style="color:#3b82f6"><use href="#fa-chart-line"></use></svg>
             </div>
             <div>
               <div class="text-sm font-semibold group-hover:text-blue-500 transition-colors" style="color:var(--text1)">系统监控</div>
@@ -381,7 +418,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           </a>
           <a @click.prevent="currentPage='tools'" class="rounded-xl p-4 border card-hover cursor-pointer flex items-center gap-3 group" style="background:var(--card);border-color:var(--border)">
             <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:rgba(236,72,153,.15)">
-              <i class="fas fa-toolbox text-base" style="color:#ec4899"></i>
+              <svg class="icon text-base" style="color:#ec4899"><use href="#fa-toolbox"></use></svg>
             </div>
             <div>
               <div class="text-sm font-semibold group-hover:text-pink-500 transition-colors" style="color:var(--text1)">运维工具</div>
@@ -390,7 +427,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           </a>
           <a @click.prevent="currentPage='settings'" class="rounded-xl p-4 border card-hover cursor-pointer flex items-center gap-3 group" style="background:var(--card);border-color:var(--border)">
             <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background:rgba(245,158,11,.15)">
-              <i class="fas fa-cog text-base" style="color:#f59e0b"></i>
+              <svg class="icon text-base" style="color:#f59e0b"><use href="#fa-cog"></use></svg>
             </div>
             <div>
               <div class="text-sm font-semibold group-hover:text-amber-500 transition-colors" style="color:var(--text1)">设置管理</div>
@@ -403,14 +440,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <!-- ===================== 系统监控 ===================== -->
       <div v-if="currentPage==='monitor'">
         <div v-if="!currentServerId" class="text-center py-16" style="color:var(--text2)">
-          <i class="fas fa-chart-line text-4xl mb-3 block opacity-30"></i>
+          <svg class="icon text-4xl mb-3 block opacity-30"><use href="#fa-chart-line"></use></svg>
           <p class="text-sm">请先选择服务器</p>
         </div>
         <template v-else>
           <div class="flex items-center justify-between mb-5">
             <h2 class="text-lg font-semibold flex items-center gap-2" style="color:var(--text1)">
-              <i class="fas fa-chart-line" style="color:var(--accent)"></i> 系统监控
-              <button @click="loadMonitor" class="text-xs opacity-50 hover:opacity-100 ml-1"><i class="fas fa-sync-alt" :class="{'loading-spinner':loading.monitor}"></i></button>
+              <svg class="icon" style="color:var(--accent)"><use href="#fa-chart-line"></use></svg> 系统监控
+              <button @click="loadMonitor" class="text-xs opacity-50 hover:opacity-100 ml-1"><svg class="icon" :class={'loading-spinner':loading.monitor}><use href="#fa-sync-alt"></use></svg></button>
             </h2>
             <div class="flex items-center gap-2 text-xs" style="color:var(--text2)">
               <span class="w-2 h-2 rounded-full pulse-dot" :class="monitor.connected?'bg-emerald-500':'bg-red-500'"></span>
@@ -491,20 +528,20 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <!-- ===================== 工具箱 ===================== -->
       <div v-if="currentPage==='tools'">
         <h2 class="text-lg font-semibold flex items-center gap-2 mb-5" style="color:var(--text1)">
-          <i class="fas fa-toolbox" style="color:var(--accent)"></i> 运维工具
+          <svg class="icon" style="color:var(--accent)"><use href="#fa-toolbox"></use></svg> 运维工具
         </h2>
         <!-- Terminal Tool Card (P1-04: moved from sidebar) -->
         <div class="mb-5">
           <details class="rounded-xl border" style="background:var(--card);border-color:var(--border)">
             <summary class="px-5 py-4 cursor-pointer flex items-center gap-3" style="color:var(--text1)">
-              <i class="fas fa-terminal" style="color:var(--accent)"></i>
+              <svg class="icon" style="color:var(--accent)"><use href="#fa-terminal"></use></svg>
               <span class="text-sm font-semibold">终端</span>
               <span class="text-xs px-2 py-0.5 rounded-full" style="background:rgba(245,158,11,.15);color:#f59e0b">模拟模式</span>
               <span class="ml-auto text-xs" style="color:var(--text2)">点击展开</span>
             </summary>
             <div class="px-5 pb-4">
               <div v-if="!currentServerId" class="text-center py-8" style="color:var(--text2)">
-                <i class="fas fa-terminal text-2xl mb-2 block opacity-30"></i>
+                <svg class="icon text-2xl mb-2 block opacity-30"><use href="#fa-terminal"></use></svg>
                 <p class="text-sm">请先选择服务器</p>
               </div>
               <template v-else>
@@ -540,7 +577,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <!-- Timestamp -->
           <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
             <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text1)">
-              <i class="fas fa-clock" style="color:#8b5cf6"></i> 时间戳转换
+              <svg class="icon" style="color:#8b5cf6"><use href="#fa-clock"></use></svg> 时间戳转换
             </h3>
             <div class="grid grid-cols-2 gap-3 mb-3">
               <div>
@@ -565,7 +602,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <!-- Base64 -->
           <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
             <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text1)">
-              <i class="fas fa-code" style="color:#f59e0b"></i> Base64 编解码
+              <svg class="icon" style="color:#f59e0b"><use href="#fa-code"></use></svg> Base64 编解码
             </h3>
             <div class="mb-3">
               <label class="text-xs block mb-1" style="color:var(--text2)">原始文本</label>
@@ -585,7 +622,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <!-- JSON -->
           <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
             <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text1)">
-              <i class="fas fa-brackets-curly fa-code" style="color:#3b82f6"></i> JSON 格式化
+              <svg class="icon" style="color:#3b82f6"><use href="#fa-code"></use></svg> JSON 格式化
             </h3>
             <div class="mb-3">
               <label class="text-xs block mb-1" style="color:var(--text2)">输入 JSON</label>
@@ -609,7 +646,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <!-- Password -->
           <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
             <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text1)">
-              <i class="fas fa-key" style="color:#ec4899"></i> 密码生成器
+              <svg class="icon" style="color:#ec4899"><use href="#fa-key"></use></svg> 密码生成器
             </h3>
             <div class="space-y-3 mb-4">
               <div>
@@ -637,7 +674,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                      class="flex-1 px-3 py-2.5 rounded-lg text-sm font-mono border"
                      style="background:var(--bg);color:var(--accent);border-color:var(--border)">
               <button @click="copyPassword" class="px-4 py-2.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition">
-                <i class="fas fa-copy"></i>
+                <svg class="icon"><use href="#fa-copy"></use></svg>
               </button>
             </div>
             <div class="mt-2 text-xs" style="color:var(--text2)">
@@ -650,7 +687,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <!-- ===================== 设置 ===================== -->
       <div v-if="currentPage==='settings'">
         <h2 class="text-lg font-semibold flex items-center gap-2 mb-5" style="color:var(--text1)">
-          <i class="fas fa-cog" style="color:var(--accent)"></i> 设置
+          <svg class="icon" style="color:var(--accent)"><use href="#fa-cog"></use></svg> 设置
         </h2>
 
         <!-- Stats -->
@@ -666,7 +703,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <div class="px-5 py-3 border-b flex items-center justify-between" style="border-color:var(--border)">
             <h3 class="text-sm font-semibold" style="color:var(--text1)">服务器管理</h3>
             <button @click="showAddServer=!showAddServer" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition">
-              <i class="fas fa-plus mr-1"></i>添加服务器
+              <svg class="icon mr-1"><use href="#fa-plus"></use></svg>添加服务器
             </button>
           </div>
           <!-- Add Server Form -->
@@ -712,7 +749,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             <div class="flex gap-2">
               <button @click="addServer" :disabled="!newServer.name||!newServer.host"
                       class="px-4 py-2 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition disabled:opacity-50">
-                <i class="fas fa-plus mr-1"></i>保存并扫描
+                <svg class="icon mr-1"><use href="#fa-plus"></use></svg>保存并扫描
               </button>
               <button @click="testConnection()" :disabled="!newServer.host||sshTestResult.testing"
                       class="px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
@@ -741,11 +778,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               <div class="flex items-center gap-1.5">
                 <button v-if="!s.is_local && s.has_credentials" @click="scanServer(s.id)" class="text-xs px-2.5 py-1.5 rounded-lg border hover:bg-emerald-500 hover:text-white hover:border-emerald-500 transition"
                         style="color:var(--text2);border-color:var(--border)" title="扫描服务">
-                  <i class="fas fa-search"></i>
+                  <svg class="icon"><use href="#fa-search"></use></svg>
                 </button>
                 <button @click="deleteServer(s.id)" class="text-xs px-2.5 py-1.5 rounded-lg border hover:bg-red-500 hover:text-white hover:border-red-500 transition"
                         style="color:var(--text2);border-color:var(--border)">
-                  <i class="fas fa-trash"></i>
+                  <svg class="icon"><use href="#fa-trash"></use></svg>
                 </button>
               </div>
             </div>
@@ -788,7 +825,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             </div>
             <button @click="addService" :disabled="!newService.name||!newService.url||!currentServerId"
                     class="px-4 py-2 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition disabled:opacity-50">
-              <i class="fas fa-plus mr-1"></i>注册服务
+              <svg class="icon mr-1"><use href="#fa-plus"></use></svg>注册服务
             </button>
             <span v-if="!currentServerId" class="ml-2 text-xs" style="color:var(--unknown)">请先选择服务器</span>
           </div>
@@ -1166,6 +1203,22 @@ createApp({
       }
     }
 
+
+    let echartsLoaded = false;
+    let echartsLib = null;
+    async function loadEcharts() {
+      if (echartsLib) return echartsLib;
+      if (echartsLoaded) return null;
+      return new Promise((resolve) => {
+        echartsLoaded = true;
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js';
+        s.onload = () => { echartsLib = window.echarts; resolve(echartsLib); };
+        s.onerror = () => { console.error('ECharts load failed'); resolve(null); };
+        document.head.appendChild(s);
+      });
+    }
+
     // ========== Monitor ==========
     async function loadMonitor() {
       if (!currentServerId.value) return;
@@ -1203,11 +1256,11 @@ createApp({
       } catch (e) { /* fail silently, chart shows empty */ }
     }
 
-    function initChart() {
-      if (historyChart.value && !chartInstance) {
-        chartInstance = echarts.init(historyChart.value, isDark.value ? 'dark' : null);
-        window.addEventListener('resize', () => chartInstance?.resize());
-      }
+    async function initChart() {
+      if (!echartsLib) await loadEcharts();
+      if (!echartsLib || !historyChart.value || chartInstance) return;
+      chartInstance = echartsLib.init(historyChart.value, isDark.value ? 'dark' : null);
+      window.addEventListener('resize', () => chartInstance?.resize());
     }
 
     function updateChart() {
@@ -1236,7 +1289,7 @@ createApp({
         yAxis: { type: 'value', axisLine: { show: false }, splitLine: { lineStyle: { color: isDark.value ? '#1e293b' : '#f1f5f9' } }, axisLabel: { fontSize: 10, formatter: `{value}${metricUnits[historyMetric.value]}` } },
         series: [{
           type: 'line', data: yData, smooth: true, symbol: 'none', lineStyle: { width: 2, color: metricColors[historyMetric.value] },
-          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          areaStyle: { color: new echartsLib.graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: metricColors[historyMetric.value] + '40' },
             { offset: 1, color: metricColors[historyMetric.value] + '05' },
           ])},
@@ -1548,7 +1601,7 @@ createApp({
     // ========== Watchers ==========
     watch(currentPage, (page) => {
       if (page === 'monitor' && currentServerId.value) {
-        nextTick(() => { initChart(); loadMonitor(); loadHistory(); });
+        nextTick(async () => { await loadEcharts(); await initChart(); loadMonitor(); loadHistory(); });
       }
       if (page === 'terminal' && currentServerId.value && !terminalLines.value.length) {
         initTerminal();
