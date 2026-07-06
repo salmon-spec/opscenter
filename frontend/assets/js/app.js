@@ -56,10 +56,12 @@ createApp({
     const overviewCards = computed(() => {
       const onSrv = servers.value.filter(s => s.status === 'online').length;
       const onSvc = allServices.value.filter(s => s.status === 'online').length;
+      // P4: aggregate container count from serverMetrics (not monitor which may not be loaded)
+      const totalContainers = Object.values(serverMetrics).reduce((sum, m) => sum + (m.container_count || 0), 0) || monitor.containers.length || (stats.containers || 0);
       return [
         { label: '服务器', value: `${onSrv}/${servers.value.length}`, icon: 'fa-server', color: '#3b82f6' },
         { label: '服务', value: `${onSvc}/${allServices.value.length}`, icon: 'fa-cube', color: '#10b981' },
-        { label: '容器', value: monitor.containers.length || (stats.containers || 0), icon: 'fa-box', color: '#8b5cf6' },
+        { label: '容器', value: totalContainers, icon: 'fa-box', color: '#8b5cf6' },
         { label: '告警', value: offlineServices.value.length, icon: 'fa-circle-exclamation', color: '#ef4444', alert: offlineServices.value.length > 0 },
       ];
     });
@@ -307,10 +309,13 @@ createApp({
           serverMetrics[s.id] = {
             cpu: m.cpu_percent ?? m.cpu ?? null,
             memory: m.memory_percent ?? m.memory ?? null,
+            disk: m.disk_percent ?? m.disk ?? null,
+            disk_total: m.disk_total ?? m.disk_total_gb ?? null,
+            disk_used: m.disk_used ?? (m.disk_total != null && m.disk_avail != null ? m.disk_total - m.disk_avail : null),
             container_count: (data.containers || m.containers || []).length,
           };
         } catch (e) {
-          serverMetrics[s.id] = { cpu: null, memory: null, container_count: null };
+          serverMetrics[s.id] = { cpu: null, memory: null, disk: null, disk_total: null, disk_used: null, container_count: null };
         }
       }
     }
@@ -727,9 +732,9 @@ createApp({
     function getMetricColor(key, value) {
       const numVal = parseFloat(value);
       if (isNaN(numVal)) return null;
-      if (key === 'network') return null; // Network doesn't have threshold
-      if (numVal > 90) return '#ef4444';
-      if (numVal > 80) return '#f59e0b';
+      if (key === 'network') return null;
+      if (numVal > 90) return 'var(--offline)';
+      if (numVal > 80) return 'var(--unknown)';
       return null;
     }
 
@@ -752,6 +757,28 @@ createApp({
       const expr = '{container_name="' + containerName + '"}';
       const params = JSON.stringify({datasource:'Loki',expressions:[{refId:'A',expr:expr}]});
       return '/grafana/explore?orgId=1&left=' + encodeURIComponent(params);
+    }
+
+
+
+    /* P4-03: Format raw Docker port strings to clean display */
+    function formatContainerPorts(ports) {
+      if (!ports || ports === '-') return '-';
+      return ports.split(',').map(p => {
+        // Extract just the port number from formats like "0.0.0.0:443", ":::443", "127.0.0.1:3000"
+        const m = p.trim().match(/:(\d+)$/);
+        return m ? m[1] : p.trim();
+      }).filter((v, i, arr) => arr.indexOf(v) === i).join(', ');
+    }
+
+    /* P4-04: Format server disk info */
+    function formatDiskInfo(serverId) {
+      const m = serverMetrics[serverId];
+      if (!m || m.disk_total == null) return '';
+      const used = m.disk_used || 0;
+      const total = m.disk_total || 0;
+      if (!total) return '';
+      return `${(used/1073741824).toFixed(1)}/${(total/1073741824).toFixed(1)}G`;
     }
 
     /* ========== Return ========== */
@@ -777,6 +804,7 @@ createApp({
       openDrawer, copyServiceInfo, fillTerminalCommand,
       getMetricColor, getMetricClass, isMetricCritical,
       getContainerLogUrl,
+      formatContainerPorts, formatDiskInfo,
     };
   },
 }).mount('#app');

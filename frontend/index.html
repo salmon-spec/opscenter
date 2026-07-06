@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>运维工作台 v2.5</title>
+<title>运维工作台 v2.6</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
-</svg>">
+
 <!-- P2-02: Font Awesome CDN removed - using inline SVG sprite -->
 
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
@@ -95,6 +95,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 .severity-warn-border { border-color: rgba(245,158,11,.5) !important; }
 .severity-crit-border { border-color: rgba(239,68,68,.5) !important; }
 /* Drawer */
+/** P4: Offline server card */
+.server-offline { opacity: .6; }
+.server-offline:hover { opacity: .85; }
 .drawer-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.5); display: flex; justify-content: flex-end; animation: fadeIn .2s ease; }
 .drawer-panel { width: 380px; max-width: 90vw; background: var(--card); border-left: 1px solid var(--border); padding: 24px; overflow-y: auto; animation: slideInRight .25s ease; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -241,7 +244,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <div v-show="!sidebarCollapsed" class="text-xs" style="color:var(--text2)">
         <div class="flex items-center gap-1.5 mb-1">
           <span class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>
-          <span>v2.5</span>
+          <span>v2.6</span>
         </div>
         <div>{{ servers.length }} 服务器 · {{ allServices.length }} 服务</div>
       </div>
@@ -399,7 +402,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             <div v-for="s in servers" :key="s.id" @click="currentServerId=s.id;onServerChange()"
                  :class="['rounded-xl p-4 cursor-pointer border-2 card-hover',
-                           currentServerId===s.id ? 'border-emerald-500' : '']"
+                           currentServerId===s.id ? 'border-emerald-500' : '',
+                           s.status!=='online' ? 'server-offline' : '']"
                  :style="{ background: 'var(--card)', borderColor: currentServerId===s.id ? '#10b981' : 'var(--border)' }">
               <div class="flex items-center justify-between mb-2">
                 <div class="flex items-center gap-2">
@@ -414,16 +418,23 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                 <div class="flex items-center gap-1 mb-1"><svg class="icon w-4"><use href="#fa-globe"></use></svg>{{ s.host }}</div>
                 <div class="flex items-center gap-1"><svg class="icon w-4"><use href="#fa-cube"></use></svg>{{ s.service_count||0 }} 服务</div>
                 <div v-if="serverMetrics[s.id]" class="flex items-center gap-3 mt-1 text-xs">
-                  <span v-if="serverMetrics[s.id].cpu !== null" class="flex items-center gap-1">
+                  <span v-if="serverMetrics[s.id].cpu !== null" class="flex items-center gap-1"
+                        :style="{color: getMetricColor('cpu', serverMetrics[s.id].cpu) || 'var(--text2)'}">
                     <svg class="icon w-3 text-[10px]" style="color:#22c55e"><use href="#fa-microchip"></use></svg>
                     CPU {{ serverMetrics[s.id].cpu.toFixed(1) }}%
                   </span>
-                  <span v-if="serverMetrics[s.id].memory !== null" class="flex items-center gap-1">
+                  <span v-if="serverMetrics[s.id].memory !== null" class="flex items-center gap-1"
+                        :style="{color: getMetricColor('memory', serverMetrics[s.id].memory) || 'var(--text2)'}">
                     <svg class="icon w-3 text-[10px]" style="color:#3b82f6"><use href="#fa-memory"></use></svg>
                     内存 {{ serverMetrics[s.id].memory.toFixed(1) }}%
                   </span>
-                  <span v-if="serverMetrics[s.id].container_count !== null" class="flex items-center gap-1">
-                    <svg class="icon w-3 text-[10px]" style="color:#f59e0b"><use href="#fa-box"></use></svg>
+                  <span v-if="serverMetrics[s.id].disk !== null" class="flex items-center gap-1"
+                        :style="{color: getMetricColor('disk', serverMetrics[s.id].disk) || 'var(--text2)'}">
+                    <svg class="icon w-3 text-[10px]" style="color:#f59e0b"><use href="#fa-hard-drive"></use></svg>
+                    磁盘 {{ serverMetrics[s.id].disk.toFixed(1) }}%
+                  </span>
+                  <span v-if="serverMetrics[s.id].container_count !== null" class="flex items-center gap-1" style="color:var(--text2)">
+                    <svg class="icon w-3 text-[10px]" style="color:#8b5cf6"><use href="#fa-box"></use></svg>
                     {{ serverMetrics[s.id].container_count }} 容器
                   </span>
                 </div>
@@ -637,7 +648,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                 </button>
               </div>
             </div>
-            <div ref="historyChart" style="height:280px"></div>
+            <div class="relative">
+              <div ref="historyChart" style="height:280px"></div>
+              <div v-if="!monitor.history.length" class="absolute inset-0 flex flex-col items-center justify-center" style="color:var(--text2)">
+                <svg class="icon text-2xl opacity-30 mb-2"><use href="#fa-chart-line"></use></svg>
+                <span class="text-xs">暂无历史数据，数据将在采集后自动显示</span>
+              </div>
+            </div>
           </div>
 
           <!-- Containers Table -->
@@ -667,7 +684,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                         <span :class="c.status==='running'?'status-online':'status-offline'">{{ c.status }}</span>
                       </span>
                     </td>
-                    <td class="px-4 py-2.5 text-xs" style="color:var(--text2)">{{ c.ports }}</td>
+                    <td class="px-4 py-2.5 text-xs" style="color:var(--text2)">{{ formatContainerPorts(c.ports) }}</td>
                     <td class="px-4 py-2.5 text-xs">
                       <a :href="getContainerLogUrl(c.name)" 
                          target="_blank" class="text-emerald-500 hover:underline" title="在Grafana中查看日志">日志</a>
