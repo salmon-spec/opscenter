@@ -13,7 +13,7 @@ IMAGE_CATEGORIES = {
     "自动化工作流": ["n8n", "airflow", "temporal"],
     "运维管理": ["1panel", "portainer"],
     "前端应用": ["mall-admin-web", "mall-app-web"],
-    "应用服务": ["collector", "s-pdf", "frooodle", "it-tools", "corentinth", "mall-admin", "mall-search", "mall-portal", "mall-gateway", "mall-auth", "mall-monitor"],
+    "应用服务": ["s-pdf", "frooodle", "it-tools", "corentinth", "mall-admin", "mall-search", "mall-portal", "mall-gateway", "mall-auth", "mall-monitor"]
 }
 
 # Image -> icon mapping
@@ -22,7 +22,7 @@ IMAGE_ICONS = {
     "prometheus": "fa-fire", "grafana": "fa-chart-area", "loki": "fa-database",
     "nginx": "fa-server", "postgres": "fa-database", "redis": "fa-bolt",
     "n8n": "fa-network-wired", "1panel": "fa-gauge-high",
-    "collector": "fa-database", "s-pdf": "fa-file-pdf", "frooodle": "fa-file-pdf",
+"s-pdf": "fa-file-pdf", "frooodle": "fa-file-pdf",
     "it-tools": "fa-wrench", "corentinth": "fa-wrench",
     "alertmanager": "fa-bell", "node-exporter": "fa-microchip",
     "promtail": "fa-arrow-right", "registry": "fa-cubes",
@@ -34,14 +34,14 @@ IMAGE_ICONS = {
     "mall-portal": "fa-store", "mall-gateway": "fa-door-open",
     "mall-auth": "fa-key", "mall-monitor": "fa-heartbeat",
     "mall-admin-web": "fa-desktop", "mall-app-web": "fa-mobile-screen",
-    "mongo": "fa-leaf",
+    "mongo": "fa-leaf"
 }
 
 # Image -> description mapping
 IMAGE_DESCS = {
     "gitea": "代码仓库", "jenkins": "CI/CD流水线", "prometheus": "指标采集",
     "grafana": "监控仪表盘", "loki": "日志聚合", "nginx": "反向代理",
-    "n8n": "自动化工作流", "collector": "数据采集中心",
+    "n8n": "自动化工作流",
     "s-pdf": "PDF工具箱", "it-tools": "开发者工具集",
     "1panel": "运维管理面板", "alertmanager": "告警管理",
     "node-exporter": "主机指标采集", "promtail": "日志采集代理",
@@ -53,18 +53,18 @@ IMAGE_DESCS = {
     "mall-admin": "后台管理服务", "mall-search": "商品搜索服务",
     "mall-portal": "会员门户服务", "mall-gateway": "API网关服务",
     "mall-auth": "认证授权服务", "mall-monitor": "服务监控",
-    "mall-admin-web": "管理后台前端", "mall-app-web": "商城顾客端前端",
+    "mall-admin-web": "管理后台前端", "mall-app-web": "商城顾客端前端"
 }
 
 # Container name -> URL mapping (based on nginx routes)
 NAME_URLS = {
     "nginx": "/", "gitea": "/gitea/", "jenkins": "/jenkins/",
     "prometheus": "/prometheus/", "grafana": "/grafana/",
-    "collector": "/collector/", "stirling-pdf": "/pdf/",
+"stirling-pdf": "/pdf/",
     "it-tools": "http://{host}:8443", "n8n": "/n8n/",
     "ai-frontend": "/datahub/", "ai-api": "/datahub/",
     "harbor-nginx": "https://{host}:8891",
-    "1panel-hermes-agent": "http://{host}:9999/ops123",
+    "1panel-hermes-agent": "http://{host}:9999/ops123"
 }
 
 def classify_image(image_name: str) -> str:
@@ -187,6 +187,30 @@ def discover_docker_services(server: Server, db: Session, host: str = "39.99.157
                 db.add(svc)
                 discovered.append(svc)
         
+        # Mark stale docker_auto services as offline when their container is gone
+        active_container_names = {ctr.name for ctr in containers}
+        stale_services = db.query(Service).filter(
+            Service.server_id == server.id,
+            Service.source == ServiceSource.docker_auto.value,
+            Service.status != ServiceStatus.offline.value,
+        ).all()
+        for svc in stale_services:
+            if svc.container_name and svc.container_name not in active_container_names:
+                svc.status = ServiceStatus.offline.value
+                discovered.append(svc)
+
+        # Permanently remove offline docker_auto services whose container has been gone
+        # (prevents zombie entries from accumulating indefinitely)
+        gone_services = db.query(Service).filter(
+            Service.server_id == server.id,
+            Service.source == ServiceSource.docker_auto.value,
+            Service.status == ServiceStatus.offline.value,
+            Service.container_name != None,
+        ).all()
+        for svc in gone_services:
+            if svc.container_name not in active_container_names:
+                db.delete(svc)
+
         db.commit()
         return discovered
         
