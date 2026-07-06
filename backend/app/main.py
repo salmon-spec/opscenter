@@ -109,15 +109,23 @@ def _run_health_check():
             # --- Check service health ---
             services = db.query(Service).all()
             for svc in services:
-                if not svc.url or svc.url == "/":
+                if not svc.url:
                     continue
                 try:
-                    url = svc.url
-                    if url.startswith("/"):
+                    check_url = svc.url
+                    # Use health_path for actual health check if available
+                    if svc.health_path:
+                        base = svc.url if svc.url.startswith("http") else ""
+                        if not base:
+                            srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                            host = srv.host if srv else LOCAL_HOST
+                            base = f"http://{host}"
+                        check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
+                    elif check_url.startswith("/"):
                         srv = db.query(Server).filter(Server.id == svc.server_id).first()
                         host = srv.host if srv else LOCAL_HOST
-                        url = f"http://{host}{url}"
-                    resp = req.head(url, timeout=5, allow_redirects=True, verify=False)
+                        check_url = f"http://{host}{check_url}"
+                    resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
                     svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
                 except Exception:
                     svc.status = ServiceStatus.down.value
@@ -474,15 +482,22 @@ def trigger_health_check():
     with get_db() as db:
         services = db.query(Service).all()
         for svc in services:
-            if not svc.url or svc.url == "/":
+            if not svc.url:
                 continue
             try:
-                url = svc.url
-                if url.startswith("/"):
+                check_url = svc.url
+                if svc.health_path:
+                    base = svc.url if svc.url.startswith("http") else ""
+                    if not base:
+                        srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                        host = srv.host if srv else LOCAL_HOST
+                        base = f"http://{host}"
+                    check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
+                elif check_url.startswith("/"):
                     srv = db.query(Server).filter(Server.id == svc.server_id).first()
                     host = srv.host if srv else LOCAL_HOST
-                    url = f"http://{host}{url}"
-                resp = req.head(url, timeout=5, allow_redirects=True, verify=False)
+                    check_url = f"http://{host}{check_url}"
+                resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
                 svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
             except Exception:
                 svc.status = ServiceStatus.down.value
