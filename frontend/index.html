@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v2.4</title>
+<title>运维工作台 v2.5</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <!-- P2-02: Font Awesome CDN removed - using inline SVG sprite -->
 
@@ -78,6 +78,43 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 @media (min-width: 769px) {
   .mobile-nav { display: none !important; }
 }
+
+/* v2.5: Alert bar, overview, drawer, severity colors */
+.alert-bar { background: rgba(239,68,68,.12); border-left: 3px solid #ef4444; border-radius: 8px; padding: 10px 16px; margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+.alert-bar .alert-text { color: #ef4444; font-size: 13px; font-weight: 600; flex: 1; }
+.alert-bar .alert-link { color: #fca5a5; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.alert-bar .alert-link:hover { color: #fff; }
+.overview-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
+.overview-card .ov-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+.overview-card .ov-value { font-size: 20px; font-weight: 700; line-height: 1; }
+.overview-card .ov-label { font-size: 11px; color: var(--text2); margin-top: 2px; }
+.overview-card.alert { border-color: rgba(239,68,68,.3); }
+.severity-warn { color: #f59e0b !important; }
+.severity-crit { color: #ef4444 !important; }
+.severity-warn-border { border-color: rgba(245,158,11,.5) !important; }
+.severity-crit-border { border-color: rgba(239,68,68,.5) !important; }
+/* Drawer */
+.drawer-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.5); display: flex; justify-content: flex-end; animation: fadeIn .2s ease; }
+.drawer-panel { width: 380px; max-width: 90vw; background: var(--card); border-left: 1px solid var(--border); padding: 24px; overflow-y: auto; animation: slideInRight .25s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+/* Server card action buttons */
+.server-actions { display: flex; gap: 6px; margin-top: 8px; }
+.server-actions button { flex: 1; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text2); font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; transition: all .15s; }
+.server-actions button:hover { color: var(--accent); border-color: var(--accent); }
+/* Monitor error state */
+.monitor-error { text-align: center; padding: 40px 20px; color: var(--text2); }
+.monitor-error svg { display: block; margin: 0 auto 12px; }
+/* Metric severity pulse */
+.pulse-warn { animation: pulseWarn 2s infinite; }
+@keyframes pulseWarn { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
+/* Command templates */
+.cmd-group { margin-bottom: 12px; }
+.cmd-group-title { font-size: 11px; color: var(--text2); margin-bottom: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+.cmd-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.cmd-btn { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text1); font-size: 12px; font-family: 'Cascadia Code','Fira Code',Consolas,monospace; cursor: pointer; transition: all .15s; }
+.cmd-btn:hover { border-color: var(--accent); color: var(--accent); }
+/* Alert bell badge */
+.bell-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; border-radius: 8px; background: #ef4444; color: #fff; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; padding: 0 4px; }
 </style>
 </head>
 <body>
@@ -124,6 +161,12 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 <symbol id="fa-satellite-dish" viewBox="0 0 512 512"><path d="M192 32c0-17.7 14.3-32 32-32C383.1 0 512 128.9 512 288c0 17.7-14.3 32-32 32s-32-14.3-32-32C448 164.3 347.7 64 224 64c-17.7 0-32-14.3-32-32zM60.6 220.6L164.7 324.7l28.4-28.4c-.7-2.6-1.1-5.4-1.1-8.3c0-17.7 14.3-32 32-32s32 14.3 32 32s-14.3 32-32 32c-2.9 0-5.6-.4-8.3-1.1l-28.4 28.4L291.4 451.4c14.5 14.5 11.8 38.8-7.3 46.3C260.5 506.9 234.9 512 208 512C93.1 512 0 418.9 0 304c0-26.9 5.1-52.5 14.4-76.1c7.5-19 31.8-21.8 46.3-7.3zM224 96c106 0 192 86 192 192c0 17.7-14.3 32-32 32s-32-14.3-32-32c0-70.7-57.3-128-128-128c-17.7 0-32-14.3-32-32s14.3-32 32-32z"/></symbol>
 <symbol id="fa-folder" viewBox="0 0 512 512"><path d="M64 480H448c35.3 0 64-28.7 64-64V160c0-35.3-28.7-64-64-64H288c-10.1 0-19.6-4.7-25.6-12.8L243.2 57.6C231.1 41.5 212.1 32 192 32H64C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64z"/></symbol>
 <symbol id="fa-spinner" viewBox="0 0 512 512"><path d="M304 48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zm0 416a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM48 304a48 48 0 1 0 0-96 48 48 0 1 0 0 96zm464-48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM142.9 437A48 48 0 1 0 75 369.1 48 48 0 1 0 142.9 437zm0-294.2A48 48 0 1 0 75 75a48 48 0 1 0 67.9 67.9zM369.1 437A48 48 0 1 0 437 369.1 48 48 0 1 0 369.1 437z"/></symbol>
+
+<symbol id="fa-bell" viewBox="0 0 448 512"><path d="M224 0c-17.7 0-32 14.3-32 32V49.9C119.5 63.4 64 124 64 198v44l-28 56a32 32 0 0 0 28.6 46H383.4a32 32 0 0 0 28.6-46L384 242v-44c0-74-55.5-134.6-128-148.1V32c0-17.7-14.3-32-32-32zm0 512a48 48 0 0 0 48-48H176a48 48 0 0 0 48 48z"/></symbol>
+<symbol id="fa-clipboard" viewBox="0 0 384 512"><path d="M280 64h40c35.3 0 64 28.7 64 64V448c0 35.3-28.7 64-64 64H64c-35.3 0-64-28.7-64-64V128C0 92.7 28.7 64 64 64h40C104 28.7 132.7 0 168 0h48c35.3 0 64 28.7 64 64zM168 16c-13.3 0-24 10.7-24 24v16h96V40c0-13.3-10.7-24-24-24h-48zM64 80c-17.7 0-32 14.3-32 32V448c0 17.7 14.3 32 32 32H320c17.7 0 32-14.3 32-32V112c0-17.7-14.3-32-32-32H280v24c0 22.1-17.9 40-40 40H144c-22.1 0-40-17.9-40-40V80H64zm96 200v-48c0-8.8 7.2-16 16-16h32c8.8 0 16 7.2 16 16v48h48c8.8 0 16 7.2 16 16v32c0 8.8-7.2 16-16 16h-48v48c0 8.8-7.2 16-16 16h-32c-8.8 0-16-7.2-16-16v-48h-48c-8.8 0-16-7.2-16-16v-32c0-8.8 7.2-16 16-16h48z"/></symbol>
+<symbol id="fa-arrow-right" viewBox="0 0 448 512"><path d="M438.6 278.6c12.5-12.5 12.5-32.8 0-45.3l-160-160c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L338.8 224 32 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l306.7 0L233.4 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0l160-160z"/></symbol>
+<symbol id="fa-triangle-exclamation" viewBox="0 0 512 512"><path d="M256 32L10.4 457.5C3.3 470 12.3 485 26.5 485h459c14.2 0 23.2-15 16.1-27.5L256 32zm0 56l190 361H66L256 88zm-16 120v112c0 8.8 7.2 16 16 16s16-7.2 16-16V208c0-8.8-7.2-16-16-16s-16 7.2-16 16zm16 176a24 24 0 1 0 0 48 24 24 0 1 0 0-48z"/></symbol>
+<symbol id="fa-shield" viewBox="0 0 512 512"><path d="M256 0L38.6 108.5c-7.2 3.6-11.6 11-11.4 19.1 2.1 65.4 20.6 139.5 56.7 204.3C122.4 401.2 178 455.4 256 512c78-56.6 133.6-110.8 172.1-180.1 36.1-64.8 54.6-138.9 56.7-204.3.2-8.1-4.2-15.5-11.4-19.1L256 0zm0 33.5l193 96.5c-2.4 55.3-18.8 118.1-51.2 176.2C363.6 367.8 315.3 416.4 256 466.1c-59.3-49.7-107.6-98.3-141.8-159.9-32.4-58.1-48.8-120.9-51.2-176.2l193-96.5z"/></symbol>
 </svg>
 <div id="app">
   <!-- Toast Notifications -->
@@ -144,7 +187,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     <!-- Logo -->
     <div class="flex items-center gap-2 px-4 py-4 border-b" style="border-color: var(--border)">
       <div class="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">OC</div>
-      <span v-show="!sidebarCollapsed" class="font-semibold text-sm whitespace-nowrap" style="color: var(--text1)">OpsCenter</span>
+      <span v-show="!sidebarCollapsed" class="font-semibold text-sm whitespace-nowrap" style="color: var(--text1)">运维工作台</span>
       <button v-show="!sidebarCollapsed" @click="sidebarCollapsed=true" class="ml-auto text-xs opacity-50 hover:opacity-100" style="color:var(--text2)">
         <svg class="icon"><use href="#fa-angles-left"></use></svg>
       </button>
@@ -180,7 +223,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <div v-show="!sidebarCollapsed" class="text-xs" style="color:var(--text2)">
         <div class="flex items-center gap-1.5 mb-1">
           <span class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>
-          <span>v2.4</span>
+          <span>v2.5</span>
         </div>
         <div>{{ servers.length }} 服务器 · {{ allServices.length }} 服务</div>
       </div>
@@ -211,7 +254,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         <input v-model="searchQuery" @keydown.ctrl.k.prevent="$refs.searchInput?.focus()"
                @keydown.up.prevent="searchUp" @keydown.down.prevent="searchDown" @keydown.enter.prevent="searchEnter"
                ref="searchInput"
-               placeholder="搜索服务... (Ctrl+K, ↑↓导航)"
+               placeholder="搜索服务... 支持 status:offline cat:分类 (Ctrl+K)"
                class="w-full pl-9 pr-3 py-2 rounded-lg text-sm border"
                style="background:var(--card);color:var(--text1);border-color:var(--border)">
         <kbd v-if="!searchQuery" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs px-1.5 py-0.5 rounded border"
@@ -230,6 +273,27 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         </button>
       </div>
 
+      <!-- v2.5: Alert Bell -->
+      <div class="relative">
+        <button @click="showAlertList=!showAlertList"
+                class="w-9 h-9 rounded-lg flex items-center justify-center border"
+                style="background:var(--card);border-color:var(--border);color:var(--text2)"
+                title="异常服务">
+          <svg class="icon"><use href="#fa-bell"></use></svg>
+          <span v-if="offlineServices.length" class="bell-badge">{{ offlineServices.length }}</span>
+        </button>
+        <!-- Alert dropdown -->
+        <div v-if="offlineServices.length && showAlertList" class="absolute right-0 top-11 w-72 rounded-xl border shadow-xl z-50 overflow-hidden" style="background:var(--card);border-color:var(--border)">
+          <div class="px-4 py-2.5 border-b text-xs font-semibold" style="border-color:var(--border);color:var(--text2)">异常服务</div>
+          <div v-for="svc in offlineServices" :key="svc.id" @click="openDrawer(svc);showAlertList=false"
+               class="px-4 py-2.5 flex items-center gap-2 cursor-pointer hover:bg-emerald-500/5 border-b" style="border-color:var(--border)">
+            <span class="w-2 h-2 rounded-full" :class="statusClass(svc.status)"></span>
+            <span class="text-sm flex-1" style="color:var(--text1)">{{ svc.name }}</span>
+            <span class="text-xs" :class="svc.status==='offline'?'text-red-400':'text-amber-400'">{{ svc.status==='offline'?'离线':'未知' }}</span>
+          </div>
+        </div>
+      </div>
+
       <!-- Theme Toggle -->
       <button @click="toggleTheme"
               class="w-9 h-9 rounded-lg flex items-center justify-center border"
@@ -243,6 +307,35 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
     <div class="p-4 md:p-6">
       <!-- ===================== 服务导航 ===================== -->
       <div v-if="currentPage==='nav'">
+
+        <!-- v2.5: Alert Bar (P0-4) -->
+        <div v-if="offlineServices.length" class="alert-bar mb-5">
+          <svg class="icon" style="color:#ef4444"><use href="#fa-triangle-exclamation"></use></svg>
+          <span class="alert-text">{{ offlineServices.length }} 个服务异常（{{ offlineServices.filter(s=>s.status==='offline').length }} 离线, {{ offlineServices.filter(s=>s.status==='unknown').length }} 未知）</span>
+          <span class="alert-link" @click="showAlertList=!showAlertList">{{ showAlertList ? '收起' : '查看详情 →' }}</span>
+        </div>
+        <!-- Alert list expandable -->
+        <div v-if="offlineServices.length && showAlertList" class="mb-5 rounded-xl border overflow-hidden" style="background:var(--card);border-color:rgba(239,68,68,.3)">
+          <div v-for="svc in offlineServices" :key="svc.id" @click="openDrawer(svc)"
+               class="px-4 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-red-500/5 border-b" style="border-color:var(--border)">
+            <svg class="icon text-sm" :style="{color: svc.icon_color||'var(--accent)'}"><use :href="iconHref(svc.icon||'fa-cube')"></use></svg>
+            <span class="text-sm font-medium flex-1" style="color:var(--text1)">{{ svc.name }}</span>
+            <span class="text-xs px-2 py-0.5 rounded-full" :style="{background: svc.status==='offline'?'rgba(239,68,68,.15)':'rgba(245,158,11,.15)', color: svc.status==='offline'?'#ef4444':'#f59e0b'}">{{ svc.status==='offline'?'离线':'未知' }}</span>
+          </div>
+        </div>
+
+        <!-- v2.5: Overview Cards (P1-1) -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+          <div v-for="ov in overviewCards" :key="ov.label" class="overview-card" :class="{'alert': ov.alert}">
+            <div class="ov-icon" :style="{background: (ov.color||'var(--accent)')+'18'}">
+              <svg class="icon" :style="{color: ov.color||'var(--accent)'}"><use :href="iconHref(ov.icon)"></use></svg>
+            </div>
+            <div>
+              <div class="ov-value" :style="{color: ov.alert?'#ef4444':'var(--text1)'}">{{ ov.value }}</div>
+              <div class="ov-label">{{ ov.label }}</div>
+            </div>
+          </div>
+        </div>
         <!-- Recent Access -->
         <div v-if="recentServices.length" class="mb-5">
           <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
@@ -304,7 +397,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                 <div class="flex items-center gap-1"><svg class="icon w-4"><use href="#fa-cube"></use></svg>{{ s.service_count||0 }} 服务</div>
                 <div v-if="serverMetrics[s.id]" class="flex items-center gap-3 mt-1 text-xs">
                   <span v-if="serverMetrics[s.id].cpu !== null" class="flex items-center gap-1">
-                    <svg class="icon w-3 text-[10px]" style="color:#22c55e"><use href="#fa-microphone"></use></svg>
+                    <svg class="icon w-3 text-[10px]" style="color:#22c55e"><use href="#fa-microchip"></use></svg>
                     CPU {{ serverMetrics[s.id].cpu.toFixed(1) }}%
                   </span>
                   <span v-if="serverMetrics[s.id].memory !== null" class="flex items-center gap-1">
@@ -316,6 +409,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                     {{ serverMetrics[s.id].container_count }} 容器
                   </span>
                 </div>
+              </div>
+              <!-- v2.5: Quick actions -->
+              <div class="server-actions">
+                <button @click.stop="currentPage='monitor';currentServerId=s.id;onServerChange();nextTick(()=>{loadMonitor();loadHistory()})"><svg class="icon text-xs"><use href="#fa-chart-line"></use></svg> 监控</button>
+                <button @click.stop="currentPage='tools';currentServerId=s.id;onServerChange()"><svg class="icon text-xs"><use href="#fa-terminal"></use></svg> 终端</button>
               </div>
             </div>
             <div v-if="!servers.length && !loading.servers" class="col-span-full text-center py-8 rounded-xl border"
@@ -394,7 +492,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               </button>
               <div v-show="categoryExpanded[cat.name]" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div v-for="svc in cat.services" :key="svc.id"
-                     @click="openService(svc)"
+                     @click="openDrawer(svc)"
                      :title="svc.url"
                      class="rounded-xl p-4 border card-hover cursor-pointer relative group"
                      style="background:var(--card);border-color:var(--border)">
@@ -402,6 +500,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                           class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                           :style="{color: svc.pinned?'#f59e0b':'var(--text2)', background:'var(--bg)'}">
                     <svg class="icon" :style="{transform:svc.pinned?'none':'rotate(45deg)'}"><use href="#fa-thumbtack"></use></svg>
+                  </button>
+                  <button @click.stop="copyServiceInfo(svc)"
+                          class="absolute top-2 right-9 w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                          style="color:var(--text2);background:var(--bg)" title="复制信息">
+                    <svg class="icon"><use href="#fa-clipboard"></use></svg>
                   </button>
                   <div class="flex items-center gap-3 mb-2">
                     <div class="w-9 h-9 rounded-lg flex items-center justify-center" :style="{background:(svc.icon_color||'#10b981')+'20'}">
@@ -436,7 +539,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               <svg class="icon text-base" style="color:#3b82f6"><use href="#fa-chart-line"></use></svg>
             </div>
             <div>
-              <div class="text-sm font-semibold group-hover:text-blue-500 transition-colors" style="color:var(--text1)">系统监控</div>
+              <div class="text-sm font-semibold group-hover:text-blue-500 transition-colors" style="color:var(--text1)">监控中心</div>
               <div class="text-xs" style="color:var(--text2)">CPU/内存/磁盘/网络</div>
             </div>
           </a>
@@ -454,8 +557,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               <svg class="icon text-base" style="color:#f59e0b"><use href="#fa-cog"></use></svg>
             </div>
             <div>
-              <div class="text-sm font-semibold group-hover:text-amber-500 transition-colors" style="color:var(--text1)">设置管理</div>
-              <div class="text-xs" style="color:var(--text2)">服务器/服务/主题</div>
+              <div class="text-sm font-semibold group-hover:text-amber-500 transition-colors" style="color:var(--text1)">资源管理</div>
+              <div class="text-xs" style="color:var(--text2)">服务器/服务/外观</div>
             </div>
           </a>
         </div>
@@ -481,9 +584,10 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           </div>
 
           <!-- Empty State -->
-          <div v-if="!monitor.connected && !loading.monitor" class="text-center py-16" style="color:var(--text2)">
-            <svg class="icon text-4xl mb-3 block opacity-30 mx-auto"><use href="#fa-chart-line"></use></svg>
-            <p class="text-sm mb-3">暂无监控数据，请检查服务器连接</p>
+          <div v-if="!monitor.connected && !loading.monitor" class="monitor-error">
+            <svg class="icon text-4xl opacity-30" style="color:var(--text2)"><use href="#fa-triangle-exclamation"></use></svg>
+            <p class="text-sm mb-1 font-semibold" style="color:var(--text1)">监控数据加载失败</p>
+            <p class="text-xs mb-4" style="color:var(--text2)">请检查后端服务（端口 9091）是否正常运行</p>
             <button @click="loadMonitor" class="px-4 py-2 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition">重新加载</button>
           </div>
 
@@ -496,9 +600,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                 <span class="text-xs font-medium" style="color:var(--text2)">{{ m.label }}</span>
                 <svg class="icon" :style="{color:m.color}"><use :href="iconHref(m.icon)"></use></svg>
               </div>
-              <div class="text-2xl font-bold" :style="{color:m.color}">{{ m.value }}{{ m.unit }}</div>
+              <div class="text-2xl font-bold" :class="getMetricClass(m.key, m.value)" :style="{color: getMetricColor(m.key, m.value) || m.color}">{{ m.value }}{{ m.unit }}</div>
               <div class="mt-2 h-1.5 rounded-full overflow-hidden" style="background:var(--border)">
-                <div class="h-full rounded-full transition-all duration-500" :style="{width: Math.min(m.value,100)+'%', background:m.color}"></div>
+                <div class="h-full rounded-full transition-all duration-500" :class="{'pulse-warn': isMetricCritical(m.key, m.value)}" :style="{width: Math.min(m.value,100)+'%', background: getMetricColor(m.key, m.value) || m.color}"></div>
               </div>
             </div>
           </div>
@@ -603,6 +707,22 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               </template>
             </div>
           </details>
+        </div>
+
+        <!-- v2.5: Command Templates -->
+        <div class="rounded-xl border p-5 mb-5" style="background:var(--card);border-color:var(--border)">
+          <h3 class="text-sm font-semibold mb-4 flex items-center gap-2" style="color:var(--text1)">
+            <svg class="icon" style="color:#10b981"><use href="#fa-terminal"></use></svg> 常用命令模板
+            <span class="text-xs font-normal" style="color:var(--text2)">点击自动填入终端</span>
+          </h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div v-for="grp in commandGroups" :key="grp.name" class="cmd-group">
+              <div class="cmd-group-title">{{ grp.name }}</div>
+              <div class="cmd-list">
+                <button v-for="cmd in grp.commands" :key="cmd" @click="fillTerminalCommand(cmd)" class="cmd-btn">{{ cmd }}</button>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <!-- Timestamp -->
@@ -715,14 +835,23 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         </div>
       </div>
 
-      <!-- ===================== 设置 ===================== -->
+      <!-- ===================== 资源管理 ===================== -->
       <div v-if="currentPage==='settings'">
-        <h2 class="text-lg font-semibold flex items-center gap-2 mb-5" style="color:var(--text1)">
-          <svg class="icon" style="color:var(--accent)"><use href="#fa-cog"></use></svg> 设置
+        <h2 class="text-lg font-semibold flex items-center gap-2 mb-4" style="color:var(--text1)">
+          <svg class="icon" style="color:var(--accent)"><use href="#fa-cog"></use></svg> 资源管理
         </h2>
+        <!-- Tabs -->
+        <div class="flex gap-1 mb-5">
+          <button v-for="tab in [{k:'servers',l:'服务器管理',i:'fa-server'},{k:'services',l:'服务注册',i:'fa-cube'},{k:'scan',l:'服务扫描',i:'fa-satellite-dish'},{k:'appearance',l:'外观设置',i:'fa-sun'}]" :key="tab.k"
+                  @click="settingsTab=tab.k"
+                  :class="['px-3 py-2 rounded-lg text-xs font-medium transition', settingsTab===tab.k?'bg-emerald-500 text-white':'']"
+                  :style="settingsTab!==tab.k?'background:var(--card);color:var(--text2);border:1px solid var(--border)':''">
+            <svg class="icon mr-1"><use :href="iconHref(tab.i)"></use></svg>{{ tab.l }}
+          </button>
+        </div>
 
         <!-- Stats -->
-        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div v-if="settingsTab==='servers'" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
           <div v-for="st in statsCards" :key="st.label" class="rounded-xl p-4 border" style="background:var(--card);border-color:var(--border)">
             <div class="text-xs mb-1" style="color:var(--text2)">{{ st.label }}</div>
             <div class="text-xl font-bold" style="color:var(--accent)">{{ st.value }}</div>
@@ -730,7 +859,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         </div>
 
         <!-- Server Management -->
-        <div class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
+        <div v-if="settingsTab==='servers'" class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
           <div class="px-5 py-3 border-b flex items-center justify-between" style="border-color:var(--border)">
             <h3 class="text-sm font-semibold" style="color:var(--text1)">服务器管理</h3>
             <button @click="showAddServer=!showAddServer" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition">
@@ -822,7 +951,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         </div>
 
         <!-- Manual Service Registration -->
-        <div class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
+        <div v-if="settingsTab==='services'" class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
           <div class="px-5 py-3 border-b" style="border-color:var(--border)">
             <h3 class="text-sm font-semibold" style="color:var(--text1)">手动注册服务</h3>
           </div>
@@ -863,7 +992,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
         </div>
 
         <!-- Scan -->
-        <div class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
+        <div v-if="settingsTab==='scan'" class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
           <div class="px-5 py-3 border-b" style="border-color:var(--border)">
             <h3 class="text-sm font-semibold" style="color:var(--text1)">服务扫描</h3>
           </div>
@@ -876,9 +1005,90 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             <span class="text-xs" style="color:var(--text2)">扫描将自动发现服务器上的运行服务</span>
           </div>
         </div>
+        <!-- Appearance Settings -->
+        <div v-if="settingsTab==='appearance'" class="space-y-4">
+          <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
+            <h3 class="text-sm font-semibold mb-4" style="color:var(--text1)">主题</h3>
+            <div class="flex gap-3">
+              <button @click="isDark=true;applyTheme()" :class="['flex-1 p-4 rounded-xl border text-center', isDark?'border-emerald-500':'']" style="background:var(--bg);border-color:var(--border)">
+                <svg class="icon text-2xl mb-2 block mx-auto" style="color:#f59e0b"><use href="#fa-moon"></use></svg>
+                <span class="text-xs" style="color:var(--text1)">深色模式</span>
+              </button>
+              <button @click="isDark=false;applyTheme()" :class="['flex-1 p-4 rounded-xl border text-center', !isDark?'border-emerald-500':'']" style="background:var(--bg);border-color:var(--border)">
+                <svg class="icon text-2xl mb-2 block mx-auto" style="color:#3b82f6"><use href="#fa-sun"></use></svg>
+                <span class="text-xs" style="color:var(--text1)">浅色模式</span>
+              </button>
+            </div>
+          </div>
+          <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
+            <h3 class="text-sm font-semibold mb-3" style="color:var(--text1)">侧边栏</h3>
+            <label class="flex items-center gap-3 cursor-pointer" style="color:var(--text1)">
+              <input type="checkbox" :checked="sidebarCollapsed" @change="sidebarCollapsed=!sidebarCollapsed" class="accent-emerald-500">
+              <span class="text-sm">默认折叠侧边栏</span>
+            </label>
+          </div>
+        </div>
+
       </div>
     </div>
   </main>
+
+
+  <!-- v2.5: Service Detail Drawer (P1-4) -->
+  <div v-if="serviceDrawer.show" class="drawer-overlay" @click="serviceDrawer.show=false">
+    <div class="drawer-panel" @click.stop>
+      <div class="flex items-center justify-between mb-5">
+        <h3 class="text-base font-bold" style="color:var(--text1)">{{ serviceDrawer.service?.name }}</h3>
+        <button @click="serviceDrawer.show=false" class="w-8 h-8 rounded-lg flex items-center justify-center" style="color:var(--text2);background:var(--bg)">
+          <svg class="icon"><use href="#fa-circle-xmark"></use></svg>
+        </button>
+      </div>
+      <div class="space-y-4" v-if="serviceDrawer.service">
+        <!-- Status -->
+        <div class="flex items-center gap-2">
+          <span class="w-3 h-3 rounded-full" :class="statusClass(serviceDrawer.service.status)"></span>
+          <span class="text-sm font-medium" :class="serviceDrawer.service.status==='online'?'text-emerald-500':serviceDrawer.service.status==='offline'?'text-red-500':'text-amber-500'">
+            {{ serviceDrawer.service.status==='online'?'在线':serviceDrawer.service.status==='offline'?'离线':'未知' }}
+          </span>
+        </div>
+        <!-- Category -->
+        <div v-if="serviceDrawer.service.category" class="flex items-center gap-2">
+          <span class="text-xs" style="color:var(--text2)">分类</span>
+          <span class="text-xs px-2 py-0.5 rounded-full" :style="{background: (getCategoryColor(serviceDrawer.service.category)||'#10b981')+'18', color: getCategoryColor(serviceDrawer.service.category)||'#10b981'}">{{ serviceDrawer.service.category }}</span>
+        </div>
+        <!-- URL -->
+        <div>
+          <span class="text-xs block mb-1" style="color:var(--text2)">访问地址</span>
+          <a :href="serviceDrawer.service.url" target="_blank" class="text-sm break-all hover:underline" style="color:var(--accent)">{{ serviceDrawer.service.url }}</a>
+        </div>
+        <!-- Description -->
+        <div v-if="serviceDrawer.service.description">
+          <span class="text-xs block mb-1" style="color:var(--text2)">描述</span>
+          <p class="text-sm" style="color:var(--text1)">{{ serviceDrawer.service.description }}</p>
+        </div>
+        <!-- Actions -->
+        <div class="pt-3 border-t space-y-2" style="border-color:var(--border)">
+          <button @click="openService(serviceDrawer.service);serviceDrawer.show=false"
+                  class="w-full px-4 py-2.5 rounded-lg text-sm font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition flex items-center justify-center gap-2">
+            <svg class="icon"><use href="#fa-arrow-right"></use></svg> 打开服务
+          </button>
+          <div class="flex gap-2">
+            <button @click="copyServiceInfo(serviceDrawer.service)"
+                    class="flex-1 px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition flex items-center justify-center gap-2"
+                    style="background:var(--bg);color:var(--text1);border-color:var(--border)">
+              <svg class="icon"><use href="#fa-clipboard"></use></svg> 复制信息
+            </button>
+            <button @click="togglePin(serviceDrawer.service)"
+                    class="flex-1 px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition flex items-center justify-center gap-2"
+                    :style="{background:'var(--bg)', color: serviceDrawer.service.pinned?'#f59e0b':'var(--text1)', borderColor:'var(--border)'}">
+              <svg class="icon" :style="{transform:serviceDrawer.service.pinned?'none':'rotate(45deg)'}"><use href="#fa-thumbtack"></use></svg>
+              {{ serviceDrawer.service.pinned?'取消置顶':'置顶' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Confirm Modal -->
   <div v-if="confirmModal.show" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,.6)">

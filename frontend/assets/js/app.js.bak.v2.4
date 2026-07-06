@@ -47,30 +47,6 @@ createApp({
       json: { input: '', output: '', error: '' },
       password: { length: 16, upper: true, lower: true, digits: true, symbols: true, result: '' },
     });
-    /* ========== v2.5 New State ========== */
-    const offlineServices = computed(() => allServices.value.filter(s => s.status === 'offline' || s.status === 'unknown'));
-    const serviceDrawer = reactive({ show: false, service: null });
-    const showAlertList = ref(false);
-    const settingsTab = ref('servers');
-
-    const overviewCards = computed(() => {
-      const onSrv = servers.value.filter(s => s.status === 'online').length;
-      const onSvc = allServices.value.filter(s => s.status === 'online').length;
-      return [
-        { label: '服务器', value: `${onSrv}/${servers.value.length}`, icon: 'fa-server', color: '#3b82f6' },
-        { label: '服务', value: `${onSvc}/${allServices.value.length}`, icon: 'fa-cube', color: '#10b981' },
-        { label: '容器', value: monitor.containers.length || (stats.containers || 0), icon: 'fa-box', color: '#8b5cf6' },
-        { label: '告警', value: offlineServices.value.length, icon: 'fa-circle-exclamation', color: '#ef4444', alert: offlineServices.value.length > 0 },
-      ];
-    });
-
-    const commandGroups = [
-      { name: 'Docker', commands: ['docker ps', 'docker ps -a', 'docker stats', 'docker compose ps', 'docker images', 'docker system df'] },
-      { name: '系统', commands: ['df -h', 'free -h', 'top -bn1', 'uptime', 'ps aux', 'systemctl status'] },
-      { name: '网络', commands: ['ss -tlnp', 'netstat -tlnp', 'curl -I localhost', 'ping -c 3', 'traceroute'] },
-      { name: 'Nginx', commands: ['nginx -t', 'nginx -s reload', 'tail -f /var/log/nginx/access.log', 'tail -f /var/log/nginx/error.log'] },
-    ];
-
 
     const showAddServer = ref(false);
     const newServer = reactive({ name: '', host: '', ssh_port: 22, username: 'root', password: '' });
@@ -691,53 +667,6 @@ createApp({
       if (chartInstance) chartInstance.dispose();
     });
 
-
-    /* ========== v2.5 New Methods ========== */
-    function openDrawer(svc) {
-      serviceDrawer.show = true;
-      serviceDrawer.service = svc;
-    }
-
-    function copyServiceInfo(svc) {
-      const text = `${svc.name} | ${svc.url || ''} | 状态: ${svc.status==='online'?'在线':svc.status==='offline'?'离线':'未知'}` + (svc.category ? ` | 分类: ${svc.category}` : '');
-      navigator.clipboard?.writeText(text);
-      toast('已复制服务信息', 'success');
-    }
-
-    function fillTerminalCommand(cmd) {
-      terminalInput.value = cmd;
-      // Switch to terminal section and focus
-      const details = document.querySelector('details');
-      if (details && !details.open) details.open = true;
-      nextTick(() => {
-        const input = document.querySelector('.terminal-window input');
-        if (input) input.focus();
-      });
-    }
-
-    function getMetricColor(key, value) {
-      const numVal = parseFloat(value);
-      if (isNaN(numVal)) return null;
-      if (key === 'network') return null; // Network doesn't have threshold
-      if (numVal > 90) return '#ef4444';
-      if (numVal > 80) return '#f59e0b';
-      return null;
-    }
-
-    function getMetricClass(key, value) {
-      const numVal = parseFloat(value);
-      if (isNaN(numVal) || key === 'network') return '';
-      if (numVal > 90) return 'severity-crit';
-      if (numVal > 80) return 'severity-warn';
-      return '';
-    }
-
-    function isMetricCritical(key, value) {
-      const numVal = parseFloat(value);
-      if (isNaN(numVal) || key === 'network') return false;
-      return numVal > 90;
-    }
-
     /* ========== Return ========== */
     return {
       isDark, currentPage, currentServerId, sidebarCollapsed, searchQuery, searchSelectedIndex, mobileView, isMac,
@@ -756,10 +685,6 @@ createApp({
       formatJson, compressJson, copyJson,
       generatePassword, copyPassword,
       iconHref, highlightText, searchUp, searchDown, searchEnter,
-      // v2.5 new
-      offlineServices, serviceDrawer, showAlertList, settingsTab, overviewCards, commandGroups,
-      openDrawer, copyServiceInfo, fillTerminalCommand,
-      getMetricColor, getMetricClass, isMetricCritical,
     };
   },
 }).mount('#app');

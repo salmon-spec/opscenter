@@ -2,13 +2,13 @@
 window.OpsConfig = {
   apiBase: '/ops/api/v2',
   navItems: [
-    { key: 'nav', label: '服务导航', icon: 'fa-compass' },
-    { key: 'monitor', label: '系统监控', icon: 'fa-chart-line' },
-    { key: 'tools', label: '运维工具', icon: 'fa-toolbox' },
-    { key: 'settings', label: '设置', icon: 'fa-cog' },
+    { key: 'nav', label: '工作台', icon: 'fa-shield' },
+    { key: 'monitor', label: '监控中心', icon: 'fa-chart-line' },
+    { key: 'tools', label: '工具箱', icon: 'fa-toolbox' },
+    { key: 'settings', label: '资源管理', icon: 'fa-cog' },
   ],
   refreshInterval: 30,
   maxRecentItems: 10,
   maxRecentDisplay: 5,
-  version: 'v2.4',
+  version: 'v2.5',
 };

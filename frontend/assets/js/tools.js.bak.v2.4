@@ -90,26 +90,4 @@ window.OpsTools = {
     return status === 'online' ? 'bg-emerald-500' :
            status === 'offline' ? 'bg-red-500' : 'bg-amber-500';
   },
-
-
-  /* v2.5: Multi-dimensional search parser */
-  parseSearchQuery(query) {
-    const result = { text: '', status: null, category: null, server: null };
-    if (!query) return result;
-    const tokens = query.split(/\s+/);
-    const textParts = [];
-    for (const token of tokens) {
-      if (token.startsWith('status:')) {
-        result.status = token.slice(7);
-      } else if (token.startsWith('cat:')) {
-        result.category = token.slice(4).toLowerCase();
-      } else if (token.startsWith('server:')) {
-        result.server = token.slice(7).toLowerCase();
-      } else {
-        textParts.push(token);
-      }
-    }
-    result.text = textParts.join(' ').toLowerCase();
-    return result;
-  },
 };
