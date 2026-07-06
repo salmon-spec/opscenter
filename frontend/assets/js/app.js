@@ -571,24 +571,33 @@ createApp({
     }
     function searchEnter() {
       if (searchSelectedIndex.value >= 0 && searchSelectedIndex.value < filteredServices.value.length) {
-        openService(filteredServices.value[searchSelectedIndex.value]);
+        openDrawer(filteredServices.value[searchSelectedIndex.value]);
       } else if (filteredServices.value.length === 1) {
-        openService(filteredServices.value[0]);
+        openDrawer(filteredServices.value[0]);
       }
     }
 
     /* ========== Computed ========== */
     const currentServer = computed(() => servers.value.find(s => s.id === currentServerId.value));
 
+    // v2.5: Multi-dim search (status:/cat:/server: + text)
     const filteredServices = computed(() => {
-      if (!searchQuery.value) return allServices.value;
-      const q = searchQuery.value.toLowerCase();
-      return allServices.value.filter(s =>
-        (s.name || '').toLowerCase().includes(q) ||
-        (s.description || '').toLowerCase().includes(q) ||
-        (s.category || '').toLowerCase().includes(q) ||
-        (s.url || '').toLowerCase().includes(q)
-      );
+      const filters = OpsTools.parseSearchQuery(searchQuery.value);
+      return allServices.value.filter(s => {
+        // Status filter
+        if (filters.status && s.status !== filters.status) return false;
+        // Category filter
+        if (filters.category && !(s.category || '').toLowerCase().includes(filters.category)) return false;
+        // Text filter
+        if (filters.text) {
+          const q = filters.text;
+          if (!(s.name || '').toLowerCase().includes(q) &&
+              !(s.description || '').toLowerCase().includes(q) &&
+              !(s.category || '').toLowerCase().includes(q) &&
+              !(s.url || '').toLowerCase().includes(q)) return false;
+        }
+        return true;
+      });
     });
 
     const pinnedServices = computed(() => allServices.value.filter(s => s.pinned));
@@ -738,6 +747,13 @@ createApp({
       return numVal > 90;
     }
 
+    /* v2.5: Generate Grafana log URL for a container */
+    function getContainerLogUrl(containerName) {
+      const expr = '{container_name="' + containerName + '"}';
+      const params = JSON.stringify({datasource:'Loki',expressions:[{refId:'A',expr:expr}]});
+      return '/grafana/explore?orgId=1&left=' + encodeURIComponent(params);
+    }
+
     /* ========== Return ========== */
     return {
       isDark, currentPage, currentServerId, sidebarCollapsed, searchQuery, searchSelectedIndex, mobileView, isMac,
@@ -760,6 +776,7 @@ createApp({
       offlineServices, serviceDrawer, showAlertList, settingsTab, overviewCards, commandGroups,
       openDrawer, copyServiceInfo, fillTerminalCommand,
       getMetricColor, getMetricClass, isMetricCritical,
+      getContainerLogUrl,
     };
   },
 }).mount('#app');

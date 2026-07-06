@@ -22,3 +22,4 @@ Thumbs.db
 *.db
 *.sqlite3
 *.bak
+frontend/*.py

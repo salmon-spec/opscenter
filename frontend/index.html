@@ -342,7 +342,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             <svg class="icon"><use href="#fa-clock-rotate-left"></use></svg> 最近访问
           </h2>
           <div class="flex gap-2 overflow-x-auto pb-1">
-            <div v-for="rs in recentServices" :key="rs.id" @click="openService(rs)"
+            <div v-for="rs in recentServices" :key="rs.id" @click="openDrawer(rs)"
                  :title="rs.url"
                  class="flex items-center gap-2 px-3 py-2 rounded-lg border card-hover cursor-pointer whitespace-nowrap flex-shrink-0"
                  style="background:var(--card);border-color:var(--border)">
@@ -448,7 +448,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <div v-if="searchQuery && filteredServices.length">
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div v-for="(svc, idx) in filteredServices" :key="svc.id"
-                   @click="openService(svc)"
+                   @click="openDrawer(svc)"
                    @mouseenter="searchSelectedIndex=idx"
                    :title="svc.url"
                    :class="['rounded-xl p-4 border card-hover cursor-pointer relative group',
@@ -636,6 +636,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                     <th class="px-4 py-2.5 text-left text-xs font-medium" style="color:var(--text2)">镜像</th>
                     <th class="px-4 py-2.5 text-left text-xs font-medium" style="color:var(--text2)">状态</th>
                     <th class="px-4 py-2.5 text-left text-xs font-medium" style="color:var(--text2)">端口</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium" style="color:var(--text2)">操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -649,9 +650,13 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                       </span>
                     </td>
                     <td class="px-4 py-2.5 text-xs" style="color:var(--text2)">{{ c.ports }}</td>
+                    <td class="px-4 py-2.5 text-xs">
+                      <a :href="getContainerLogUrl(c.name)" 
+                         target="_blank" class="text-emerald-500 hover:underline" title="在Grafana中查看日志">日志</a>
+                    </td>
                   </tr>
                   <tr v-if="!monitor.containers.length">
-                    <td colspan="4" class="px-4 py-6 text-center text-xs" style="color:var(--text2)">暂无容器数据</td>
+                    <td colspan="5" class="px-4 py-6 text-center text-xs" style="color:var(--text2)">暂无容器数据</td>
                   </tr>
                 </tbody>
               </table>
@@ -662,9 +667,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 
       <!-- ===================== 工具箱 ===================== -->
       <div v-if="currentPage==='tools'">
-        <h2 class="text-lg font-semibold flex items-center gap-2 mb-5" style="color:var(--text1)">
-          <svg class="icon" style="color:var(--accent)"><use href="#fa-toolbox"></use></svg> 运维工具
+        <h2 class="text-lg font-semibold flex items-center gap-2 mb-2" style="color:var(--text1)">
+          <svg class="icon" style="color:var(--accent)"><use href="#fa-toolbox"></use></svg> 工具箱
         </h2>
+        <!-- v2.5: Server context -->
+        <div v-if="currentServer" class="mb-5 flex items-center gap-2 text-xs" style="color:var(--text2)">
+          <svg class="icon"><use href="#fa-server"></use></svg>
+          <span>当前: <strong style="color:var(--text1)">{{ currentServer.name }}</strong> ({{ currentServer.host }})</span>
+        </div>
         <!-- Terminal Tool Card (P1-04: moved from sidebar) -->
         <div class="mb-5">
           <details class="rounded-xl border" style="background:var(--card);border-color:var(--border)">
