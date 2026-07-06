@@ -85,9 +85,9 @@ window.OpsTools = {
     return { value: bytesPerSec.toFixed ? bytesPerSec.toFixed(0) : bytesPerSec, unit: ' B/s' };
   },
 
-  /* Status helpers */
+  /* Status helpers (P4-02: unified to online/offline/unknown) */
   statusClass(status) {
-    return status === 'up' || status === 'online' ? 'bg-emerald-500' :
-           status === 'down' || status === 'offline' ? 'bg-red-500' : 'bg-amber-500';
+    return status === 'online' ? 'bg-emerald-500' :
+           status === 'offline' ? 'bg-red-500' : 'bg-amber-500';
   },
 };

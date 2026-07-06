@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v2.3</title>
+<title>OpsCenter v2.4</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <!-- P2-02: Font Awesome CDN removed - using inline SVG sprite -->
 
@@ -49,6 +49,11 @@ body { background: var(--bg); color: var(--text1); transition: background .3s, c
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 .terminal-line::before { content: '$ '; color: #10b981; font-weight: 600; }
 .terminal-output { color: #94a3b8; }
+.terminal-output::before { content: '@sim '; color: rgba(245,158,11,.35); font-size: 10px; }
+.terminal-info-line::before { content: '@sim '; color: rgba(245,158,11,.35); font-size: 10px; }
+.terminal-error-line::before { content: '@sim '; color: rgba(245,158,11,.35); font-size: 10px; }
+mark.search-hl { background: rgba(16,185,129,.25); color: inherit; border-radius: 2px; padding: 0 1px; }
+.search-selected { ring: 2px solid #10b981; border-color: #10b981 !important; }
 
 /* P2-02: SVG Icon System (replaces Font Awesome) */
 .icon { display: inline-block; width: 1em; height: 1em; vertical-align: -.125em; fill: currentColor; }
@@ -103,6 +108,22 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 <symbol id="fa-thumbtack" viewBox="0 0 384 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M32 32C32 14.3 46.3 0 64 0L320 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-29.5 0 11.4 148.2c36.7 19.9 65.7 53.2 79.5 94.7l1 3c3.3 9.8 1.6 20.5-4.4 28.8s-15.7 13.3-26 13.3L32 352c-10.3 0-19.9-4.9-26-13.3s-7.7-19.1-4.4-28.8l1-3c13.8-41.5 42.8-74.8 79.5-94.7L93.5 64 64 64C46.3 64 32 49.7 32 32zM160 384l64 0 0 96c0 17.7-14.3 32-32 32s-32-14.3-32-32l0-96z"/></symbol>
 <symbol id="fa-toolbox" viewBox="0 0 512 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M176 88l0 40 160 0 0-40c0-4.4-3.6-8-8-8L184 80c-4.4 0-8 3.6-8 8zm-48 40l0-40c0-30.9 25.1-56 56-56l144 0c30.9 0 56 25.1 56 56l0 40 28.1 0c12.7 0 24.9 5.1 33.9 14.1l51.9 51.9c9 9 14.1 21.2 14.1 33.9l0 92.1-128 0 0-32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 32-128 0 0-32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 32L0 320l0-92.1c0-12.7 5.1-24.9 14.1-33.9l51.9-51.9c9-9 21.2-14.1 33.9-14.1l28.1 0zM0 416l0-64 128 0c0 17.7 14.3 32 32 32s32-14.3 32-32l128 0c0 17.7 14.3 32 32 32s32-14.3 32-32l128 0 0 64c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64z"/></symbol>
 <symbol id="fa-trash" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc. --><path d="M135.2 17.7L128 32 32 32C14.3 32 0 46.3 0 64S14.3 96 32 96l384 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-96 0-7.2-14.3C307.4 6.8 296.3 0 284.2 0L163.8 0c-12.1 0-23.2 6.8-28.6 17.7zM416 128L32 128 53.2 467c1.6 25.3 22.6 45 47.9 45l245.8 0c25.3 0 46.3-19.7 47.9-45L416 128z"/></symbol>
+<symbol id="fa-compass" viewBox="0 0 512 512"><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm50.7-186.9L162.4 380.6c-19.4 7.5-38.5-11.6-31-31l55.5-144.3c3.3-8.5 9.9-15.1 18.4-18.4l144.3-55.5c19.4-7.5 38.5 11.6 31 31L325.1 306.7c-3.2 8.5-9.9 15.1-18.4 18.4zM288 256a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></symbol>
+<symbol id="fa-sun" viewBox="0 0 512 512"><path d="M361.5 1.2c5 2.1 8.6 6.6 9.6 11.9L391 121l107.9 19.8c5.3 1 9.8 4.6 11.9 9.6s1.5 10.7-1.6 15.2L446.9 256l62.3 90.3c3.1 4.5 3.7 10.2 1.6 15.2s-6.6 8.6-11.9 9.6L391 391 371.1 498.9c-1 5.3-4.6 9.8-9.6 11.9s-10.7 1.5-15.2-1.6L256 446.9l-90.3 62.3c-4.5 3.1-10.2 3.7-15.2 1.6s-8.6-6.6-9.6-11.9L121 391 13.1 371.1c-5.3-1-9.8-4.6-11.9-9.6s-1.5-10.7 1.6-15.2L65.1 256 2.8 165.7c-3.1-4.5-3.7-10.2-1.6-15.2s6.6-8.6 11.9-9.6L121 121 140.9 13.1c1-5.3 4.6-9.8 9.6-11.9s10.7-1.5 15.2 1.6L256 65.1 346.3 2.8c4.5-3.1 10.2-3.7 15.2-1.6zM160 256a96 96 0 1 1 192 0 96 96 0 1 1 -192 0zm224 0a128 128 0 1 0 -256 0 128 128 0 1 0 256 0z"/></symbol>
+<symbol id="fa-moon" viewBox="0 0 384 512"><path d="M223.5 32C100 32 0 132.3 0 256S100 480 223.5 480c60.6 0 115.5-24.2 155.8-63.4c5-4.9 6.3-12.5 3.1-18.7s-10.1-9.7-17-8.5c-9.8 1.7-19.8 2.6-30.1 2.6c-96.9 0-175.5-78.8-175.5-176c0-65.8 36-123.1 89.3-153.3c6.1-3.5 9.2-10.5 7.7-17.3s-7.3-11.9-14.3-12.5c-6.3-.5-12.6-.8-19-.8z"/></symbol>
+<symbol id="fa-microchip" viewBox="0 0 512 512"><path d="M176 24c0-13.3-10.7-24-24-24s-24 10.7-24 24l0 40c-35.3 0-64 28.7-64 64l-40 0c-13.3 0-24 10.7-24 24s10.7 24 24 24l40 0 0 56-40 0c-13.3 0-24 10.7-24 24s10.7 24 24 24l40 0 0 56-40 0c-13.3 0-24 10.7-24 24s10.7 24 24 24l40 0c0 35.3 28.7 64 64 64l0 40c0 13.3 10.7 24 24 24s24-10.7 24-24l0-40 56 0 0 40c0 13.3 10.7 24 24 24s24-10.7 24-24l0-40 56 0 0 40c0 13.3 10.7 24 24 24s24-10.7 24-24l0-40c35.3 0 64-28.7 64-64l40 0c13.3 0 24-10.7 24-24s-10.7-24-24-24l-40 0 0-56 40 0c13.3 0 24-10.7 24-24s-10.7-24-24-24l-40 0 0-56 40 0c13.3 0 24-10.7 24-24s-10.7-24-24-24l-40 0c0-35.3-28.7-64-64-64l0-40c0-13.3-10.7-24-24-24s-24 10.7-24 24l0 40-56 0 0-40c0-13.3-10.7-24-24-24s-24 10.7-24 24l0 40-56 0 0-40zM160 128l192 0c17.7 0 32 14.3 32 32l0 192c0 17.7-14.3 32-32 32l-192 0c-17.7 0-32-14.3-32-32l0-192c0-17.7 14.3-32 32-32zm192 32l-192 0 0 192 192 0 0-192z"/></symbol>
+<symbol id="fa-hard-drive" viewBox="0 0 512 512"><path d="M0 96C0 60.7 28.7 32 64 32l384 0c35.3 0 64 28.7 64 64l0 184.4c-17-15.2-39.4-24.4-64-24.4L64 256c-24.6 0-47 9.2-64 24.4L0 96zM64 288l384 0c35.3 0 64 28.7 64 64l0 64c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64l0-64c0-35.3 28.7-64 64-64zM320 416a32 32 0 1 0 0-64 32 32 0 1 0 0 64zm128-32a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z"/></symbol>
+<symbol id="fa-network-wired" viewBox="0 0 640 512"><path d="M256 64l128 0 0 64-128 0 0-64zM240 0c-26.5 0-48 21.5-48 48l0 96c0 26.5 21.5 48 48 48l48 0 0 32L32 224c-17.7 0-32 14.3-32 32s14.3 32 32 32l96 0 0 32-48 0c-26.5 0-48 21.5-48 48l0 96c0 26.5 21.5 48 48 48l160 0c26.5 0 48-21.5 48-48l0-96c0-26.5-21.5-48-48-48l-48 0 0-32 256 0 0 32-48 0c-26.5 0-48 21.5-48 48l0 96c0 26.5 21.5 48 48 48l160 0c26.5 0 48-21.5 48-48l0-96c0-26.5-21.5-48-48-48l-48 0 0-32 96 0c17.7 0 32-14.3 32-32s-14.3-32-32-32l-256 0 0-32 48 0c26.5 0 48-21.5 48-48l0-96c0-26.5-21.5-48-48-48L240 0zM96 448l0-64 128 0 0 64L96 448zm320-64l128 0 0 64-128 0 0-64z"/></symbol>
+<symbol id="fa-eye" viewBox="0 0 576 512"><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM144 256a144 144 0 1 1 288 0 144 144 0 1 1 -288 0zm144-64c0 35.3-28.7 64-64 64c-7.1 0-13.9-1.2-20.3-3.3c-5.5-1.8-11.9 1.6-11.7 7.4c.3 6.9 1.3 13.8 3.2 20.7c13.7 51.2 66.4 81.6 117.6 67.9s81.6-66.4 67.9-117.6c-11.1-41.5-47.8-69.4-88.6-71.1c-5.8-.2-9.2 6.1-7.4 11.7c2.1 6.4 3.3 13.2 3.3 20.3z"/></symbol>
+<symbol id="fa-eye-slash" viewBox="0 0 640 512"><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c8.4-19.3 10.6-41.4 4.8-63.3c-11.1-41.5-47.8-69.4-88.6-71.1c-5.8-.2-9.2 6.1-7.4 11.7c2.1 6.4 3.3 13.2 3.3 20.3c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zM373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5L373 389.9z"/></symbol>
+<symbol id="fa-circle-check" viewBox="0 0 512 512"><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM369 209L241 337c-9.4 9.4-24.6 9.4-33.9 0l-64-64c-9.4-9.4-9.4-24.6 0-33.9s24.6-9.4 33.9 0l47 47L335 175c9.4-9.4 24.6-9.4 33.9 0s9.4 24.6 0 33.9z"/></symbol>
+<symbol id="fa-circle-xmark" viewBox="0 0 512 512"><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM175 175c9.4-9.4 24.6-9.4 33.9 0l47 47 47-47c9.4-9.4 24.6-9.4 33.9 0s9.4 24.6 0 33.9l-47 47 47 47c9.4 9.4 9.4 24.6 0 33.9s-24.6 9.4-33.9 0l-47-47-47 47c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l47-47-47-47c-9.4-9.4-9.4-24.6 0-33.9z"/></symbol>
+<symbol id="fa-circle-exclamation" viewBox="0 0 512 512"><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm0-384c13.3 0 24 10.7 24 24l0 112c0 13.3-10.7 24-24 24s-24-10.7-24-24l0-112c0-13.3 10.7-24 24-24zM224 352a32 32 0 1 1 64 0 32 32 0 1 1 -64 0z"/></symbol>
+<symbol id="fa-circle-info" viewBox="0 0 512 512"><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM216 336l24 0 0-64-24 0c-13.3 0-24-10.7-24-24s10.7-24 24-24l48 0c13.3 0 24 10.7 24 24l0 88 8 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-80 0c-13.3 0-24-10.7-24-24s10.7-24 24-24zm40-208a32 32 0 1 1 0 64 32 32 0 1 1 0-64z"/></symbol>
+<symbol id="fa-plug" viewBox="0 0 384 512"><path d="M96 0C78.3 0 64 14.3 64 32l0 96 64 0 0-96c0-17.7-14.3-32-32-32zM288 0c-17.7 0-32 14.3-32 32l0 96 64 0 0-96c0-17.7-14.3-32-32-32zM32 160c-17.7 0-32 14.3-32 32s14.3 32 32 32l0 32c0 77.4 55 142 128 156.8l0 67.2c0 17.7 14.3 32 32 32s32-14.3 32-32l0-67.2C297 398 352 333.4 352 256l0-32c17.7 0 32-14.3 32-32s-14.3-32-32-32L32 160z"/></symbol>
+<symbol id="fa-satellite-dish" viewBox="0 0 512 512"><path d="M192 32c0-17.7 14.3-32 32-32C383.1 0 512 128.9 512 288c0 17.7-14.3 32-32 32s-32-14.3-32-32C448 164.3 347.7 64 224 64c-17.7 0-32-14.3-32-32zM60.6 220.6L164.7 324.7l28.4-28.4c-.7-2.6-1.1-5.4-1.1-8.3c0-17.7 14.3-32 32-32s32 14.3 32 32s-14.3 32-32 32c-2.9 0-5.6-.4-8.3-1.1l-28.4 28.4L291.4 451.4c14.5 14.5 11.8 38.8-7.3 46.3C260.5 506.9 234.9 512 208 512C93.1 512 0 418.9 0 304c0-26.9 5.1-52.5 14.4-76.1c7.5-19 31.8-21.8 46.3-7.3zM224 96c106 0 192 86 192 192c0 17.7-14.3 32-32 32s-32-14.3-32-32c0-70.7-57.3-128-128-128c-17.7 0-32-14.3-32-32s14.3-32 32-32z"/></symbol>
+<symbol id="fa-folder" viewBox="0 0 512 512"><path d="M64 480H448c35.3 0 64-28.7 64-64V160c0-35.3-28.7-64-64-64H288c-10.1 0-19.6-4.7-25.6-12.8L243.2 57.6C231.1 41.5 212.1 32 192 32H64C28.7 32 0 60.7 0 96V416c0 35.3 28.7 64 64 64z"/></symbol>
+<symbol id="fa-spinner" viewBox="0 0 512 512"><path d="M304 48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zm0 416a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM48 304a48 48 0 1 0 0-96 48 48 0 1 0 0 96zm464-48a48 48 0 1 0 -96 0 48 48 0 1 0 96 0zM142.9 437A48 48 0 1 0 75 369.1 48 48 0 1 0 142.9 437zm0-294.2A48 48 0 1 0 75 75a48 48 0 1 0 67.9 67.9zM369.1 437A48 48 0 1 0 437 369.1 48 48 0 1 0 369.1 437z"/></symbol>
 </svg>
 <div id="app">
   <!-- Toast Notifications -->
@@ -112,7 +133,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                    t.type==='success' ? 'bg-emerald-600 text-white' :
                    t.type==='error' ? 'bg-red-600 text-white' :
                    'bg-blue-600 text-white']">
-      <i :class="['fas', t.type==='success'?'fa-check-circle':t.type==='error'?'fa-exclamation-circle':'fa-info-circle']"></i>
+      <svg class="icon"><use :href="'#fa-' + (t.type==='success'?'circle-check':t.type==='error'?'circle-exclamation':'circle-info')"></use></svg>
       <span>{{ t.message }}</span>
     </div>
   </div>
@@ -149,7 +170,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               :class="['sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-l text-sm rounded',
                        currentPage===item.key ? 'active' : '']"
               :style="{ color: currentPage===item.key ? '#10b981' : 'var(--text2)', justifyContent: sidebarCollapsed ? 'center' : 'flex-start' }">
-        <i :class="['fas', item.icon, 'w-5 text-center']"></i>
+        <svg class="icon w-5 text-center"><use :href="iconHref(item.icon)"></use></svg>
         <span v-show="!sidebarCollapsed" class="whitespace-nowrap">{{ item.label }}</span>
       </button>
     </nav>
@@ -159,7 +180,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <div v-show="!sidebarCollapsed" class="text-xs" style="color:var(--text2)">
         <div class="flex items-center gap-1.5 mb-1">
           <span class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>
-          <span>v2.3</span>
+          <span>v2.4</span>
         </div>
         <div>{{ servers.length }} 服务器 · {{ allServices.length }} 服务</div>
       </div>
@@ -173,7 +194,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             @click="currentPage=item.key"
             class="flex flex-col items-center gap-0.5 px-3 py-1 rounded"
             :style="{ color: currentPage===item.key ? '#10b981' : 'var(--text2)' }">
-      <i :class="['fas', item.icon, 'text-lg']"></i>
+      <svg class="icon text-lg"><use :href="iconHref(item.icon)"></use></svg>
       <span class="text-xs">{{ item.label }}</span>
     </button>
   </nav>
@@ -188,8 +209,9 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
       <div class="relative flex-1 max-w-md">
         <svg class="icon absolute left-3 top-1/2 -translate-y-1/2 text-xs" style="color:var(--text2)"><use href="#fa-search"></use></svg>
         <input v-model="searchQuery" @keydown.ctrl.k.prevent="$refs.searchInput?.focus()"
+               @keydown.up.prevent="searchUp" @keydown.down.prevent="searchDown" @keydown.enter.prevent="searchEnter"
                ref="searchInput"
-               placeholder="搜索服务... (Ctrl+K)"
+               placeholder="搜索服务... (Ctrl+K, ↑↓导航)"
                class="w-full pl-9 pr-3 py-2 rounded-lg text-sm border"
                style="background:var(--card);color:var(--text1);border-color:var(--border)">
         <kbd v-if="!searchQuery" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs px-1.5 py-0.5 rounded border"
@@ -202,7 +224,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                 @click="openService(ps)"
                 class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs whitespace-nowrap border card-hover"
                 style="background:var(--card);border-color:var(--border);color:var(--text1)">
-          <i :class="['fas', ps.icon||'fa-cube']" :style="{color: ps.icon_color||'var(--accent)'}"></i>
+          <svg class="icon" :style="{color: ps.icon_color||'var(--accent)'}"><use :href="iconHref(ps.icon||'fa-cube')"></use></svg>
           <span>{{ ps.name }}</span>
           <span class="w-1.5 h-1.5 rounded-full" :class="ps.status==='online'?'bg-emerald-500':ps.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
         </button>
@@ -213,7 +235,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               class="w-9 h-9 rounded-lg flex items-center justify-center border"
               style="background:var(--card);border-color:var(--border);color:var(--text2)"
               :title="isDark?'切换亮色':'切换暗色'">
-        <i :class="['fas', isDark?'fa-sun':'fa-moon']"></i>
+        <svg class="icon"><use :href="isDark?'#fa-sun':'#fa-moon'"></use></svg>
       </button>
     </header>
 
@@ -231,7 +253,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                  :title="rs.url"
                  class="flex items-center gap-2 px-3 py-2 rounded-lg border card-hover cursor-pointer whitespace-nowrap flex-shrink-0"
                  style="background:var(--card);border-color:var(--border)">
-              <i :class="['fas', rs.icon||'fa-cube', 'text-sm']" :style="{color: rs.icon_color||'var(--accent)'}"></i>
+              <svg class="icon text-sm" :style="{color: rs.icon_color||'var(--accent)'}"><use :href="iconHref(rs.icon||'fa-cube')"></use></svg>
               <span class="text-xs font-medium" style="color:var(--text1)">{{ rs.name }}</span>
               <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="statusClass(rs.status)"></span>
             </div>
@@ -249,8 +271,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                  class="rounded-lg p-3 border card-hover cursor-pointer text-center"
                  style="background:var(--card);border-color:var(--border)">
               <div class="flex items-center justify-center gap-1.5">
-                <i :class="['fas', ps.icon||'fa-cube', 'text-base']" :style="{color: ps.icon_color||'var(--accent)'}"></i>
-                <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="ps.status==='up'?'bg-emerald-500':ps.status==='down'?'bg-red-500':'bg-amber-500'"></span>
+                <svg class="icon text-base" :style="{color: ps.icon_color||'var(--accent)'}"><use :href="iconHref(ps.icon||'fa-cube')"></use></svg>
+                <span class="w-1.5 h-1.5 rounded-full flex-shrink-0" :class="ps.status==='online'?'bg-emerald-500':ps.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
               </div>
               <div class="text-xs font-medium mt-1.5 truncate" style="color:var(--text1)">{{ ps.name }}</div>
             </div>
@@ -319,7 +341,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             <button v-for="ps in pinnedServices" :key="ps.id" @click="openService(ps)"
                     class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs whitespace-nowrap border"
                     style="background:var(--card);border-color:var(--border);color:var(--text1)">
-              <i :class="['fas', ps.icon||'fa-cube']" :style="{color:ps.icon_color||'var(--accent)'}"></i>
+              <svg class="icon" :style="{color:ps.icon_color||'var(--accent)'}"><use :href="iconHref(ps.icon||'fa-cube')"></use></svg>
               {{ ps.name }}
             </button>
           </div>
@@ -327,23 +349,25 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <!-- Search Mode -->
           <div v-if="searchQuery && filteredServices.length">
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <div v-for="svc in filteredServices" :key="svc.id"
+              <div v-for="(svc, idx) in filteredServices" :key="svc.id"
                    @click="openService(svc)"
+                   @mouseenter="searchSelectedIndex=idx"
                    :title="svc.url"
-                   class="rounded-xl p-4 border card-hover cursor-pointer relative group"
+                   :class="['rounded-xl p-4 border card-hover cursor-pointer relative group',
+                            searchSelectedIndex===idx ? 'search-selected' : '']"
                    style="background:var(--card);border-color:var(--border)">
                 <button @click.stop="togglePin(svc)"
                         class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                         :style="{color: svc.pinned?'#f59e0b':'var(--text2)', background:'var(--bg)'}">
-                  <i :class="['fas', svc.pinned?'fa-thumbtack':'fa-thumbtack']" :style="{transform:svc.pinned?'none':'rotate(45deg)'}"></i>
+                    <svg class="icon" :style="{transform:svc.pinned?'none':'rotate(45deg)'}"><use href="#fa-thumbtack"></use></svg>
                 </button>
                 <div class="flex items-center gap-3 mb-2">
-                  <div class="w-9 h-9 rounded-lg flex items-center justify-center" :style="{background: (svc.icon_color||'#10b981')+'20'}">
-                    <i :class="['fas', svc.icon||'fa-cube']" :style="{color:svc.icon_color||'#10b981'}"></i>
-                  </div>
-                  <div class="flex-1 min-w-0">
-                    <div class="flex items-center gap-2">
-                      <span class="font-medium text-sm truncate" style="color:var(--text1)">{{ svc.name }}</span>
+                    <div class="w-9 h-9 rounded-lg flex items-center justify-center" :style="{background: (svc.icon_color||'#10b981')+'20'}">
+                      <svg class="icon" :style="{color:svc.icon_color||'#10b981'}"><use :href="iconHref(svc.icon||'fa-cube')"></use></svg>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium text-sm truncate" style="color:var(--text1)" v-html="highlightText(svc.name)"></span>
                       <span class="w-2 h-2 rounded-full flex-shrink-0" :class="statusClass(svc.status)"></span>
                     </div>
                     <div class="text-xs truncate" style="color:var(--text2)">{{ svc.description||svc.url||'' }}</div>
@@ -364,7 +388,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               <button @click="toggleCategory(cat.name)"
                       class="flex items-center gap-2 mb-3 w-full text-left group">
                 <svg :class="['icon text-xs transition-transform', categoryExpanded[cat.name]?'rotate-90':'']" style="color:var(--accent)"><use href="#fa-chevron-right"></use></svg>
-                <i :class="['fas', cat.icon||'fa-folder', 'text-xs']" :style="{color: cat.color||'var(--accent)'}"></i>
+                <svg class="icon text-xs" :style="{color: cat.color||'var(--accent)'}"><use :href="iconHref(cat.icon||'fa-folder')"></use></svg>
                 <span class="text-sm font-semibold" style="color:var(--text1)">{{ cat.name }}</span>
                 <span class="text-xs px-2 py-0.5 rounded-full" :style="{background: (cat.color||'#10b981')+'18', color: cat.color||'var(--text2)'}">{{ cat.services.length }}</span>
               </button>
@@ -381,14 +405,14 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                   </button>
                   <div class="flex items-center gap-3 mb-2">
                     <div class="w-9 h-9 rounded-lg flex items-center justify-center" :style="{background:(svc.icon_color||'#10b981')+'20'}">
-                      <i :class="['fas', svc.icon||'fa-cube']" :style="{color:svc.icon_color||'#10b981'}"></i>
+                      <svg class="icon" :style="{color:svc.icon_color||'#10b981'}"><use :href="iconHref(svc.icon||'fa-cube')"></use></svg>
                     </div>
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2">
                         <span class="font-medium text-sm truncate" style="color:var(--text1)">{{ svc.name }}</span>
                         <span class="w-2 h-2 rounded-full flex-shrink-0" :class="statusClass(svc.status)"></span>
                       </div>
-                      <div class="text-xs truncate" style="color:var(--text2)">{{ svc.description||svc.url||'' }}</div>
+                    <div class="text-xs truncate" style="color:var(--text2)" v-html="highlightText(svc.description||svc.url||'')"></div>
                     </div>
                   </div>
                 </div>
@@ -456,14 +480,21 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             </div>
           </div>
 
+          <!-- Empty State -->
+          <div v-if="!monitor.connected && !loading.monitor" class="text-center py-16" style="color:var(--text2)">
+            <svg class="icon text-4xl mb-3 block opacity-30 mx-auto"><use href="#fa-chart-line"></use></svg>
+            <p class="text-sm mb-3">暂无监控数据，请检查服务器连接</p>
+            <button @click="loadMonitor" class="px-4 py-2 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition">重新加载</button>
+          </div>
+
           <!-- Metric Cards -->
-          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+          <div v-if="monitor.connected || loading.monitor" class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
             <div v-for="m in metricCards" :key="m.key" @click="historyMetric=m.key"
                  :class="['rounded-xl p-4 border cursor-pointer card-hover', historyMetric===m.key?'ring-2 ring-emerald-500':'']"
                  style="background:var(--card);border-color:var(--border)">
               <div class="flex items-center justify-between mb-2">
                 <span class="text-xs font-medium" style="color:var(--text2)">{{ m.label }}</span>
-                <i :class="['fas', m.icon]" :style="{color:m.color}"></i>
+                <svg class="icon" :style="{color:m.color}"><use :href="iconHref(m.icon)"></use></svg>
               </div>
               <div class="text-2xl font-bold" :style="{color:m.color}">{{ m.value }}{{ m.unit }}</div>
               <div class="mt-2 h-1.5 rounded-full overflow-hidden" style="background:var(--border)">
@@ -473,7 +504,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           </div>
 
           <!-- History Chart -->
-          <div class="rounded-xl border p-4 mb-5" style="background:var(--card);border-color:var(--border)">
+          <div v-if="monitor.connected || loading.monitor" class="rounded-xl border p-4 mb-5" style="background:var(--card);border-color:var(--border)">
             <div class="flex items-center justify-between mb-3">
               <span class="text-sm font-semibold" style="color:var(--text1)">历史趋势 (24h)</span>
               <div class="flex gap-1">
@@ -488,7 +519,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           </div>
 
           <!-- Containers Table -->
-          <div class="rounded-xl border overflow-hidden" style="background:var(--card);border-color:var(--border)">
+          <div v-if="monitor.connected || loading.monitor" class="rounded-xl border overflow-hidden" style="background:var(--card);border-color:var(--border)">
             <div class="px-4 py-3 border-b flex items-center justify-between" style="border-color:var(--border)">
               <span class="text-sm font-semibold" style="color:var(--text1)">容器列表</span>
               <span class="text-xs" style="color:var(--text2)">{{ monitor.containers.length }} 个容器</span>
@@ -557,8 +588,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                     <div v-for="(line,i) in terminalLines" :key="i" class="mb-1">
                       <div v-if="line.type==='cmd'" class="terminal-line" style="color:#e2e8f0">{{ line.text }}</div>
                       <div v-else-if="line.type==='output'" class="terminal-output" style="color:#94a3b8" v-html="line.text"></div>
-                      <div v-else-if="line.type==='info'" style="color:#10b981">{{ line.text }}</div>
-                      <div v-else-if="line.type==='error'" style="color:#ef4444">{{ line.text }}</div>
+                      <div v-else-if="line.type==='info'" class="terminal-info-line" style="color:#10b981">{{ line.text }}</div>
+                      <div v-else-if="line.type==='error'" class="terminal-error-line" style="color:#ef4444">{{ line.text }}</div>
                     </div>
                     <div class="flex items-center gap-2 mt-1">
                       <span style="color:#10b981" class="font-semibold">$</span>
@@ -735,7 +766,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
                   <input v-model="newServer.password" :type="showServerPwd?'text':'password'" class="w-full px-3 py-2 pr-9 rounded-lg text-sm border"
                          style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="可选，用于远程连接">
                   <button @click="showServerPwd=!showServerPwd" type="button" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs opacity-50 hover:opacity-100" style="color:var(--text2)">
-                    <i :class="['fas', showServerPwd?'fa-eye-slash':'fa-eye']"></i>
+                    <svg class="icon"><use :href="showServerPwd?'#fa-eye-slash':'#fa-eye'"></use></svg>
                   </button>
                 </div>
               </div>
@@ -743,7 +774,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
             <!-- SSH Test Result -->
             <div v-if="sshTestResult.success!==null" class="mb-3 px-3 py-2 rounded-lg text-xs flex items-center gap-2"
                  :style="{background: sshTestResult.success ? 'rgba(34,197,94,.1)' : 'rgba(239,68,68,.1)', color: sshTestResult.success ? '#22c55e' : '#ef4444'}">
-              <i :class="['fas', sshTestResult.success?'fa-check-circle':'fa-times-circle']"></i>
+              <svg class="icon"><use :href="sshTestResult.success?'#fa-circle-check':'#fa-circle-xmark'"></use></svg>
               {{ sshTestResult.message }}
             </div>
             <div class="flex gap-2">
@@ -754,7 +785,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
               <button @click="testConnection()" :disabled="!newServer.host||sshTestResult.testing"
                       class="px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
                       style="background:var(--bg);color:var(--text1);border-color:var(--border)">
-                <i :class="['fas', sshTestResult.testing?'fa-spinner fa-spin':'fa-plug']" class="mr-1"></i>测试连接
+                <svg class="icon mr-1" :class="{'loading-spinner':sshTestResult.testing}"><use :href="sshTestResult.testing?'#fa-spinner':'#fa-plug'"></use></svg>测试连接
               </button>
               <button @click="showAddServer=false; sshTestResult.success=null; sshTestResult.message=''" class="px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
                       style="background:var(--bg);color:var(--text1);border-color:var(--border)">取消</button>
@@ -839,7 +870,7 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
           <div class="px-5 py-4 flex items-center gap-4">
             <button @click="triggerScan" :disabled="scanning"
                     class="px-4 py-2.5 rounded-lg text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition disabled:opacity-50">
-              <i :class="['fas', scanning?'fa-spinner loading-spinner':'fa-radar']" class="mr-1"></i>
+              <svg class="icon mr-1" :class="{'loading-spinner':scanning}"><use :href="scanning?'#fa-spinner':'#fa-satellite-dish'"></use></svg>
               {{ scanning ? '扫描中...' : '触发全量扫描' }}
             </button>
             <span class="text-xs" style="color:var(--text2)">扫描将自动发现服务器上的运行服务</span>

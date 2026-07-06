@@ -9,6 +9,7 @@ createApp({
     const currentServerId = ref('');
     const sidebarCollapsed = ref(localStorage.getItem('oc-sidebar-collapsed') === 'true');
     const searchQuery = ref('');
+    const searchSelectedIndex = ref(-1);
     const mobileView = ref(window.innerWidth < 769);
     const isMac = ref(navigator.platform.toUpperCase().indexOf('MAC') >= 0);
 
@@ -103,9 +104,14 @@ createApp({
           OpsAPI.getServices(currentServerId.value),
           OpsAPI.getCategories(currentServerId.value),
         ]);
-        allServices.value = (svcData.services || svcData || []).map(s => ({
-          ...s, pinned: pinnedIds.value.includes(s.id),
-        }));
+        allServices.value = (svcData.services || svcData || []).map(s => {
+          // P4-02: Normalize status to online/offline/unknown
+          let status = s.status;
+          if (status === 'up' || status === 'running') status = 'online';
+          else if (status === 'down') status = 'offline';
+          else if (!status) status = 'unknown';
+          return { ...s, status, pinned: pinnedIds.value.includes(s.id) };
+        });
         categories.value = catData.categories || catData || [];
         categories.value.forEach((c, i) => {
           if (categoryExpanded[c.name] === undefined) categoryExpanded[c.name] = (i === 0);
@@ -500,6 +506,53 @@ createApp({
       toast('密码已复制', 'success');
     }
 
+    /* ========== P4: Icon, Search, Highlight ========== */
+    // P4-pre: Map FA class names to SVG sprite hrefs
+    function iconHref(iconName) {
+      if (!iconName) return '#fa-cube';
+      let name = iconName.replace(/^fa-/, '');
+      // Map FA5 names to FA6 names
+      const fa5tofa6 = {
+        'check-circle': 'circle-check',
+        'times-circle': 'circle-xmark',
+        'exclamation-circle': 'circle-exclamation',
+        'info-circle': 'circle-info',
+        'radar': 'satellite-dish',
+      };
+      name = fa5tofa6[name] || name;
+      return '#fa-' + name;
+    }
+
+    // P4-03: Keyword highlighting
+    function highlightText(text) {
+      if (!text) return '';
+      if (!searchQuery.value) return text;
+      const q = searchQuery.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp('(' + q + ')', 'gi');
+      return String(text).replace(re, '<mark class="search-hl">$1</mark>');
+    }
+
+    // P4-03: Search keyboard navigation
+    function searchUp() {
+      if (!filteredServices.value.length) return;
+      searchSelectedIndex.value = searchSelectedIndex.value <= 0
+        ? filteredServices.value.length - 1
+        : searchSelectedIndex.value - 1;
+    }
+    function searchDown() {
+      if (!filteredServices.value.length) return;
+      searchSelectedIndex.value = searchSelectedIndex.value >= filteredServices.value.length - 1
+        ? 0
+        : searchSelectedIndex.value + 1;
+    }
+    function searchEnter() {
+      if (searchSelectedIndex.value >= 0 && searchSelectedIndex.value < filteredServices.value.length) {
+        openService(filteredServices.value[searchSelectedIndex.value]);
+      } else if (filteredServices.value.length === 1) {
+        openService(filteredServices.value[0]);
+      }
+    }
+
     /* ========== Computed ========== */
     const currentServer = computed(() => servers.value.find(s => s.id === currentServerId.value));
 
@@ -526,7 +579,9 @@ createApp({
       return categories.value.map(cat => {
         const catObj = typeof cat === 'string' ? { name: cat, icon: 'fa-folder', color: '#94a3b8', order: 99 } : cat;
         const catName = catObj.name;
-        const svcs = allServices.value.filter(s => s.category === catName);
+        // P4-04: Sort pinned services to top
+        const svcs = allServices.value.filter(s => s.category === catName)
+          .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
         return { ...catObj, services: svcs };
       }).filter(c => c.services.length > 0);
     });
@@ -563,6 +618,7 @@ createApp({
     });
 
     watch(historyMetric, () => { loadHistory(); });
+    watch(searchQuery, () => { searchSelectedIndex.value = -1; });
     watch(sidebarCollapsed, (v) => { localStorage.setItem('oc-sidebar-collapsed', v); });
     watch(pinnedIds, (v) => {
       allServices.value.forEach(s => { s.pinned = v.includes(s.id); });
@@ -613,7 +669,7 @@ createApp({
 
     /* ========== Return ========== */
     return {
-      isDark, currentPage, currentServerId, sidebarCollapsed, searchQuery, mobileView, isMac,
+      isDark, currentPage, currentServerId, sidebarCollapsed, searchQuery, searchSelectedIndex, mobileView, isMac,
       navItems, loading, servers, allServices, categories, categoryExpanded, pinnedIds, toasts,
       monitor, historyMetric, refreshCountdown, historyChart,
       terminalLines, terminalInput, terminalHistoryIdx,
@@ -628,6 +684,7 @@ createApp({
       convertTimestamp, encodeBase64, decodeBase64,
       formatJson, compressJson, copyJson,
       generatePassword, copyPassword,
+      iconHref, highlightText, searchUp, searchDown, searchEnter,
     };
   },
 }).mount('#app');
