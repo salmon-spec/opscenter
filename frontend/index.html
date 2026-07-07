@@ -128,19 +128,30 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
 
 /* ===== Monitor Page ===== */
-.monitor-select{margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.monitor-select{margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .monitor-select select{padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text1);font-size:13px}
-.metric-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:20px}
-.metric-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;cursor:pointer;transition:all .2s}
+.monitor-info-bar{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;color:var(--text2)}
+.monitor-info-bar span{display:flex;align-items:center;gap:4px}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px}
+.metric-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer;transition:all .2s;position:relative}
 .metric-card:hover{border-color:var(--accent)}
-.metric-card .mc-icon{font-size:20px;margin-bottom:6px}
-.metric-card .mc-label{font-size:12px;color:var(--text2)}
-.metric-card .mc-value{font-size:24px;font-weight:700;margin-top:2px}
-.chart-section{margin-bottom:20px}
-.chart-tabs{display:flex;gap:6px;margin-bottom:10px}
-.chart-tab{font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer}
-.chart-tab.active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
-.chart-container{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);height:260px;position:relative}
+.metric-card.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(45,212,191,.18)}
+.metric-card .mc-icon{font-size:18px;margin-bottom:4px}
+.metric-card .mc-label{font-size:11px;color:var(--text2)}
+.metric-card .mc-value{font-size:22px;font-weight:700;margin-top:1px;line-height:1.2}
+.metric-card .mc-bar{height:4px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden}
+.metric-card .mc-bar-fill{height:100%;border-radius:2px;transition:width .5s}
+.metric-card .mc-detail{font-size:10px;color:var(--text2);margin-top:3px}
+.chart-section{margin-bottom:20px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.chart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px}
+.chart-header .ch-title{font-size:13px;font-weight:600}
+.chart-metric-tabs{display:flex;gap:4px}
+.chart-metric-tabs button{font-size:11px;padding:3px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer;transition:all .15s}
+.chart-metric-tabs button.active{background:var(--accent);color:#0d1117;border-color:var(--accent);font-weight:500}
+.chart-time-tabs{display:flex;gap:4px}
+.chart-time-tabs button{font-size:11px;padding:3px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer;transition:all .15s}
+.chart-time-tabs button.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+.chart-container{height:280px;position:relative}
 .container-table{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;max-height:400px}
 .container-table table{width:100%;border-collapse:collapse;font-size:12px}
 .container-table th{background:var(--bg2);padding:8px 12px;text-align:left;font-weight:500;position:sticky;top:0;z-index:1}
@@ -202,6 +213,12 @@ createApp({
     const monitorData = ref(null);
     const containers = ref([]);
     const selectedMetric = ref('cpu');
+    const historyHours = ref(24);
+    const historyData = ref([]);
+    let echartsLib = null;
+    let chartInstance = null;
+    const chartBox = ref(null);
+    let autoRefreshTimer = null;
 
     // ========== Modals ==========
     const showGroupModal = ref(false);
@@ -446,17 +463,118 @@ createApp({
     async function loadMonitor() {
       if (!currentServerId.value) return;
       try {
-        const data = await apiGet(`${API}/monitor/${currentServerId.value}`);
+        const data = await apiGet(`${API}/servers/${currentServerId.value}/monitor`);
         monitorData.value = data;
         containers.value = data.containers || [];
       } catch(e) { console.warn('monitor load failed:', e.message); }
     }
 
-    function getMetricValue(key) {
-      if (!monitorData.value) return '-';
-      const m = monitorData.value.metrics || {};
-      return m[key] != null ? m[key] : '-';
+    async function loadHistory() {
+      if (!currentServerId.value) return;
+      try {
+        const data = await apiGet(`${API}/servers/${currentServerId.value}/history?metric=${selectedMetric.value}&hours=${historyHours.value}`);
+        historyData.value = data.values || [];
+        await nextTick();
+        renderChart();
+      } catch(e) { console.warn('history load failed:', e.message); }
     }
+
+    async function loadEcharts() {
+      if (echartsLib) return echartsLib;
+      return new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js';
+        s.onload = () => { echartsLib = window.echarts; resolve(echartsLib); };
+        s.onerror = () => { console.error('ECharts load failed'); resolve(null); };
+        document.head.appendChild(s);
+      });
+    }
+
+    async function initChart() {
+      if (!echartsLib) await loadEcharts();
+      if (!echartsLib || !chartBox.value) return;
+      if (chartInstance) { chartInstance.dispose(); }
+      chartInstance = echartsLib.init(chartBox.value, darkMode.value ? 'dark' : null);
+      window.addEventListener('resize', () => chartInstance && chartInstance.resize());
+    }
+
+    function renderChart() {
+      if (!chartInstance || !echartsLib) return;
+      const metricLabels = {cpu:'CPU 使用率 (%)',memory:'内存使用率 (%)',disk:'磁盘使用率 (%)',net_rx:'网络入流量 (B/s)',net_tx:'网络出流量 (B/s)',load1:'系统负载 (1min)',load5:'系统负载 (5min)',load15:'系统负载 (15min)',disk_read:'磁盘读取 (B/s)',disk_write:'磁盘写入 (B/s)'};
+      const colors = {cpu:'#22c55e',memory:'#3b82f6',disk:'#f59e0b',net_rx:'#8b5cf6',net_tx:'#06b6d4',load1:'#f97316',load5:'#f97316',load15:'#f97316',disk_read:'#22c55e',disk_write:'#ef4444'};
+      const title = metricLabels[selectedMetric.value] || selectedMetric.value;
+      const color = colors[selectedMetric.value] || '#2dd4bf';
+      const h = historyData.value;
+      const normalized = Array.isArray(h) ? h.map(p => {
+        if (Array.isArray(p)) return { ts: p[0] * 1000, v: parseFloat(p[1]) };
+        return { ts: p.timestamp || p.time || p.x, v: p.value ?? p.y ?? 0 };
+      }) : [];
+      const xData = normalized.map(p => {
+        const d = new Date(p.ts);
+        if (historyHours.value > 24) return (d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+        return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+      });
+      const yData = normalized.map(p => p.v);
+      const isDarkVal = darkMode.value;
+      chartInstance.setOption({
+        backgroundColor:'transparent',
+        textStyle:{color:isDarkVal?'#94a3b8':'#64748b'},
+        grid:{left:55,right:15,top:20,bottom:30},
+        tooltip:{trigger:'axis',backgroundColor:isDarkVal?'#1e293b':'#fff',borderColor:isDarkVal?'#334155':'#e2e8f0',textStyle:{color:isDarkVal?'#e2e8f0':'#1e293b',fontSize:11},
+          formatter:function(params){const p=params[0];return p.name+'<br/><b>'+title+'</b>: '+parseFloat(p.value).toFixed(2);}
+        },
+        xAxis:{type:'category',data:xData,axisLine:{lineStyle:{color:isDarkVal?'#334155':'#e2e8f0'}},axisLabel:{fontSize:10},boundaryGap:false},
+        yAxis:{type:'value',axisLine:{show:false},splitLine:{lineStyle:{color:isDarkVal?'#1e293b':'#f1f5f9'}},axisLabel:{fontSize:10}},
+        series:[{type:'line',data:yData,smooth:true,symbol:'none',lineStyle:{width:2,color:color},
+          areaStyle:{color:new echartsLib.graphic.LinearGradient(0,0,0,1,[{offset:0,color:color+'40'},{offset:1,color:color+'05'}])}
+        }]
+      }, true);
+    }
+
+    function getMetric(key) {
+      if (!monitorData.value) return null;
+      const m = monitorData.value.metrics || {};
+      return m[key] != null ? m[key] : null;
+    }
+
+    function formatBytes(bytes) {
+      if (bytes == null || bytes === 0) return '0 B';
+      const units = ['B','KB','MB','GB','TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+    }
+
+    function formatUptime(seconds) {
+      if (seconds == null || seconds <= 0) return '-';
+      const d = Math.floor(seconds / 86400);
+      const h = Math.floor((seconds % 86400) / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      if (d > 0) return d + '天' + h + '小时';
+      if (h > 0) return h + '小时' + m + '分';
+      return m + '分钟';
+    }
+
+    function formatContainerPorts(ports) {
+      if (!ports || ports === '-') return '-';
+      return ports.split(',').map(p => { const m = p.trim().match(/:(\d+)$/); return m ? m[1] : p.trim(); }).filter((v, i, a) => a.indexOf(v) === i).join(', ');
+    }
+
+    const metricCards = computed(() => {
+      const m = monitorData.value?.metrics || {};
+      const rx = m.net_rx || 0;
+      const tx = m.net_tx || 0;
+      const netBps = rx + tx;
+      return [
+        {key:'cpu',icon:'⚡',label:'CPU',value:m.cpu||0,display:(m.cpu||0).toFixed(1)+'%',color:'#22c55e',detail:(m.cpu_count||0)+' 核心'},
+        {key:'memory',icon:'💾',label:'内存',value:m.memory||0,display:(m.memory||0).toFixed(1)+'%',color:'#3b82f6',detail:formatBytes(m.memory_used)+' / '+formatBytes(m.memory_total)},
+        {key:'disk',icon:'💿',label:'磁盘',value:m.disk||0,display:(m.disk||0).toFixed(1)+'%',color:'#f59e0b',detail:formatBytes(m.disk_avail)+' 可用'},
+        {key:'net_rx',icon:'📥',label:'网络入',value:0,display:formatBytes(rx)+'/s',color:'#8b5cf6',detail:'接收流量'},
+        {key:'net_tx',icon:'📤',label:'网络出',value:0,display:formatBytes(tx)+'/s',color:'#06b6d4',detail:'发送流量'},
+        {key:'load1',icon:'📊',label:'负载',value:0,display:(m.load1||0).toFixed(2),color:'#f97316',detail:'1m/'+(m.load5||0).toFixed(2)+' 5m/'+(m.load15||0).toFixed(2)+' 15m'},
+        {key:'disk_read',icon:'⬆️',label:'磁盘读',value:0,display:formatBytes(m.disk_read||0)+'/s',color:'#22c55e',detail:'读取速率'},
+        {key:'disk_write',icon:'⬇️',label:'磁盘写',value:0,display:formatBytes(m.disk_write||0)+'/s',color:'#ef4444',detail:'写入速率'},
+      ];
+    });
 
     // ========== Terminal ==========
     function execCmd() {
@@ -483,12 +601,29 @@ createApp({
       await loadGroupConfig();
       await Promise.all([loadManualServices(), loadAutoServices(), loadServers()]);
       checkManualServices();
-      loadMonitor();
+      await loadMonitor();
+      await loadEcharts();
     });
-    onUnmounted(() => clearInterval(clockTimer));
+    onUnmounted(() => { clearInterval(clockTimer); if (autoRefreshTimer) clearInterval(autoRefreshTimer); });
 
     // Watch server change for monitor
-    watch(currentServerId, () => { loadMonitor(); });
+    watch(currentServerId, async () => {
+      await loadMonitor();
+      await loadHistory();
+    });
+    watch(currentPage, async (val) => {
+      if (val === 'monitor') {
+        await loadMonitor();
+        await nextTick();
+        await initChart();
+        await loadHistory();
+        if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+        autoRefreshTimer = setInterval(loadMonitor, 15000);
+      } else {
+        if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+      }
+    });
+    watch(darkMode, () => { if (chartInstance) { initChart(); renderChart(); } });
 
     // ========== Template data ==========
     return {
@@ -499,7 +634,8 @@ createApp({
       addGroup, deleteGroup, moveServiceToGroup,
       copyText, iconMap,
       servers, currentServerId, monitorData, containers,
-      selectedMetric, getMetricValue, loadMonitor,
+      selectedMetric, historyHours, historyData, chartBox, metricCards,
+      getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
       termLines, termInput, execCmd, insertCmd, cmdTemplates, activeCmdGroup,
       triggerScan,
     };
@@ -628,21 +764,57 @@ createApp({
       <div class="monitor-select">
         <select v-model="currentServerId"><option v-for="s in servers" :key="s.id" :value="s.id">{{s.name}} ({{s.host}})</option></select>
         <button class="btn-sm" @click="loadMonitor">手动刷新</button>
+        <span v-if="monitorData" style="font-size:12px;color:var(--text2);margin-left:8px">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px"></span>实时数据
+        </span>
       </div>
+
+      <!-- Server info bar -->
+      <div class="monitor-info-bar" v-if="monitorData">
+        <span>⏱ 运行: {{formatUptime(getMetric('uptime'))}}</span>
+        <span>🖥 CPU核: {{getMetric('cpu_count') || '-'}}</span>
+        <span>💾 内存: {{formatBytes(getMetric('memory_used'))}} / {{formatBytes(getMetric('memory_total'))}}</span>
+        <span>💿 磁盘: {{formatBytes(getMetric('disk_used'))}} / {{formatBytes(getMetric('disk_total'))}}</span>
+        <span>🔄 Swap: {{formatBytes(getMetric('swap_used'))}} / {{formatBytes(getMetric('swap_total'))}}</span>
+        <span>📦 容器: {{getMetric('container_running')||0}} 运行 / {{getMetric('container_stopped')||0}} 停止</span>
+      </div>
+
+      <!-- Metric Cards -->
       <div class="metric-grid">
-        <div class="metric-card" @click="selectedMetric='cpu'"><div class="mc-icon">⚡</div><div class="mc-label">CPU</div><div class="mc-value" :style="{color:getMetricValue('cpu_percent')>80?'var(--red)':'var(--green)'}">{{getMetricValue('cpu_percent')}}%</div></div>
-        <div class="metric-card" @click="selectedMetric='memory'"><div class="mc-icon">💾</div><div class="mc-label">内存</div><div class="mc-value" :style="{color:getMetricValue('memory_percent')>80?'var(--red)':'var(--green)'}">{{getMetricValue('memory_percent')}}%</div></div>
-        <div class="metric-card" @click="selectedMetric='disk'"><div class="mc-icon">💿</div><div class="mc-label">磁盘</div><div class="mc-value" :style="{color:getMetricValue('disk_percent')>80?'var(--red)':'var(--green)'}">{{getMetricValue('disk_percent')}}%</div></div>
-        <div class="metric-card"><div class="mc-icon">🌐</div><div class="mc-label">网络</div><div class="mc-value" style="color:var(--blue)">{{getMetricValue('network_speed') || '-'}}</div></div>
+        <div v-for="mc in metricCards" :key="mc.key" class="metric-card" :class="{active:selectedMetric===mc.key}" @click="selectedMetric=mc.key;loadHistory()">
+          <div class="mc-icon">{{mc.icon}}</div>
+          <div class="mc-label">{{mc.label}}</div>
+          <div class="mc-value" :style="{color:mc.value>90?'var(--red)':mc.value>80?'var(--orange)':mc.color}">{{mc.display}}</div>
+          <div class="mc-bar"><div class="mc-bar-fill" :style="{width:Math.min(mc.value,100)+'%',background:mc.value>90?'var(--red)':mc.value>80?'var(--orange)':mc.color}"></div></div>
+          <div class="mc-detail">{{mc.detail}}</div>
+        </div>
       </div>
+
+      <!-- History Chart -->
+      <div class="chart-section">
+        <div class="chart-header">
+          <span class="ch-title">历史趋势</span>
+          <div class="chart-metric-tabs">
+            <button v-for="mt in [{k:'cpu',l:'CPU'},{k:'memory',l:'内存'},{k:'disk',l:'磁盘'},{k:'net_rx',l:'网络入'},{k:'net_tx',l:'网络出'},{k:'load1',l:'负载'},{k:'disk_read',l:'磁盘读'},{k:'disk_write',l:'磁盘写'}]" :key="mt.k"
+              :class="{active:selectedMetric===mt.k}" @click="selectedMetric=mt.k;loadHistory()">{{mt.l}}</button>
+          </div>
+          <div class="chart-time-tabs">
+            <button v-for="tr in [{h:1,l:'1h'},{h:3,l:'3h'},{h:6,l:'6h'},{h:12,l:'12h'},{h:24,l:'24h'},{h:72,l:'3天'},{h:168,l:'7天'}]" :key="tr.h"
+              :class="{active:historyHours===tr.h}" @click="historyHours=tr.h;loadHistory()">{{tr.l}}</button>
+          </div>
+        </div>
+        <div ref="chartBox" class="chart-container"></div>
+      </div>
+
+      <!-- Containers Table -->
       <div class="container-table">
         <table>
           <thead><tr><th>名称</th><th>镜像</th><th>状态</th><th>端口</th></tr></thead>
           <tbody><tr v-for="c in containers" :key="c.name||c.id">
-            <td>{{c.name||c.Names}}</td>
-            <td>{{c.image||c.Image}}</td>
+            <td style="font-weight:500">{{c.name||c.Names}}</td>
+            <td style="font-size:11px;color:var(--text2)">{{c.image||c.Image}}</td>
             <td><span :class="{'running-dot':(c.status||c.Status||'').includes('running')}">{{c.status||c.Status}}</span></td>
-            <td>{{c.ports||c.Ports||'-'}}</td>
+            <td style="font-size:11px;color:var(--text2);font-family:Consolas,monospace">{{formatContainerPorts(c.ports||c.Ports)}}</td>
           </tr></tbody>
         </table>
       </div>

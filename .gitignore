@@ -24,3 +24,4 @@ Thumbs.db
 *.bak
 frontend/*.py
 backend.bak.pre_v31/
+backend/app/main.py.bak.v30

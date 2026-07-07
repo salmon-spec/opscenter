@@ -656,6 +656,7 @@ def scan_all():
 
 
 # === Monitor (Prometheus proxy) ===
+@app.get("/api/v2/servers/{server_id}/monitor")
 @app.get("/api/v2/monitor/{server_id}")
 def get_monitor(server_id: str):
     """Get real monitoring data for a server (local via Prometheus, remote via SSH)."""
@@ -707,17 +708,25 @@ def get_monitor(server_id: str):
     
     queries = {
         "cpu": '100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100',
+        "cpu_count": 'count(node_cpu_seconds_total{mode="idle"}) without (cpu, mode)',
         "memory": '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100',
         "memory_total": 'node_memory_MemTotal_bytes',
         "memory_avail": 'node_memory_MemAvailable_bytes',
+        "memory_used": 'node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes',
         "disk": '(1 - node_filesystem_avail_bytes{fstype!="tmpfs",mountpoint="/"} / node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"}) * 100',
         "disk_total": 'node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"}',
         "disk_avail": 'node_filesystem_avail_bytes{fstype!="tmpfs",mountpoint="/"}',
+        "disk_used": 'node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"} - node_filesystem_avail_bytes{fstype!="tmpfs",mountpoint="/"}',
+        "disk_read": 'rate(node_disk_read_bytes_total[5m])',
+        "disk_write": 'rate(node_disk_written_bytes_total[5m])',
         "load1": 'node_load1',
         "load5": 'node_load5',
         "load15": 'node_load15',
         "net_rx": 'rate(node_network_receive_bytes_total{device!="lo"}[5m])',
         "net_tx": 'rate(node_network_transmit_bytes_total{device!="lo"}[5m])',
+        "swap_total": 'node_memory_SwapTotal_bytes',
+        "swap_used": 'node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes',
+        "uptime": 'time() - node_boot_time_seconds',
         "containers": 'count(container_last_seen)',
     }
     
@@ -736,6 +745,8 @@ def get_monitor(server_id: str):
     
     # Get container list from Docker if available
     container_list = []
+    container_running = 0
+    container_stopped = 0
     try:
         import docker as docker_sdk
         dc = docker_sdk.from_env()
@@ -745,6 +756,10 @@ def get_monitor(server_id: str):
                 if p and isinstance(p, list):
                     for binding in p:
                         ports.append(f"{binding.get('HostIp','0.0.0.0')}:{binding.get('HostPort','?')}")
+            if c.status == "running":
+                container_running += 1
+            else:
+                container_stopped += 1
             container_list.append({
                 "name": c.name,
                 "image": c.image.tags[0] if c.image.tags else str(c.image.id[:12]),
@@ -753,6 +768,9 @@ def get_monitor(server_id: str):
             })
     except Exception:
         pass
+
+    result["container_running"] = container_running
+    result["container_stopped"] = container_stopped
 
     return {
         "server_id": server_id,
@@ -763,6 +781,7 @@ def get_monitor(server_id: str):
 
 
 # === Monitor History ===
+@app.get("/api/v2/servers/{server_id}/history")
 @app.get("/api/v2/monitor/{server_id}/history")
 def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
     """Get historical monitoring data from Prometheus."""
@@ -776,6 +795,11 @@ def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
         "disk": '(1 - node_filesystem_avail_bytes{fstype!="tmpfs",mountpoint="/"} / node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"}) * 100',
         "net_rx": 'rate(node_network_receive_bytes_total{device!="lo"}[5m])',
         "net_tx": 'rate(node_network_transmit_bytes_total{device!="lo"}[5m])',
+        "load1": 'node_load1',
+        "load5": 'node_load5',
+        "load15": 'node_load15',
+        "disk_read": 'rate(node_disk_read_bytes_total[5m])',
+        "disk_write": 'rate(node_disk_written_bytes_total[5m])',
     }
     
     query = metric_queries.get(metric, metric_queries["cpu"])
