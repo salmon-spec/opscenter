@@ -87,7 +87,6 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .svc-name .status-dot.checking{background:var(--blue);animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .svc-badge{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500}
-.svc-badge.manual{background:rgba(45,212,191,.15);color:var(--accent)}
 .svc-badge.auto{background:rgba(59,130,246,.15);color:var(--blue)}
 .svc-badge.srv-offline{background:rgba(245,158,11,.15);color:var(--orange)}
 .svc-desc{font-size:12px;color:var(--text2);margin-top:6px}
@@ -96,12 +95,6 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .svc-url{font-size:11px;color:var(--text2);margin-top:8px;word-break:break-all;font-family:monospace}
 .svc-url a{color:var(--accent);text-decoration:none}
 .svc-url a:hover{text-decoration:underline}
-.svc-auth{margin-top:8px;display:flex;gap:12px;font-size:12px;align-items:center}
-.svc-auth .auth-item{display:flex;align-items:center;gap:4px}
-.svc-auth .auth-label{color:var(--text2)}
-.svc-auth .auth-val{font-family:monospace;background:var(--bg2);padding:1px 6px;border-radius:4px;cursor:pointer}
-.svc-auth .auth-val.hidden{filter:blur(3px);user-select:none}
-.svc-auth .auth-val:hover{filter:none}
 .svc-footer{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .btn-sm{font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px}
 .btn-sm:hover{color:var(--accent);border-color:var(--accent)}
@@ -206,7 +199,6 @@ createApp({
 
     // ========== Data ==========
     const groupConfig = reactive({ groups: [], serviceGroupMap: {} });
-    const manualServices = ref([]);   // from services.json
     const autoServices = ref([]);     // from /api/v2/services-with-status
     const servers = ref([]);
     const currentServerId = ref('');
@@ -257,33 +249,6 @@ createApp({
       } catch(e) { console.warn('group-config load failed:', e.message); }
     }
 
-    // ========== Load services.json (manual) ==========
-    async function loadManualServices() {
-      try {
-        const data = await apiGet('/ops/groups.json/../services.json');
-        if (!data.groups) { manualServices.value = []; return; }
-        const Host = location.host;
-        const proto = location.protocol;
-        const svcs = [];
-        for (const g of data.groups) {
-          for (const s of (g.services || [])) {
-            let fullUrl = s.url || '';
-            if (fullUrl.startsWith('/')) fullUrl = `${proto}//${Host}${fullUrl}`;
-            else if (fullUrl.startsWith(':')) fullUrl = `${proto}//${Host}${fullUrl}`;
-            else if (!fullUrl.startsWith('http')) fullUrl = `${proto}//${Host}/${fullUrl}`;
-            svcs.push({
-              ...s, fullUrl, origin: 'manual',
-              status: 'checking', // will be updated by health check
-              serviceKey: `manual:${s.name}`,
-              groupId: groupConfig.serviceGroupMap[`manual:${s.name}`] || null,
-              serverStatus: 'online', // manual services assumed online server
-            });
-          }
-        }
-        manualServices.value = svcs;
-      } catch(e) { console.warn('services.json load failed:', e.message); manualServices.value = []; }
-    }
-
     // ========== Load auto services via backend API ==========
     async function loadAutoServices() {
       try {
@@ -316,18 +281,6 @@ createApp({
       } catch(e) { console.warn('auto services load failed:', e.message); autoServices.value = []; }
     }
 
-    // ========== Health check manual services via backend ==========
-    async function checkManualServices() {
-      const promises = manualServices.value.map(async (svc) => {
-        if (!svc.fullUrl) { svc.status = 'unknown'; return; }
-        try {
-          const res = await apiGet(`${API}/health-check-url?url=${encodeURIComponent(svc.fullUrl)}`);
-          svc.status = res.status === 'online' ? 'online' : 'offline';
-        } catch(e) { svc.status = 'offline'; }
-      });
-      await Promise.allSettled(promises);
-    }
-
     // ========== Compute effective status ==========
     function effectiveStatus(svc) {
       if (svc.origin === 'auto' && svc.serverStatus === 'offline') return 'server_offline';
@@ -339,8 +292,7 @@ createApp({
 
     // ========== Compute service groups ==========
     const allServices = computed(() => {
-      const all = [...manualServices.value, ...autoServices.value];
-      return all;
+      return [...autoServices.value];
     });
 
     const serviceGroups = computed(() => {
@@ -353,10 +305,8 @@ createApp({
           // Priority 1: explicit mapping in serviceGroupMap
           const mapped = groupConfig.serviceGroupMap[s.serviceKey];
           if (mapped) return mapped === g.id;
-          // Priority 2: for manual services, check if groupId matches
-          if (s.groupId && s.groupId === g.id) return true;
-          // Priority 3: for auto services, match by category name
-          if (s.origin === 'auto' && s.category) {
+          // Priority 2: match by category name
+          if (s.category) {
             const catNorm = (s.category || '').toLowerCase().replace(/[\s\-_]/g, '');
             const gNorm = (g.name || '').toLowerCase().replace(/[\s\-_]/g, '');
             if (catNorm === gNorm || catNorm.includes(gNorm) || gNorm.includes(catNorm)) return true;
@@ -372,9 +322,8 @@ createApp({
       const ungrouped = allServices.value.filter(s => {
         const mapped = groupConfig.serviceGroupMap[s.serviceKey];
         if (mapped) return false; // has mapping
-        if (s.groupId && s.groupId !== 'ungrouped') return false; // has explicit group
         // Check if auto service was already matched by category
-        if (s.origin === 'auto' && s.category) {
+        if (s.category) {
           const matched = result.some(g => {
             if (g.id === 'ungrouped') return false;
             const catNorm = (s.category || '').toLowerCase().replace(/[\s\-_]/g, '');
@@ -414,9 +363,7 @@ createApp({
       const offline = all.filter(s => effectiveStatus(s) === 'offline').length;
       const srvOff = all.filter(s => effectiveStatus(s) === 'server_offline').length;
       const unknown = all.filter(s => effectiveStatus(s) === 'unknown' || effectiveStatus(s) === 'checking').length;
-      const manual = all.filter(s => s.origin === 'manual').length;
-      const auto = all.filter(s => s.origin === 'auto').length;
-      return { total: all.length, online, offline, srvOff, unknown, manual, auto };
+      return { total: all.length, online, offline, srvOff, unknown };
     });
 
     // ========== Group management ==========
@@ -599,8 +546,7 @@ createApp({
       updateClock();
       clockTimer = setInterval(updateClock, 1000);
       await loadGroupConfig();
-      await Promise.all([loadManualServices(), loadAutoServices(), loadServers()]);
-      checkManualServices();
+      await Promise.all([loadAutoServices(), loadServers()]);
       await loadMonitor();
       await loadEcharts();
     });
@@ -628,7 +574,7 @@ createApp({
     // ========== Template data ==========
     return {
       currentPage, darkMode, searchQuery, clock, collapsed,
-      groupConfig, manualServices, autoServices,
+      groupConfig, autoServices,
       filteredGroups, stats, effectiveStatus,
       showGroupModal, newGroupName, newGroupId, newGroupColor,
       addGroup, deleteGroup, moveServiceToGroup,
@@ -699,8 +645,7 @@ createApp({
         <div class="stat-card green"><div class="num">{{stats.online}}</div><div class="label">在线服务</div></div>
         <div class="stat-card red"><div class="num">{{stats.offline}}</div><div class="label">离线服务</div></div>
         <div class="stat-card orange"><div class="num">{{stats.srvOff}}</div><div class="label">服务器离线</div></div>
-        <div class="stat-card purple"><div class="num">{{stats.manual}}</div><div class="label">手动配置</div></div>
-        <div class="stat-card blue"><div class="num">{{stats.auto}}</div><div class="label">自动检测</div></div>
+        <div class="stat-card purple"><div class="num">{{stats.unknown}}</div><div class="label">状态未知</div></div>
       </div>
 
       <div style="margin-bottom:16px">
@@ -724,15 +669,12 @@ createApp({
                 {{s.name}}
               </div>
               <span class="svc-badge"
-                :class="effectiveStatus(s)==='server_offline' ? 'srv-offline' : s.origin">
-                {{effectiveStatus(s)==='server_offline' ? '服务器离线' : s.origin==='manual' ? '手动配置' : '自动检测'}}
+                :class="effectiveStatus(s)==='server_offline' ? 'srv-offline' : 'auto'">
+                {{effectiveStatus(s)==='server_offline' ? '服务器离线' : '自动检测'}}
               </span>
             </div>
             <div class="svc-desc">{{s.desc || s.description || ''}}</div>
-            <div class="svc-tags" v-if="s.tags && s.tags.length">
-              <span class="svc-tag" v-for="t in s.tags" :key="t">{{t}}</span>
-            </div>
-            <div class="svc-server-info" v-if="s.origin==='auto'">
+            <div class="svc-server-info">
               <svg width="12" height="12"><use href="#fa-server"/></svg>
               {{s.serverName}} ({{s.serverHost}})
               <span v-if="s.containerName" style="margin-left:6px">| {{s.containerName}}</span>
@@ -740,14 +682,8 @@ createApp({
             <div class="svc-url" v-if="s.fullUrl">
               <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
             </div>
-            <div class="svc-auth" v-if="s.username">
-              <div class="auth-item"><span class="auth-label">账号:</span><span class="auth-val" @click="copyText(s.username)">{{s.username}}</span></div>
-              <div class="auth-item"><span class="auth-label">密码:</span><span class="auth-val hidden" @click="copyText(s.password)" title="点击复制">{{s.password}}</span></div>
-            </div>
             <div class="svc-footer">
               <a v-if="s.fullUrl" :href="s.fullUrl" target="_blank" rel="noopener" class="btn-sm primary">打开服务</a>
-              <button v-if="s.username" class="btn-sm" @click="copyText(s.username)">复制账号</button>
-              <button v-if="s.password" class="btn-sm" @click="copyText(s.password)">复制密码</button>
               <select class="svc-move-select" :value="groupConfig.serviceGroupMap[s.serviceKey] || ''" @change="moveServiceToGroup(s.serviceKey, $event.target.value)">
                 <option value="">-- 移动到分组 --</option>
                 <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
