@@ -87,7 +87,7 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 
 .svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
 .svc-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;transition:all .2s;position:relative}
-.svc-card:hover{border-color:var(--accent);box-shadow:0 2px 12px rgba(45,212,191,.08)}
+.svc-card:hover{border-color:var(--accent);box-shadow:0 2px 12px rgba(45,212,191,.08);cursor:pointer;transform:translateY(-1px)}
 .svc-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
 .svc-name{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
 .svc-name .status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block}
@@ -420,6 +420,7 @@ createApp({
 
     // ========== Copy ==========
     function copyText(text) { navigator.clipboard.writeText(text).catch(() => {}); }
+    function openService(url) { if(url) window.open(url,'_blank'); }
 
     // ========== Monitor ==========
     async function loadServers() {
@@ -608,7 +609,7 @@ createApp({
       navServerId, navServerTabs,
       showGroupModal, newGroupName, newGroupId, newGroupColor,
       addGroup, deleteGroup, moveServiceToGroup,
-      copyText, iconMap,
+      copyText, iconMap, openService,
       servers, currentServerId, monitorData, containers,
       selectedMetric, historyHours, historyData, chartBox, metricCards,
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
@@ -705,7 +706,7 @@ createApp({
           </div>
         </div>
         <div class="svc-grid">
-          <div class="svc-card" v-for="s in g.services" :key="s.serviceKey">
+          <div class="svc-card" v-for="s in g.services" :key="s.serviceKey" @click="openService(s.fullUrl)">
             <div class="svc-card-top">
               <div class="svc-name">
                 <span class="status-dot" :class="effectiveStatus(s)"></span>
@@ -729,7 +730,6 @@ createApp({
               <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
             </div>
             <div class="svc-footer">
-              <a v-if="s.fullUrl" :href="s.fullUrl" target="_blank" rel="noopener" class="btn-sm primary">打开服务</a>
               <select class="svc-move-select" :value="groupConfig.serviceGroupMap[s.serviceKey] || ''" @change="moveServiceToGroup(s.serviceKey, $event.target.value)">
                 <option value="">-- 移动到分组 --</option>
                 <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
