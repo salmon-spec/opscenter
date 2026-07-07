@@ -23,3 +23,4 @@ Thumbs.db
 *.sqlite3
 *.bak
 frontend/*.py
+backend.bak.pre_v31/
