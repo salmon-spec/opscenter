@@ -84,6 +84,7 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .svc-status{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .svc-status.up{background:var(--green);box-shadow:0 0 4px var(--green)}
 .svc-status.down{background:var(--red)}
+.svc-status.checking{background:var(--blue);animation:pulse 1s infinite}
 .svc-status.unknown{background:var(--orange)}
 .svc-desc{font-size:11px;color:var(--text2)}
 .svc-tags{display:flex;flex-wrap:wrap;gap:4px}
@@ -311,7 +312,7 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
           <div class="summary-card" :class="offlineCount>0?'danger':''"><div class="sc-value">{{ offlineCount }}</div><div class="sc-label">异常服务</div></div>
           <div class="summary-card"><div class="sc-value">{{ servers.length }}</div><div class="sc-label">服务器</div></div>
           <div class="summary-card"><div class="sc-value">{{ serviceGroups.length }}</div><div class="sc-label">服务分组</div></div>
-          <div class="summary-card" :class="authRequiredCount>0?'warn':''"><div class="sc-value">{{ authRequiredCount }}</div><div class="sc-label">需认证</div></div>
+          <div class="summary-card"><div class="sc-value">{{ authRequiredCount }}</div><div class="sc-label">需认证</div></div>
         </div>
 
         <!-- Service Groups -->
@@ -330,7 +331,7 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
               <div class="svc-top">
                 <div>
                   <div class="svc-name">
-                    <span :class="['svc-status', svc.status==='online'?'up':svc.status==='offline'?'down':'unknown']"></span>
+                    <span :class="['svc-status', svc.status==='online'?'up':svc.status==='offline'?'down':svc.status==='checking'?'checking':'unknown']"></span>
                     {{ svc.name }}
                   </div>
                   <div class="svc-desc">{{ svc.desc }}</div>
@@ -823,14 +824,35 @@ createApp({
             ...s,
             source: 'manual',
             _showPwd: false,
-            status: 'unknown',
+            status: 'checking',
             fullUrl: s.url.startsWith('http') ? s.url : (s.url.startsWith(':') ? origin + s.url : origin + s.url),
           })),
         }));
+        // Health check all manual services
+        checkManualServices();
       } catch (e) {
         console.warn('services.json load failed:', e.message);
         manualGroups.value = [];
       }
+    }
+
+    /* Health check manual services via HTTP HEAD/GET */
+    async function checkManualServices() {
+      const allManual = manualGroups.value.flatMap(g => g.services);
+      await Promise.allSettled(allManual.map(async (svc) => {
+        try {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 5000);
+          const res = await fetch(svc.fullUrl, { method: 'HEAD', mode: 'no-cors', signal: ctrl.signal });
+          clearTimeout(timer);
+          // no-cors: response.type is 'opaque', status is 0 but fetch succeeded = online
+          // normal cors: status 200-399 = online, 401 = online (needs auth), 403+ = check
+          svc.status = 'online';
+        } catch (e) {
+          // fetch failed (timeout, network error) = offline
+          svc.status = 'offline';
+        }
+      }));
     }
 
     /* ========== Load API Services (auto-discovered) ========== */
@@ -900,28 +922,26 @@ createApp({
     /* ========== Merged Computed: Manual + Auto Services ========== */
     const serviceGroups = computed(() => {
       const groups = [...manualGroups.value];
-      // Build auto service groups by category
+      // Helper: normalize name for dedup comparison (lowercase, strip spaces/hyphens/underscores)
+      const normalize = n => (n || '').toLowerCase().replace(/[\s\-_]/g, '');
+      // Build set of all manual service normalized names (global dedup)
+      const manualNorms = new Set(groups.flatMap(g => g.services.map(s => normalize(s.name))));
+      // Build auto service groups by category, skip already-manually-configured services
       const autoByCategory = {};
       for (const svc of autoServices.value) {
+        if (manualNorms.has(normalize(svc.name))) continue; // Skip duplicate
         const cat = svc.category || '其他';
         if (!autoByCategory[cat]) autoByCategory[cat] = [];
         autoByCategory[cat].push(svc);
       }
-      // Merge auto services into matching manual groups (by checking if category name overlaps)
-      const manualGroupNames = new Set(groups.map(g => g.group));
+      // Merge auto services into matching manual groups (by category name overlap)
       for (const [cat, svcs] of Object.entries(autoByCategory)) {
-        // Find a matching manual group (case-insensitive, partial match)
         const matched = groups.find(g =>
           g.group === cat || g.group.toLowerCase().includes(cat.toLowerCase()) || cat.toLowerCase().includes(g.group.toLowerCase())
         );
         if (matched) {
-          // Add auto services not already in manual group (by name)
-          const existingNames = new Set(matched.services.map(s => s.name));
-          for (const s of svcs) {
-            if (!existingNames.has(s.name)) matched.services.push(s);
-          }
+          matched.services.push(...svcs);
         } else {
-          // Create new group for unmatched category
           groups.push({
             group: cat,
             icon: '#fa-box',
@@ -949,7 +969,7 @@ createApp({
     const allMergedServices = computed(() => serviceGroups.value.flatMap(g => g.services));
     const totalServices = computed(() => allMergedServices.value.length);
     const onlineCount = computed(() => allMergedServices.value.filter(s => s.status === 'online').length);
-    const offlineCount = computed(() => allMergedServices.value.filter(s => s.status === 'offline' || s.status === 'unknown').length);
+    const offlineCount = computed(() => allMergedServices.value.filter(s => s.status === 'offline').length);
     const authRequiredCount = computed(() => allMergedServices.value.filter(s => s.authType === 'manual' || s.username).length);
 
     /* ========== Service Actions ========== */
