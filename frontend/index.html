@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.1 运维工作台</title>
+<title>OpsCenter v3.2 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
@@ -63,6 +63,17 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .stat-card.purple .num{color:var(--purple)}
 .stat-card.orange .num{color:var(--orange)}
 .stat-card.teal .num{color:var(--accent)}
+
+
+/* ===== Server Tab Bar ===== */
+.server-tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.server-tab{display:flex;align-items:center;gap:8px;padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;color:var(--text2);transition:all .15s}
+.server-tab:hover{border-color:var(--accent);color:var(--text1)}
+.server-tab.active{background:rgba(45,212,191,.12);border-color:var(--accent);color:var(--accent);font-weight:500}
+.server-tab .st-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.server-tab .st-dot.online{background:var(--green);box-shadow:0 0 4px var(--green)}
+.server-tab .st-dot.offline{background:var(--red);box-shadow:0 0 4px var(--red)}
+.server-tab .st-count{font-size:11px;padding:2px 8px;border-radius:10px;background:var(--bg);margin-left:4px}
 
 /* ===== Service Group ===== */
 .group-section{margin-bottom:24px}
@@ -291,8 +302,23 @@ createApp({
     }
 
     // ========== Compute service groups ==========
+    const navServerId = ref('');  // server filter for nav page
+
     const allServices = computed(() => {
-      return [...autoServices.value];
+      let svcs = [...autoServices.value];
+      // Filter by selected server on nav page
+      if (navServerId.value) {
+        svcs = svcs.filter(s => s.serverId === navServerId.value);
+      }
+      return svcs;
+    });
+
+    // Server list with service counts for nav page
+    const navServerTabs = computed(() => {
+      return servers.value.map(srv => ({
+        ...srv,
+        serviceCount: autoServices.value.filter(s => s.serverId === srv.id).length
+      }));
     });
 
     const serviceGroups = computed(() => {
@@ -547,6 +573,9 @@ createApp({
       clockTimer = setInterval(updateClock, 1000);
       await loadGroupConfig();
       await Promise.all([loadAutoServices(), loadServers()]);
+      // Default nav server to first online server
+      const onlineSrv = servers.value.find(s => s.status === 'online');
+      if (onlineSrv) navServerId.value = onlineSrv.id;
       await loadMonitor();
       await loadEcharts();
     });
@@ -576,6 +605,7 @@ createApp({
       currentPage, darkMode, searchQuery, clock, collapsed,
       groupConfig, autoServices,
       filteredGroups, stats, effectiveStatus,
+      navServerId, navServerTabs,
       showGroupModal, newGroupName, newGroupId, newGroupColor,
       addGroup, deleteGroup, moveServiceToGroup,
       copyText, iconMap,
@@ -593,7 +623,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.1</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.2</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -640,12 +670,25 @@ createApp({
 
     <!-- ===== NAV PAGE ===== -->
     <div class="content" v-if="currentPage==='nav'">
+      <!-- Server Tabs -->
+      <div class="server-tabs">
+        <div class="server-tab" :class="{active: !navServerId}" @click="navServerId=''">
+          全部服务器
+          <span class="st-count">{{autoServices.length}}</span>
+        </div>
+        <div class="server-tab" v-for="srv in navServerTabs" :key="srv.id"
+             :class="{active: navServerId===srv.id}" @click="navServerId=srv.id">
+          <span class="st-dot" :class="srv.status==='online'?'online':'offline'"></span>
+          {{srv.name}}
+          <span class="st-count">{{srv.serviceCount}}</span>
+        </div>
+      </div>
+
       <div class="stat-row">
         <div class="stat-card teal"><div class="num">{{stats.total}}</div><div class="label">服务总数</div></div>
-        <div class="stat-card green"><div class="num">{{stats.online}}</div><div class="label">在线服务</div></div>
-        <div class="stat-card red"><div class="num">{{stats.offline}}</div><div class="label">离线服务</div></div>
+        <div class="stat-card green"><div class="num">{{stats.online}}</div><div class="label">在线</div></div>
+        <div class="stat-card red"><div class="num">{{stats.offline}}</div><div class="label">离线</div></div>
         <div class="stat-card orange"><div class="num">{{stats.srvOff}}</div><div class="label">服务器离线</div></div>
-        <div class="stat-card purple"><div class="num">{{stats.unknown}}</div><div class="label">状态未知</div></div>
       </div>
 
       <div style="margin-bottom:16px">
@@ -674,10 +717,13 @@ createApp({
               </span>
             </div>
             <div class="svc-desc">{{s.desc || s.description || ''}}</div>
-            <div class="svc-server-info">
+            <div class="svc-server-info" v-if="!navServerId">
               <svg width="12" height="12"><use href="#fa-server"/></svg>
-              {{s.serverName}} ({{s.serverHost}})
+              {{s.serverName}}
               <span v-if="s.containerName" style="margin-left:6px">| {{s.containerName}}</span>
+            </div>
+            <div class="svc-server-info" v-else-if="s.containerName">
+              {{s.containerName}}
             </div>
             <div class="svc-url" v-if="s.fullUrl">
               <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
