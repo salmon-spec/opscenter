@@ -1,773 +1,666 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.2</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>OpsCenter v4.0</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6/css/all.min.css">
 <style>
-:root{--bg:#0f172a;--bg2:#1e293b;--bg3:#334155;--fg:#e2e8f0;--fg2:#94a3b8;--accent:#38bdf8;--accent2:#818cf8;--green:#22c55e;--orange:#f97316;--red:#ef4444;--yellow:#eab308;--blue:#3b82f6;--radius:10px;--sidebar-w:220px}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;background:var(--bg);color:var(--fg);overflow:hidden;height:100vh}
-#app{display:flex;height:100vh}
+:root{
+  --bg:#0f172a;--bg2:#1e293b;--bg3:#334155;--fg:#e2e8f0;--fg2:#94a3b8;
+  --accent:#38bdf8;--green:#22c55e;--orange:#f97316;--red:#ef4444;--yellow:#eab308;
+  --radius:8px;--shadow:0 2px 8px rgba(0,0,0,.3);
+}
+html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+#app{display:flex;height:100%}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:3px}
+
 /* Sidebar */
-.sidebar{width:var(--sidebar-w);background:var(--bg2);border-right:1px solid var(--bg3);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
-.sidebar-header{padding:16px;border-bottom:1px solid var(--bg3);text-align:center}
-.sidebar-header h1{font-size:16px;color:var(--accent);font-weight:700}
-.sidebar-header .ver{font-size:11px;color:var(--fg2);margin-top:2px}
-.sidebar-nav{flex:1;overflow-y:auto;padding:8px}
-.nav-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:8px;cursor:pointer;transition:all .15s;color:var(--fg2);font-size:14px;margin-bottom:2px}
-.nav-item:hover{background:var(--bg3);color:var(--fg)}
-.nav-item.active{background:rgba(56,189,248,.15);color:var(--accent)}
+.sidebar{width:220px;min-width:220px;background:var(--bg2);display:flex;flex-direction:column;border-right:1px solid var(--bg3);overflow:hidden}
+.sidebar-brand{padding:20px 16px;border-bottom:1px solid var(--bg3);display:flex;align-items:center;gap:10px}
+.sidebar-brand h1{font-size:18px;font-weight:700;color:var(--accent)}
+.sidebar-brand .badge{font-size:10px;background:var(--accent);color:var(--bg);padding:2px 6px;border-radius:10px;font-weight:600}
+.sidebar-nav{flex:1;padding:12px 0;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer;color:var(--fg2);transition:all .2s;font-size:14px;border-left:3px solid transparent}
+.nav-item:hover{background:rgba(56,189,248,.08);color:var(--fg)}
+.nav-item.active{background:rgba(56,189,248,.12);color:var(--accent);border-left-color:var(--accent)}
 .nav-item i{width:18px;text-align:center}
-.sidebar-servers{border-top:1px solid var(--bg3);padding:10px 8px;max-height:200px;overflow-y:auto}
-.sidebar-servers .label{font-size:11px;color:var(--fg2);padding:4px 8px;text-transform:uppercase;letter-spacing:.5px}
-.server-item{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--fg2);transition:all .15s}
-.server-item:hover{background:var(--bg3);color:var(--fg)}
-.server-item.active{background:rgba(56,189,248,.12);color:var(--accent)}
-.server-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.server-dot.online{background:var(--green)}
-.server-dot.offline{background:var(--red)}
+.sidebar-servers{border-top:1px solid var(--bg3);padding:12px 16px;max-height:260px;overflow-y:auto}
+.sidebar-servers h3{font-size:11px;text-transform:uppercase;color:var(--fg2);margin-bottom:8px;letter-spacing:1px}
+.sidebar-srv{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;color:var(--fg2);cursor:pointer;transition:color .2s}
+.sidebar-srv:hover{color:var(--fg)}
+.status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.status-dot.online,.status-dot.up{background:var(--green)}
+.status-dot.offline,.status-dot.down{background:var(--red)}
+.status-dot.warning{background:var(--orange)}
+.status-dot.unknown{background:#64748b}
+.status-dot.running{background:var(--green)}
+.status-dot.exited{background:var(--red)}
+
 /* Main */
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
-.topbar{height:48px;background:var(--bg2);border-bottom:1px solid var(--bg3);display:flex;align-items:center;padding:0 20px;gap:12px;flex-shrink:0}
-.topbar h2{font-size:15px;font-weight:600;color:var(--fg);white-space:nowrap}
-.topbar .spacer{flex:1}
-.server-selector{background:var(--bg3);border:1px solid var(--bg3);border-radius:6px;color:var(--fg);padding:5px 10px;font-size:13px;cursor:pointer;outline:none}
-.server-selector:focus{border-color:var(--accent)}
-.content{flex:1;overflow-y:auto;padding:20px}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--bg3);background:var(--bg2);min-height:56px}
+.topbar h2{font-size:18px;font-weight:600}
+.topbar-actions{display:flex;align-items:center;gap:12px}
+.content{flex:1;overflow-y:auto;padding:24px}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border:none;border-radius:var(--radius);font-size:13px;cursor:pointer;transition:all .2s;font-family:inherit}
+.btn-primary{background:var(--accent);color:var(--bg)}
+.btn-primary:hover{filter:brightness(1.1)}
+.btn-danger{background:var(--red);color:#fff}
+.btn-danger:hover{filter:brightness(1.1)}
+.btn-ghost{background:transparent;color:var(--fg2);border:1px solid var(--bg3)}
+.btn-ghost:hover{border-color:var(--fg2);color:var(--fg)}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
 /* Cards */
-.card{background:var(--bg2);border-radius:var(--radius);border:1px solid var(--bg3);padding:16px;margin-bottom:16px}
-.card-title{font-size:14px;font-weight:600;color:var(--fg);margin-bottom:12px;display:flex;align-items:center;gap:8px}
-/* Service cards */
-.svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px}
-.svc-card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:14px;cursor:pointer;transition:all .2s;position:relative}
-.svc-card:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.3)}
-.svc-card.offline-server{opacity:.5}
-.svc-card.offline-server:hover{opacity:.7}
-.svc-name{font-size:14px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px}
-.svc-desc{font-size:12px;color:var(--fg2);margin-bottom:8px}
-.svc-meta{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--fg2)}
-.svc-status{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.svc-status.up{background:var(--green)}
-.svc-status.down{background:var(--red)}
-.svc-status.unknown{background:var(--fg2)}
-.svc-status.checking{background:var(--blue);animation:pulse 1s infinite}
-.svc-server-tag{font-size:10px;background:var(--bg3);padding:1px 6px;border-radius:4px}
-.svc-offline-badge{position:absolute;top:8px;right:8px;font-size:10px;background:rgba(239,68,68,.2);color:var(--red);padding:2px 6px;border-radius:4px}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:16px;transition:all .2s}
+.card:hover{border-color:rgba(56,189,248,.3)}
+
+/* Service Card */
+.srv-card{cursor:pointer;position:relative;display:flex;flex-direction:column;gap:6px}
+.srv-card .srv-head{display:flex;align-items:center;gap:8px}
+.srv-card .srv-icon{width:32px;height:32px;border-radius:6px;background:var(--bg3);display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:14px}
+.srv-card .srv-name{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srv-card .srv-pin{position:absolute;top:8px;right:8px;color:var(--yellow);font-size:11px}
+.srv-card .srv-cat{font-size:11px;color:var(--fg2)}
+.srv-card .srv-desc{font-size:12px;color:var(--fg2);line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
 /* Group */
-.group-section{margin-bottom:20px}
-.group-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer;padding:8px 0}
+.group-header{display:flex;align-items:center;gap:10px;padding:12px 0;cursor:pointer;user-select:none}
 .group-header h3{font-size:15px;font-weight:600;color:var(--fg)}
 .group-header .count{font-size:12px;color:var(--fg2);background:var(--bg3);padding:2px 8px;border-radius:10px}
 .group-header .chevron{color:var(--fg2);transition:transform .2s;font-size:12px}
-.group-header .chevron.collapsed{transform:rotate(-90deg)}
-.group-color{width:4px;height:20px;border-radius:2px;flex-shrink:0}
-/* Monitor */
-.stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:16px}
-.stat-card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:14px;text-align:center}
-.stat-val{font-size:28px;font-weight:700;margin:4px 0}
-.stat-label{font-size:12px;color:var(--fg2)}
-.stat-val.green{color:var(--green)}
-.stat-val.orange{color:var(--orange)}
-.stat-val.red{color:var(--red)}
-.chart-box{height:280px;margin-bottom:12px}
-/* Tools */
-.tool-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
-.tool-card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:14px}
-.tool-card h4{font-size:14px;font-weight:600;margin-bottom:10px;color:var(--accent)}
-.cmd-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--bg3);font-size:13px;font-family:'Cascadia Code',Consolas,monospace}
-.cmd-item:last-child{border-bottom:none}
-.cmd-item .copy-btn{background:var(--bg3);border:none;color:var(--fg2);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;flex-shrink:0}
-.cmd-item .copy-btn:hover{color:var(--accent)}
-/* Resources / Credentials */
-.cred-table{width:100%;border-collapse:collapse;font-size:13px}
-.cred-table th{text-align:left;padding:8px 10px;background:var(--bg3);color:var(--fg2);font-weight:600;border-bottom:1px solid var(--bg3)}
-.cred-table td{padding:8px 10px;border-bottom:1px solid var(--bg3)}
-.cred-table tr:hover td{background:rgba(56,189,248,.05)}
-.pwd-cell{display:flex;align-items:center;gap:6px}
-.pwd-dots{letter-spacing:2px;color:var(--fg2);user-select:none}
-.copy-btn-sm{background:var(--bg3);border:none;color:var(--fg2);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px}
-.copy-btn-sm:hover{color:var(--accent)}
-/* Manual service form */
-.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.form-field{display:flex;flex-direction:column;gap:4px}
-.form-field label{font-size:12px;color:var(--fg2)}
-.form-field input,.form-field select,.form-field textarea{background:var(--bg3);border:1px solid var(--bg3);border-radius:6px;color:var(--fg);padding:6px 10px;font-size:13px;outline:none}
-.form-field input:focus,.form-field select:focus,.form-field textarea:focus{border-color:var(--accent)}
-.btn{padding:6px 14px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s}
-.btn-primary{background:var(--accent);color:var(--bg)}
-.btn-primary:hover{background:#7dd3fc}
-.btn-danger{background:rgba(239,68,68,.2);color:var(--red)}
-.btn-danger:hover{background:rgba(239,68,68,.3)}
-.btn-secondary{background:var(--bg3);color:var(--fg2)}
-.btn-secondary:hover{color:var(--fg)}
-/* Loading / empty */
-.loading{text-align:center;padding:40px;color:var(--fg2)}
-.empty{text-align:center;padding:40px;color:var(--fg2);font-size:14px}
-.toast{position:fixed;bottom:20px;right:20px;background:var(--accent);color:var(--bg);padding:10px 20px;border-radius:8px;font-size:13px;font-weight:500;z-index:9999;animation:slideIn .3s}
-@keyframes slideIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
-/* Responsive */
-@media(max-width:768px){.sidebar{width:60px}.sidebar-header h1,.nav-item span,.server-item span,.sidebar-servers .label{display:none}.svc-grid{grid-template-columns:1fr}}
+.group-header .chevron.open{transform:rotate(90deg)}
+
+/* Server Card */
+.server-card .sc-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.server-card .sc-name{font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
+.server-card .sc-host{font-size:12px;color:var(--fg2);margin-bottom:10px}
+.server-card .sc-metrics{display:flex;gap:12px;margin-bottom:12px}
+.server-card .sc-metric{text-align:center;flex:1}
+.server-card .sc-metric .val{font-size:18px;font-weight:700}
+.server-card .sc-metric .label{font-size:11px;color:var(--fg2)}
+.server-card .sc-actions{display:flex;gap:6px;flex-wrap:wrap}
+.server-card .sc-info{font-size:12px;color:var(--fg2);margin-top:8px;line-height:1.6}
+
+/* Grid */
+.grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media(max-width:1200px){.grid-4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:900px){.grid-3,.grid-4{grid-template-columns:1fr}.grid-2{grid-template-columns:1fr}}
+
+/* Search */
+.search-box{position:relative}
+.search-box input{width:100%;padding:8px 12px 8px 36px;background:var(--bg);border:1px solid var(--bg3);border-radius:var(--radius);color:var(--fg);font-size:13px;outline:none;transition:border-color .2s}
+.search-box input:focus{border-color:var(--accent)}
+.search-box i{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--fg2);font-size:13px}
+
+/* Modal */
+.modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:1000}
+.modal{background:var(--bg2);border:1px solid var(--bg3);border-radius:12px;padding:24px;width:460px;max-width:90vw;max-height:80vh;overflow-y:auto}
+.modal h3{font-size:16px;font-weight:600;margin-bottom:16px}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:12px;color:var(--fg2);margin-bottom:4px}
+.form-group input,.form-group textarea,.form-group select{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--bg3);border-radius:var(--radius);color:var(--fg);font-size:13px;outline:none;font-family:inherit}
+.form-group input:focus,.form-group textarea:focus,.form-group select:focus{border-color:var(--accent)}
+.form-group textarea{resize:vertical;min-height:60px}
+.form-group select{cursor:pointer}
+.modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+
+/* Gauge */
+.gauge-card{text-align:center;padding:20px}
+.gauge-card .gauge-label{font-size:13px;color:var(--fg2);margin-bottom:6px}
+.gauge-card .gauge-val{font-size:36px;font-weight:700;line-height:1}
+.gauge-card .gauge-sub{font-size:12px;color:var(--fg2);margin-top:4px}
+
+/* Tabs */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--bg3);margin-bottom:20px}
+.tab{padding:10px 20px;cursor:pointer;color:var(--fg2);font-size:13px;border-bottom:2px solid transparent;transition:all .2s}
+.tab:hover{color:var(--fg)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* Table */
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:10px 12px;color:var(--fg2);font-weight:600;border-bottom:1px solid var(--bg3);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+td{padding:10px 12px;border-bottom:1px solid rgba(51,65,85,.5)}
+tr:hover td{background:rgba(56,189,248,.04)}
+
+/* Toast */
+.toast-container{position:fixed;top:20px;right:20px;z-index:2000;display:flex;flex-direction:column;gap:8px}
+.toast{padding:12px 20px;border-radius:var(--radius);color:#fff;font-size:13px;animation:slideIn .3s;min-width:200px;box-shadow:var(--shadow)}
+.toast.success{background:var(--green)}
+.toast.error{background:var(--red)}
+.toast.info{background:var(--accent)}
+@keyframes slideIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+
+/* Discovery */
+.discovery-row{display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid rgba(51,65,85,.5)}
+.discovery-row:last-child{border-bottom:none}
+.discovery-info{display:flex;align-items:center;gap:12px}
+.discovery-detail{font-size:12px;color:var(--fg2)}
+.discovery-sources{display:flex;gap:6px;margin-top:4px}
+.discovery-source{font-size:11px;background:var(--bg3);padding:2px 8px;border-radius:10px;color:var(--fg2)}
+
+/* Spinner */
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Empty */
+.empty{text-align:center;padding:40px;color:var(--fg2)}
+.empty i{font-size:32px;margin-bottom:12px;display:block;opacity:.4}
+
+.chart-box{width:100%;height:300px;margin-bottom:16px}
 </style>
 </head>
 <body>
 <div id="app">
-<!-- Sidebar -->
-<aside class="sidebar">
-  <div class="sidebar-header">
-    <h1><i class="fas fa-server"></i> OpsCenter</h1>
-    <div class="ver">v3.2</div>
-  </div>
-  <nav class="sidebar-nav">
-    <div class="nav-item" :class="{active:page==='nav'}" @click="page='nav'">
-      <i class="fas fa-compass"></i><span>服务导航</span>
-    </div>
-    <div class="nav-item" :class="{active:page==='monitor'}" @click="page='monitor'">
-      <i class="fas fa-chart-line"></i><span>监控中心</span>
-    </div>
-    <div class="nav-item" :class="{active:page==='tools'}" @click="page='tools'">
-      <i class="fas fa-toolbox"></i><span>工具箱</span>
-    </div>
-    <div class="nav-item" :class="{active:page==='resources'}" @click="page='resources'">
-      <i class="fas fa-key"></i><span>资源管理</span>
-    </div>
-  </nav>
-  <div class="sidebar-servers">
-    <div class="label">服务器</div>
-    <div class="server-item" v-for="s in servers" :key="s.id"
-         :class="{active:currentServer===s.id}"
-         @click="switchServer(s.id)">
-      <span class="server-dot" :class="s.status"></span>
-      <span>{{s.name}}</span>
-    </div>
-  </div>
-</aside>
-
-<!-- Main -->
-<div class="main">
-  <div class="topbar">
-    <h2>{{pageTitle}}</h2>
-    <div class="spacer"></div>
-    <select class="server-selector" v-model="currentServer" @change="onServerSwitch" v-if="page==='nav'||page==='monitor'">
-      <option value="all">全部服务器</option>
-      <option v-for="s in servers" :key="s.id" :value="s.id">{{s.name}} ({{s.status==='online'?'在线':'离线'}})</option>
-    </select>
+  <!-- Toast -->
+  <div class="toast-container">
+    <div v-for="t in toasts" :key="t.id" :class="['toast',t.type]">{{t.msg}}</div>
   </div>
 
-  <div class="content">
-    <!-- ========== 服务导航 ========== -->
-    <div v-if="page==='nav'">
-      <div v-if="loading" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>
-      <div v-else-if="filteredGroups.length===0" class="empty">暂无服务数据</div>
-      <div v-else>
-        <div class="group-section" v-for="g in filteredGroups" :key="g.id">
-          <div class="group-header" @click="toggleGroup(g.id)">
-            <span class="group-color" :style="{background:g.color||'var(--accent)'}"></span>
-            <h3>{{g.name}}</h3>
-            <span class="count">{{getGroupServices(g.id).length}}</span>
-            <i class="fas fa-chevron-down chevron" :class="{collapsed:!expandedGroups[g.id]}"></i>
-          </div>
-          <div class="svc-grid" v-show="expandedGroups[g.id]">
-            <div class="svc-card" v-for="svc in getGroupServices(g.id)" :key="svc._key"
-                 :class="{'offline-server':svc.server_status==='offline'}"
-                 @click="openService(svc)">
-              <div class="svc-offline-badge" v-if="svc.server_status==='offline'">服务器离线</div>
-              <div class="svc-name">
-                <span class="svc-status" :class="getStatusClass(svc)"></span>
-                {{svc.name}}
-              </div>
-              <div class="svc-desc">{{svc.description||''}}</div>
-              <div class="svc-meta">
-                <span class="svc-server-tag">{{svc.server_name||'未知'}}</span>
-                <span v-if="svc.source==='manual'">手动</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <!-- Ungrouped services -->
-        <div class="group-section" v-if="ungroupedServices.length>0">
-          <div class="group-header" @click="toggleGroup('_ungrouped')">
-            <span class="group-color" style="background:var(--fg2)"></span>
-            <h3>未分组</h3>
-            <span class="count">{{ungroupedServices.length}}</span>
-            <i class="fas fa-chevron-down chevron" :class="{collapsed:!expandedGroups['_ungrouped']}"></i>
-          </div>
-          <div class="svc-grid" v-show="expandedGroups['_ungrouped']">
-            <div class="svc-card" v-for="svc in ungroupedServices" :key="svc._key"
-                 :class="{'offline-server':svc.server_status==='offline'}"
-                 @click="openService(svc)">
-              <div class="svc-offline-badge" v-if="svc.server_status==='offline'">服务器离线</div>
-              <div class="svc-name">
-                <span class="svc-status" :class="getStatusClass(svc)"></span>
-                {{svc.name}}
-              </div>
-              <div class="svc-desc">{{svc.description||''}}</div>
-              <div class="svc-meta">
-                <span class="svc-server-tag">{{svc.server_name||'未知'}}</span>
-              </div>
-            </div>
-          </div>
-        </div>
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <h1>OpsCenter</h1>
+      <span class="badge">v4.0</span>
+    </div>
+    <nav class="sidebar-nav">
+      <div v-for="n in navItems" :key="n.key" :class="['nav-item',{active:page===n.key}]" @click="page=n.key">
+        <i :class="'fa-solid '+n.icon"></i><span>{{n.label}}</span>
+      </div>
+    </nav>
+    <div class="sidebar-servers">
+      <h3>Servers</h3>
+      <div v-for="s in allServers" :key="s.id" class="sidebar-srv" @click="selectServer(s.id)">
+        <span :class="['status-dot',s.status]"></span>
+        <span>{{s.name}}</span>
       </div>
     </div>
+  </aside>
 
-    <!-- ========== 监控中心 ========== -->
-    <div v-if="page==='monitor'">
-      <div v-if="!monitorServer" class="empty">请选择一台服务器查看监控</div>
-      <div v-else-if="monitorLoading" class="loading"><i class="fas fa-spinner fa-spin"></i> 加载监控数据...</div>
-      <div v-else>
-        <div class="stat-grid">
-          <div class="stat-card">
-            <div class="stat-label">CPU 使用率</div>
-            <div class="stat-val" :class="metricClass(monitor.cpu_percent)">{{monitor.cpu_percent?.toFixed(1)||'--'}}%</div>
+  <!-- Main -->
+  <div class="main">
+    <header class="topbar">
+      <h2>{{pageTitle}}</h2>
+      <div class="topbar-actions">
+        <select v-if="page==='monitor'" v-model="monitorServerId" @change="loadMonitor" style="padding:6px 12px;background:var(--bg);border:1px solid var(--bg3);border-radius:var(--radius);color:var(--fg);font-size:13px">
+          <option value="">Select Server</option>
+          <option v-for="s in allServers" :key="s.id" :value="s.id">{{s.name}}</option>
+        </select>
+        <button v-if="page==='servers'" class="btn btn-primary" @click="openAddServer"><i class="fa-solid fa-plus"></i> Add Server</button>
+        <button v-if="page==='discovery'" class="btn btn-primary" @click="runDiscoveryAll" :disabled="discoveryRunning"><i class="fa-solid fa-play"></i> Run All</button>
+      </div>
+    </header>
+    <div class="content">
+
+      <!-- PAGE: Nav -->
+      <template v-if="page==='nav'">
+        <div style="max-width:400px;margin-bottom:20px">
+          <div class="search-box">
+            <i class="fa-solid fa-search"></i>
+            <input v-model="navSearch" placeholder="Search services...">
           </div>
-          <div class="stat-card">
-            <div class="stat-label">内存使用率</div>
-            <div class="stat-val" :class="metricClass(monitor.memory_percent)">{{monitor.memory_percent?.toFixed(1)||'--'}}%</div>
+        </div>
+        <div v-for="g in filteredGroups" :key="g.id||'ungrouped'" style="margin-bottom:8px">
+          <div class="group-header" @click="toggleGroup(g.id||'ungrouped')">
+            <i :class="['fa-solid fa-chevron-right chevron',{open:openGroups[g.id||'ungrouped']}]"></i>
+            <h3>{{g.name||'未分组'}}</h3>
+            <span class="count">{{g.services.length}}</span>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">磁盘使用率</div>
-            <div class="stat-val" :class="metricClass(monitor.disk_percent)">{{monitor.disk_percent?.toFixed(1)||'--'}}%</div>
+          <div v-show="openGroups[g.id||'ungrouped']" class="grid-3" style="padding-bottom:12px">
+            <div v-for="s in g.services" :key="s.id" class="card srv-card" @click="openServiceUrl(s)">
+              <span v-if="s.pinned" class="srv-pin"><i class="fa-solid fa-thumbtack"></i></span>
+              <div class="srv-head">
+                <div class="srv-icon"><i :class="getServiceIcon(s)"></i></div>
+                <div>
+                  <div class="srv-name">{{s.name}}</div>
+                  <span :class="['status-dot',s.status]" style="display:inline-block;vertical-align:middle"></span>
+                  <span class="srv-cat">{{s.category}}</span>
+                </div>
+              </div>
+              <div v-if="s.description" class="srv-desc">{{s.description}}</div>
+            </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">系统负载</div>
-            <div class="stat-val">{{monitor.load_1m?.toFixed(2)||'--'}}</div>
+        </div>
+        <div v-if="!filteredGroups.length" class="empty"><i class="fa-solid fa-compass"></i>No services found</div>
+      </template>
+
+      <!-- PAGE: Servers -->
+      <template v-if="page==='servers'">
+        <div class="grid-2">
+          <div v-for="s in allServers" :key="s.id" class="card server-card">
+            <div class="sc-head">
+              <div class="sc-name"><span :class="['status-dot',s.status]"></span>{{s.name}}</div>
+              <span style="font-size:12px;padding:3px 8px;border-radius:10px;font-weight:600" :style="{background:s.status==='online'?'rgba(34,197,94,.15)':s.status==='warning'?'rgba(249,115,22,.15)':s.status==='offline'?'rgba(239,68,68,.15)':'rgba(100,116,139,.15)',color:s.status==='online'?'var(--green)':s.status==='warning'?'var(--orange)':s.status==='offline'?'var(--red)':'var(--fg2)'}">{{s.status}}</span>
+            </div>
+            <div class="sc-host"><i class="fa-solid fa-network-wired" style="margin-right:4px"></i>{{s.host}}:{{s.ssh_port||22}}</div>
+            <div class="sc-metrics" v-if="s.metrics">
+              <div class="sc-metric"><div class="val" :style="{color:pctColor(s.metrics.cpu_percent)}">{{fmtPct(s.metrics.cpu_percent)}}</div><div class="label">CPU</div></div>
+              <div class="sc-metric"><div class="val" :style="{color:pctColor(s.metrics.memory_percent)}">{{fmtPct(s.metrics.memory_percent)}}</div><div class="label">Memory</div></div>
+              <div class="sc-metric"><div class="val" :style="{color:pctColor(s.metrics.disk_percent)}">{{fmtPct(s.metrics.disk_percent)}}</div><div class="label">Disk</div></div>
+            </div>
+            <div v-if="s.service_count!=null" style="font-size:12px;color:var(--fg2);margin-bottom:10px"><i class="fa-solid fa-cube" style="margin-right:4px"></i>{{s.service_count}} services</div>
+            <div v-if="s.status==='offline'" class="sc-info">
+              <div v-if="s.fail_count">Fail count: {{s.fail_count}}</div>
+              <div v-if="s.last_error" style="color:var(--red)">Error: {{s.last_error}}</div>
+              <div v-if="s.last_online_at">Last online: {{s.last_online_at}}</div>
+            </div>
+            <div class="sc-actions">
+              <button class="btn btn-ghost btn-sm" @click="checkServer(s.id)" :disabled="s._checking"><span v-if="s._checking" class="spinner"></span><i v-else class="fa-solid fa-plug"></i> Check</button>
+              <button class="btn btn-ghost btn-sm" @click="scanServer(s.id)" :disabled="s._scanning"><span v-if="s._scanning" class="spinner"></span><i v-else class="fa-solid fa-radar"></i> Scan</button>
+              <button class="btn btn-ghost btn-sm" @click="openEditServer(s)"><i class="fa-solid fa-pen"></i></button>
+              <button class="btn btn-danger btn-sm" @click="deleteServer(s.id)"><i class="fa-solid fa-trash"></i></button>
+              <button v-if="s.status!=='offline'" class="btn btn-ghost btn-sm" @click="toggleServer(s.id,false)"><i class="fa-solid fa-power-off"></i></button>
+              <button v-else class="btn btn-primary btn-sm" @click="toggleServer(s.id,true)"><i class="fa-solid fa-power-off"></i></button>
+            </div>
           </div>
-          <div class="stat-card">
-            <div class="stat-label">运行容器</div>
-            <div class="stat-val green">{{monitor.containers_running||0}}</div>
+        </div>
+        <div v-if="!allServers.length" class="empty"><i class="fa-solid fa-server"></i>No servers configured</div>
+      </template>
+
+      <!-- PAGE: Discovery -->
+      <template v-if="page==='discovery'">
+        <div class="card" style="margin-bottom:20px">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <h3 style="font-size:14px;font-weight:600;margin-bottom:4px">Service Auto-Discovery</h3>
+              <span style="font-size:12px;color:var(--fg2)">{{discoveryStatus?.status==='running'?'Discovery in progress...':discoveryStatus?.last_run?'Last run: '+discoveryStatus.last_run:'No discovery run yet'}}</span>
+            </div>
           </div>
         </div>
         <div class="card">
-          <div class="card-title"><i class="fas fa-chart-area"></i> CPU & 内存趋势</div>
-          <div class="chart-box" id="historyChart"></div>
-        </div>
-        <div class="card" v-if="monitor.containers&&monitor.containers.length">
-          <div class="card-title"><i class="fas fa-cube"></i> 容器列表 ({{monitor.containers.length}})</div>
-          <table class="cred-table">
-            <thead><tr><th>容器名</th><th>镜像</th><th>状态</th><th>操作</th></tr></thead>
-            <tbody>
-              <tr v-for="c in monitor.containers" :key="c.name||c.Names?.[0]">
-                <td>{{(c.name||c.Names?.[0]||'').replace(/^\//,'')}}</td>
-                <td style="font-size:12px;color:var(--fg2)">{{c.image||c.Image||''}}</td>
-                <td><span :style="{color:c.status==='running'||c.State==='running'?'var(--green)':'var(--red)'}">{{c.status||c.State||''}}</span></td>
-                <td><a :href="'/ops/ws/'" target="_blank" class="btn btn-secondary" style="font-size:11px;padding:2px 8px">日志</a></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ========== 工具箱 ========== -->
-    <div v-if="page==='tools'">
-      <div class="tool-grid">
-        <div class="tool-card">
-          <h4><i class="fas fa-terminal"></i> Docker 常用命令</h4>
-          <div class="cmd-item" v-for="(cmd,i) in toolCmds.docker" :key="i">
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="cmd">{{cmd}}</span>
-            <button class="copy-btn" @click="copyText(cmd)">复制</button>
-          </div>
-        </div>
-        <div class="tool-card">
-          <h4><i class="fas fa-network-wired"></i> 网络排查</h4>
-          <div class="cmd-item" v-for="(cmd,i) in toolCmds.network" :key="i">
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="cmd">{{cmd}}</span>
-            <button class="copy-btn" @click="copyText(cmd)">复制</button>
-          </div>
-        </div>
-        <div class="tool-card">
-          <h4><i class="fas fa-shield-alt"></i> 安全检查</h4>
-          <div class="cmd-item" v-for="(cmd,i) in toolCmds.security" :key="i">
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="cmd">{{cmd}}</span>
-            <button class="copy-btn" @click="copyText(cmd)">复制</button>
-          </div>
-        </div>
-        <div class="tool-card">
-          <h4><i class="fas fa-database"></i> 数据库运维</h4>
-          <div class="cmd-item" v-for="(cmd,i) in toolCmds.database" :key="i">
-            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="cmd">{{cmd}}</span>
-            <button class="copy-btn" @click="copyText(cmd)">复制</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ========== 资源管理 ========== -->
-    <div v-if="page==='resources'">
-      <!-- Credentials -->
-      <div class="card">
-        <div class="card-title"><i class="fas fa-key"></i> 服务凭证</div>
-        <table class="cred-table">
-          <thead><tr><th>服务</th><th>用户名</th><th>密码</th><th>备注</th></tr></thead>
-          <tbody>
-            <tr v-for="c in credentials" :key="c.name">
-              <td>{{c.name}}</td>
-              <td>{{c.user}}</td>
-              <td>
-                <div class="pwd-cell">
-                  <span class="pwd-dots">********</span>
-                  <button class="copy-btn-sm" @click="copyText(c.password)" title="复制密码">
-                    <i class="fas fa-copy"></i>
-                  </button>
+          <div v-for="s in allServers" :key="s.id" class="discovery-row">
+            <div class="discovery-info">
+              <span :class="['status-dot',s.status]"></span>
+              <div>
+                <div style="font-size:14px;font-weight:600">{{s.name}}</div>
+                <div class="discovery-detail">{{s.service_count||0}} services</div>
+                <div class="discovery-sources">
+                  <span class="discovery-source">Docker</span>
+                  <span class="discovery-source">Port</span>
+                  <span class="discovery-source">Prometheus</span>
+                  <span class="discovery-source">Nginx</span>
                 </div>
-              </td>
-              <td style="color:var(--fg2);font-size:12px">{{c.note||''}}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <!-- Manual Services -->
-      <div class="card">
-        <div class="card-title">
-          <i class="fas fa-plus-circle"></i> 手动服务管理
-          <button class="btn btn-primary" style="margin-left:auto;font-size:12px" @click="showAddForm=!showAddForm">
-            {{showAddForm?'取消':'添加服务'}}
-          </button>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" @click="runDiscovery(s.id)" :disabled="discoveryRunning"><i class="fa-solid fa-play"></i> Run</button>
+          </div>
+          <div v-if="!allServers.length" class="empty"><i class="fa-solid fa-magnifying-glass"></i>No servers to discover</div>
         </div>
-        <div v-if="showAddForm" style="margin-bottom:16px;padding:12px;background:var(--bg3);border-radius:8px">
-          <div class="form-grid">
-            <div class="form-field">
-              <label>服务名称</label>
-              <input v-model="newSvc.name" placeholder="如：Nacos">
+      </template>
+
+      <!-- PAGE: Monitor -->
+      <template v-if="page==='monitor'">
+        <div v-if="!monitorServerId" class="empty"><i class="fa-solid fa-chart-line"></i>Select a server to view metrics</div>
+        <template v-else>
+          <div class="grid-4" style="margin-bottom:20px">
+            <div class="card gauge-card">
+              <div class="gauge-label">CPU</div>
+              <div class="gauge-val" :style="{color:pctColor(monitorData?.cpu_percent)}">{{fmtPct(monitorData?.cpu_percent)}}</div>
+              <div class="gauge-sub" v-if="monitorData">{{monitorData.cpu_count||''}} cores</div>
             </div>
-            <div class="form-field">
-              <label>URL</label>
-              <input v-model="newSvc.url" placeholder="如：/nacos/">
+            <div class="card gauge-card">
+              <div class="gauge-label">Memory</div>
+              <div class="gauge-val" :style="{color:pctColor(monitorData?.memory_percent)}">{{fmtPct(monitorData?.memory_percent)}}</div>
+              <div class="gauge-sub" v-if="monitorData">{{fmtBytes(monitorData.memory_used)}} / {{fmtBytes(monitorData.memory_total)}}</div>
             </div>
-            <div class="form-field">
-              <label>分类</label>
-              <input v-model="newSvc.category" placeholder="如：微服务">
+            <div class="card gauge-card">
+              <div class="gauge-label">Disk</div>
+              <div class="gauge-val" :style="{color:pctColor(monitorData?.disk_percent)}">{{fmtPct(monitorData?.disk_percent)}}</div>
+              <div class="gauge-sub" v-if="monitorData">{{fmtBytes(monitorData.disk_used)}} / {{fmtBytes(monitorData.disk_total)}}</div>
             </div>
-            <div class="form-field">
-              <label>图标 (Font Awesome)</label>
-              <input v-model="newSvc.icon" placeholder="如：fa-cubes">
-            </div>
-            <div class="form-field">
-              <label>描述</label>
-              <input v-model="newSvc.description" placeholder="服务描述">
-            </div>
-            <div class="form-field">
-              <label>所属分组</label>
-              <select v-model="newSvc.group_id">
-                <option value="">未分组</option>
-                <option v-for="g in groups" :key="g.id" :value="g.id">{{g.name}}</option>
-              </select>
+            <div class="card gauge-card">
+              <div class="gauge-label">Load Avg</div>
+              <div class="gauge-val" style="color:var(--accent)">{{monitorData?.load_1min?.toFixed(2)||'-'}}</div>
+              <div class="gauge-sub" v-if="monitorData">{{monitorData.load_5min?.toFixed(2)}} / {{monitorData.load_15min?.toFixed(2)}}</div>
             </div>
           </div>
-          <div style="margin-top:10px;display:flex;gap:8px">
-            <button class="btn btn-primary" @click="addManualService">保存</button>
-            <button class="btn btn-secondary" @click="showAddForm=false">取消</button>
+          <div class="tabs">
+            <div :class="['tab',{active:monitorTab==='charts'}]" @click="monitorTab='charts'">趋势图</div>
+            <div :class="['tab',{active:monitorTab==='containers'}]" @click="monitorTab='containers';loadContainers()">容器列表</div>
+            <div :class="['tab',{active:monitorTab==='disks'}]" @click="monitorTab='disks';loadDisks()">磁盘详情</div>
           </div>
-        </div>
-        <table class="cred-table" v-if="manualServices.length">
-          <thead><tr><th>名称</th><th>URL</th><th>分类</th><th>分组</th><th>操作</th></tr></thead>
-          <tbody>
-            <tr v-for="ms in manualServices" :key="ms.id">
-              <td>{{ms.name}}</td>
-              <td>{{ms.url}}</td>
-              <td>{{ms.category}}</td>
-              <td>{{getGroupName(ms.group_id)}}</td>
-              <td>
-                <button class="btn btn-danger" style="font-size:11px;padding:2px 8px" @click="deleteManualService(ms.id)">删除</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div v-else class="empty" style="padding:16px">暂无手动服务</div>
+          <!-- Charts Tab -->
+          <div v-if="monitorTab==='charts'">
+            <div style="display:flex;gap:8px;margin-bottom:16px">
+              <button v-for="m in chartMetrics" :key="m.key" :class="['btn','btn-sm',chartMetric===m.key?'btn-primary':'btn-ghost']" @click="chartMetric=m.key;loadHistory()">{{m.label}}</button>
+            </div>
+            <div ref="chartEl" class="chart-box"></div>
+          </div>
+          <!-- Containers Tab -->
+          <div v-if="monitorTab==='containers'">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Ports</th></tr></thead>
+                <tbody>
+                  <tr v-for="c in containers" :key="c.name||c.id">
+                    <td><span :class="['status-dot',c.status==='running'?'running':'exited']" style="display:inline-block;vertical-align:middle;margin-right:6px"></span>{{c.name}}</td>
+                    <td style="color:var(--fg2)">{{c.image}}</td>
+                    <td><span :style="{color:c.status==='running'?'var(--green)':'var(--red)'}">{{c.status}}</span></td>
+                    <td style="color:var(--fg2)">{{c.ports||'-'}}</td>
+                  </tr>
+                  <tr v-if="!containers.length"><td colspan="4" style="text-align:center;color:var(--fg2);padding:20px">No containers</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <!-- Disks Tab -->
+          <div v-if="monitorTab==='disks'">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Mount</th><th>Device</th><th>Total</th><th>Used</th><th>Avail</th><th>Use%</th></tr></thead>
+                <tbody>
+                  <tr v-for="d in disks" :key="d.mountpoint||d.device">
+                    <td>{{d.mountpoint}}</td>
+                    <td style="color:var(--fg2)">{{d.device}}</td>
+                    <td>{{fmtBytes(d.size||d.total)}}</td>
+                    <td>{{fmtBytes(d.used)}}</td>
+                    <td>{{fmtBytes(d.avail)}}</td>
+                    <td :style="{color:pctColor(d.percent||d.use_percent)}">{{(d.percent||d.use_percent||0)}}%</td>
+                  </tr>
+                  <tr v-if="!disks.length"><td colspan="6" style="text-align:center;color:var(--fg2);padding:20px">No disk data</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+      </template>
+
+    </div>
+  </div>
+
+  <!-- Add/Edit Server Modal -->
+  <div v-if="showServerModal" class="modal-mask" @click.self="showServerModal=false">
+    <div class="modal">
+      <h3>{{editingServer?'Edit Server':'Add Server'}}</h3>
+      <div class="form-group"><label>Name</label><input v-model="serverForm.name" placeholder="My Server"></div>
+      <div class="form-group"><label>Host / IP</label><input v-model="serverForm.host" placeholder="192.168.1.1"></div>
+      <div class="form-group"><label>SSH Port</label><input v-model.number="serverForm.ssh_port" type="number" placeholder="22"></div>
+      <div class="form-group"><label>SSH User</label><input v-model="serverForm.ssh_user" placeholder="root"></div>
+      <div class="form-group"><label>Auth Type</label><select v-model="serverForm.auth_type"><option value="password">Password</option><option value="key">SSH Key</option></select></div>
+      <div class="form-group" v-if="serverForm.auth_type==='password'"><label>SSH Password</label><input v-model="serverForm.ssh_password" type="password"></div>
+      <div class="form-group" v-if="serverForm.auth_type==='key'"><label>SSH Private Key</label><textarea v-model="serverForm.ssh_key" rows="3" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea></div>
+      <div class="form-group"><label>Tags (comma separated)</label><input v-model="serverForm.tags_str" placeholder="production,web"></div>
+      <div class="form-group"><label>Remark</label><textarea v-model="serverForm.remark" rows="2"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" @click="showServerModal=false">Cancel</button>
+        <button class="btn btn-primary" @click="saveServer" :disabled="!serverForm.name||!serverForm.host">{{editingServer?'Update':'Create'}}</button>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Toast -->
-<div class="toast" v-if="toastMsg">{{toastMsg}}</div>
-</div>
 <script>
-const {createApp,ref,reactive,computed,onMounted,watch,nextTick,onUnmounted} = Vue;
-
-const API_BASE = '/ops/api/v2';
+const {createApp,ref,reactive,computed,watch,onMounted,onUnmounted,nextTick}=Vue
+const API='/ops/api/v2'
 
 createApp({
   setup(){
-    // --- State ---
-    const page = ref('nav');
-    const servers = ref([]);
-    const currentServer = ref('all');
-    const allServices = ref([]);
-    const groups = ref([]);
-    const expandedGroups = reactive({});
-    const loading = ref(true);
-    const monitor = ref({});
-    const monitorLoading = ref(false);
-    const manualServices = ref([]);
-    const showAddForm = ref(false);
-    const newSvc = reactive({name:'',url:'',category:'',icon:'',description:'',group_id:''});
-    const toastMsg = ref('');
-    let historyChart = null;
-    let refreshTimer = null;
+    const page=ref('nav')
+    const navItems=[
+      {key:'nav',label:'Nav',icon:'fa-compass'},
+      {key:'servers',label:'Servers',icon:'fa-server'},
+      {key:'discovery',label:'Discovery',icon:'fa-magnifying-glass'},
+      {key:'monitor',label:'Monitor',icon:'fa-chart-line'},
+    ]
+    const pageTitle=computed(()=>navItems.find(n=>n.key===page.value)?.label||'')
+    const toasts=ref([])
+    let toastId=0
+    function toast(msg,type='info'){toasts.value.push({id:++toastId,msg,type});setTimeout(()=>{toasts.value=toasts.value.filter(t=>t.id!==toastId)},3000)}
 
-    // --- Credentials (hardcoded from memory) ---
-    const credentials = [
-      {name:'SSH (CI/CD)',user:'ops',password:'密钥认证',note:'sudo: passok@123'},
-      {name:'SSH (Mall)',user:'root',password:'passok@123',note:''},
-      {name:'Gitea',user:'qiushui',password:'passok@123',note:''},
-      {name:'Jenkins',user:'admin',password:'admin123',note:''},
-      {name:'Grafana',user:'admin',password:'admin123',note:''},
-      {name:'1Panel',user:'admin',password:'Ops@2026',note:'http://39.99.139.131:9999/ops123'},
-      {name:'Stirling-PDF',user:'admin',password:'passok@123',note:''},
-      {name:'OpsCenter DB',user:'opscenter',password:'OpsCenter2026',note:'127.0.0.1:5433'},
-      {name:'DataHub',user:'admin',password:'admin123',note:''},
-      {name:'DataHub DB',user:'datahub',password:'DataHub2026',note:'127.0.0.1:5432'},
-      {name:'Nacos',user:'nacos',password:'nacos',note:'Mall-Swarm主机'},
-      {name:'RabbitMQ',user:'mall',password:'mall',note:'vhost: /mall'},
-      {name:'MySQL (Mall)',user:'root',password:'root',note:'39.99.147.12:3306'},
-    ];
+    // Data
+    const allServers=ref([])
+    const homeData=ref(null)
+    const groupConfig=ref([])
+    const categories=ref([])
+    const navSearch=ref('')
+    const openGroups=reactive({})
 
-    // --- Tool commands ---
-    const toolCmds = {
-      docker:[
-        'docker ps --format "table {{.Names}}\\t{{.Status}}\\t{{.Ports}}"',
-        'docker compose -f /opt/cicd/docker-compose.yml ps',
-        'docker stats --no-stream --format "table {{.Name}}\\t{{.CPUPerc}}\\t{{.MemUsage}}"',
-        'docker logs --tail 100 -f <container>',
-        'docker system df',
-        'docker image prune -f',
-      ],
-      network:[
-        'ss -tlnp | grep -E "(80|443|3000|8080)"',
-        'curl -sI http://127.0.0.1/nginx-health',
-        'docker network inspect cicd_cicd-net',
-        'iptables -L DOCKER-USER -n -v',
-        'ufw status numbered',
-      ],
-      security:[
-        'fail2ban-client status sshd',
-        'fail2ban-client status nginx-auth',
-        'aide --check',
-        'cat /etc/sysctl.d/99-security-hardening.conf | head -20',
-        'journalctl -u ssh -since "1 hour ago" --no-pager | tail -20',
-        'docker exec nginx nginx -T 2>/dev/null | grep -E "listen|server_name"',
-      ],
-      database:[
-        'psql -h 127.0.0.1 -p 5433 -U opscenter -d opscenter -c "\\dt"',
-        'psql -h 127.0.0.1 -p 5432 -U datahub -d datahub -c "\\dt"',
-        'docker exec ops-db pg_dump -U opscenter opscenter | head -50',
-        'redis-cli -p 6380 INFO memory',
-      ],
-    };
-
-    // --- Computed ---
-    const pageTitle = computed(()=>{
-      const m={'nav':'服务导航','monitor':'监控中心','tools':'工具箱','resources':'资源管理'};
-      return m[page.value]||'';
-    });
-
-    const monitorServer = computed(()=>{
-      if(currentServer.value==='all') return null;
-      const s = servers.value.find(x=>x.id===currentServer.value);
-      return s||null;
-    });
-
-    const filteredServices = computed(()=>{
-      let svcs = allServices.value;
-      if(currentServer.value!=='all'){
-        svcs = svcs.filter(s=>s.server_id===currentServer.value);
-      }
-      return svcs;
-    });
-
-    const filteredGroups = computed(()=>{
-      const usedGroups = new Set();
-      filteredServices.value.forEach(s=>{
-        if(s._group_id) usedGroups.add(s._group_id);
-      });
-      return groups.value.filter(g=>usedGroups.has(g.id));
-    });
-
-    const ungroupedServices = computed(()=>{
-      return filteredServices.value.filter(s=>!s._group_id);
-    });
-
-    // --- Methods ---
-    function toast(msg){
-      toastMsg.value = msg;
-      setTimeout(()=>toastMsg.value='', 2000);
+    // Load
+    async function api(path,opts={}){
+      const r=await fetch(API+path,opts)
+      if(!r.ok)throw new Error(`${r.status} ${r.statusText}`)
+      return r.json()
     }
 
-    function copyText(text){
-      if(navigator.clipboard && window.isSecureContext){
-        navigator.clipboard.writeText(text).then(()=>toast('已复制')).catch(()=>fallbackCopy(text));
-      }else{
-        fallbackCopy(text);
-      }
+    async function loadServers(){
+      try{const d=await api('/servers');allServers.value=d.map(s=>({...s,_checking:false,_scanning:false}))}catch(e){console.error(e)}
     }
-    function fallbackCopy(text){
-      const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.left='-9999px';document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('已复制');
+    async function loadHome(){
+      try{homeData.value=await api('/home')}catch(e){console.error(e)}
     }
-
-    function toggleGroup(id){
-      expandedGroups[id] = !expandedGroups[id];
+    async function loadGroupConfig(){
+      try{groupConfig.value=await api('/group-config')}catch(e){console.error(e)}
+    }
+    async function loadCategories(){
+      try{categories.value=await api('/categories')}catch(e){console.error(e)}
     }
 
-    function switchServer(id){
-      currentServer.value = id;
-      if(page.value==='monitor') loadMonitor();
+    // Nav page grouping
+    const homeServices=computed(()=>{
+      if(!homeData.value)return[]
+      // home API returns: {servers: [{services: [...]}], stats: {...}}
+      const allSvcs=[]
+      const servers=homeData.value.servers||[]
+      servers.forEach(srv=>{
+        (srv.services||[]).forEach(svc=>{
+          allSvcs.push({...svc,server_name:srv.name,server_status:srv.status})
+        })
+      })
+      return allSvcs.sort((a,b)=>(b.pinned?1:0)-(a.pinned?1:0))
+    })
+
+    const filteredGroups=computed(()=>{
+      // groupConfig: {groups: [{id,name,color,icon,order}], serviceGroupMap: {serviceKey: groupId}}
+      const raw=groupConfig.value||{}
+      const gArr=JSON.parse(JSON.stringify(raw.groups||[]))
+      const svcMap=raw.serviceGroupMap||{}
+      gArr.forEach(g=>g.services=[])
+      const ungrouped={id:null,name:'未分组',services:[]}
+      const q=navSearch.value.toLowerCase()
+      homeServices.value.forEach(s=>{
+        if(q&&!s.name.toLowerCase().includes(q)&&!(s.description||'').toLowerCase().includes(q))return
+        // Match by container_name or name as key
+        const sKey=s.container_name||s.name
+        const gid=svcMap[sKey]||svcMap[s.id]
+        if(gid){const g=gArr.find(g2=>g2.id===gid);if(g)g.services.push(s);else ungrouped.services.push(s)}
+        else ungrouped.services.push(s)
+      })
+      const result=gArr.filter(g=>g.services.length>0)
+      if(ungrouped.services.length>0)result.push(ungrouped)
+      result.forEach(g=>{if(openGroups[g.id||'ungrouped']===undefined)openGroups[g.id||'ungrouped']=true})
+      return result
+    })
+    function toggleGroup(key){openGroups[key]=!openGroups[key]}
+
+    function getServiceIcon(s){
+      if(s.icon)return 'fa-solid '+s.icon
+      const catIcons={'代码与CI/CD':'fa-code','应用服务':'fa-cube','监控与日志':'fa-chart-area','网络与代理':'fa-network-wired','数据存储':'fa-database','安全':'fa-shield-halved','运维管理':'fa-gauge-high','未分类':'fa-cube'}
+      return 'fa-solid '+(catIcons[s.category]||'fa-cube')
+    }
+    function openServiceUrl(s){
+      if(s.url)window.open(s.url,'_blank')
     }
 
-    function onServerSwitch(){
-      if(page.value==='monitor') loadMonitor();
-    }
+    // Servers page
+    const showServerModal=ref(false)
+    const editingServer=ref(null)
+    const serverForm=reactive({name:'',host:'',ssh_port:22,ssh_user:'root',auth_type:'password',ssh_password:'',ssh_key:'',tags_str:'',remark:''})
 
-    function getStatusClass(svc){
-      if(svc.server_status==='offline') return 'unknown';
-      if(svc.status==='up') return 'up';
-      if(svc.status==='down') return 'down';
-      return 'unknown';
+    function openAddServer(){
+      editingServer.value=null
+      Object.assign(serverForm,{name:'',host:'',ssh_port:22,ssh_user:'root',auth_type:'password',ssh_password:'',ssh_key:'',tags_str:'',remark:''})
+      showServerModal.value=true
     }
-
-    function metricClass(val){
-      if(val==null) return '';
-      if(val>90) return 'red';
-      if(val>80) return 'orange';
-      return 'green';
+    function openEditServer(s){
+      editingServer.value=s
+      Object.assign(serverForm,{name:s.name,host:s.host,ssh_port:s.ssh_port||22,ssh_user:s.ssh_user||'root',auth_type:s.auth_type||'password',ssh_password:'',ssh_key:'',tags_str:(s.tags||[]).join(', '),remark:s.remark||''})
+      showServerModal.value=true
     }
-
-    function openService(svc){
-      if(svc.server_status==='offline'){
-        toast('该服务所在服务器离线');
-        return;
-      }
-      if(svc.url) window.open(svc.url,'_blank');
-    }
-
-    function getGroupName(groupId){
-      const g = groups.value.find(x=>x.id===groupId);
-      return g?g.name:'未分组';
-    }
-
-    function getGroupServices(groupId){
-      return filteredServices.value.filter(s=>s._group_id===groupId);
-    }
-
-    // --- API ---
-    async function fetchServers(){
+    async function saveServer(){
+      const body={name:serverForm.name,host:serverForm.host,ssh_port:serverForm.ssh_port,ssh_user:serverForm.ssh_user,auth_type:serverForm.auth_type,ssh_password:serverForm.ssh_password,ssh_key:serverForm.ssh_key,tags:serverForm.tags_str.split(',').map(t=>t.trim()).filter(Boolean),remark:serverForm.remark}
       try{
-        const r = await fetch(`${API_BASE}/servers`);
-        servers.value = await r.json();
-      }catch(e){console.error('fetchServers',e)}
+        if(editingServer.value){await api(`/servers/${editingServer.value.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Server updated','success')}
+        else{await api('/servers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Server created','success')}
+        showServerModal.value=false;loadServers()
+      }catch(e){toast('Error: '+e.message,'error')}
+    }
+    async function deleteServer(id){
+      if(!confirm('Delete this server?'))return
+      try{await api(`/servers/${id}`,{method:'DELETE'});toast('Server deleted','success');loadServers()}catch(e){toast('Error: '+e.message,'error')}
+    }
+    async function checkServer(id){
+      const s=allServers.value.find(x=>x.id===id);if(!s)return;s._checking=true
+      try{const r=await api(`/servers/${id}/check`,{method:'POST'});toast(r.reachable?'Server online':'Server offline',r.reachable?'success':'error');loadServers()}catch(e){toast('Check failed','error')}finally{s._checking=false}
+    }
+    async function scanServer(id){
+      const s=allServers.value.find(x=>x.id===id);if(!s)return;s._scanning=true
+      try{const r=await api(`/servers/${id}/scan`,{method:'POST'});toast(`Found ${r.discovered||0} services`,'success');loadServers();loadHome()}catch(e){toast('Scan failed','error')}finally{s._scanning=false}
+    }
+    async function toggleServer(id,enable){
+      try{await api(`/servers/${id}/${enable?'enable':'disable'}`,{method:'POST'});toast(enable?'Server enabled':'Server disabled','success');loadServers();loadHome()}catch(e){toast('Error: '+e.message,'error')}
     }
 
-    async function fetchServices(){
-      loading.value = true;
-      try{
-        const [autoRes, manualRes] = await Promise.all([
-          fetch(`${API_BASE}/services-with-status`),
-          fetch(`${API_BASE}/manual-services`),
-        ]);
-        const autoData = await autoRes.json();
-        const manualData = await manualRes.json();
-        // Build unique keys
-        const autoSvcs = (autoData||[]).map(s=>({...s, _key:`auto:${s.server_id}:${s.id}`, _group_id:null, source:s.source||'docker_auto'}));
-        const manualSvcs = (manualData||[]).map(s=>({...s, _key:`manual:${s.id}`, _group_id:s.group_id||null, source:'manual', server_status:s.server_status||'unknown'}));
-        allServices.value = [...autoSvcs, ...manualSvcs];
-      }catch(e){console.error('fetchServices',e)}
-      loading.value = false;
+    // Discovery
+    const discoveryStatus=ref(null)
+    const discoveryRunning=ref(false)
+    async function loadDiscoveryStatus(){try{discoveryStatus.value=await api('/discovery/status')}catch(e){}}
+    async function runDiscovery(serverId){
+      discoveryRunning.value=true
+      try{await api('/discovery/run'+(serverId?`?server_id=${serverId}`:''),{method:'POST'});toast('Discovery started','success');loadServers();loadHome();loadDiscoveryStatus()}catch(e){toast('Error: '+e.message,'error')}finally{discoveryRunning.value=false}
     }
+    async function runDiscoveryAll(){await runDiscovery(null)}
 
-    async function fetchGroups(){
-      try{
-        const r = await fetch(`${API_BASE}/group-config`);
-        const data = await r.json();
-        groups.value = data.groups||[];
-      }catch(e){console.error('fetchGroups',e)}
-    }
-
-    function applyGroupMapping(){
-      // Fetch group config to map auto services to groups
-      fetch(`${API_BASE}/group-config`).then(r=>r.json()).then(data=>{
-        const sMap = data.serviceGroupMap||{};
-        const cMap = data.categoryGroupMap||{};
-        allServices.value.forEach(svc=>{
-          if(svc.source==='manual') return; // manual services keep their group_id
-          // Try service-level mapping first
-          const svcKey = `auto:${svc.server_id}:${svc.id}`;
-          if(sMap[svcKey]){
-            svc._group_id = sMap[svcKey];
-          } else if(cMap[svc.category]){
-            svc._group_id = cMap[svc.category];
-          }
-        });
-        // Expand all groups by default
-        groups.value.forEach(g=>{if(expandedGroups[g.id]===undefined) expandedGroups[g.id]=true;});
-        expandedGroups['_ungrouped'] = true;
-      });
-    }
+    // Monitor
+    const monitorServerId=ref('')
+    const monitorData=ref(null)
+    const monitorTab=ref('charts')
+    const containers=ref([])
+    const disks=ref([])
+    const chartMetrics=[{key:'cpu',label:'CPU'},{key:'memory',label:'Memory'},{key:'disk',label:'Disk'},{key:'network',label:'Network'}]
+    const chartMetric=ref('cpu')
+    const chartEl=ref(null)
+    let chartInstance=null
+    let monitorTimer=null
 
     async function loadMonitor(){
-      if(!monitorServer.value) return;
-      monitorLoading.value = true;
+      if(!monitorServerId.value){monitorData.value=null;return}
       try{
-        const r = await fetch(`${API_BASE}/monitor/${monitorServer.value.id}`);
-        const data = await r.json();
-        // Map API fields to template expectations
-        const m = data.metrics||{};
-        monitor.value = {
-          cpu_percent: m.cpu,
-          memory_percent: m.memory,
-          memory_total: m.memory_total,
-          memory_avail: m.memory_avail,
-          disk_percent: m.disk,
-          disk_total: m.disk_total,
-          disk_avail: m.disk_avail,
-          load_1m: m.load1,
-          load_5m: m.load5,
-          load_15m: m.load15,
-          net_rx: m.net_rx,
-          net_tx: m.net_tx,
-          containers_running: (data.containers||[]).filter(c=>c.status==='running').length,
-          containers: data.containers||[],
-        };
-        // Load history chart
-        await nextTick();
-        loadHistoryChart();
-      }catch(e){console.error('loadMonitor',e)}
-      monitorLoading.value = false;
-    }
-
-    async function loadHistoryChart(){
-      if(!monitorServer.value) return;
-      try{
-        const [cpuRes, memRes] = await Promise.all([
-          fetch(`${API_BASE}/monitor/${monitorServer.value.id}/history?metric=cpu`),
-          fetch(`${API_BASE}/monitor/${monitorServer.value.id}/history?metric=memory`),
-        ]);
-        const cpuData = await cpuRes.json();
-        const memData = await memRes.json();
-        renderChart(cpuData.values||[], memData.values||[]);
-      }catch(e){console.error('loadHistoryChart',e)}
-    }
-
-    function renderChart(cpuValues, memValues){
-      const el = document.getElementById('historyChart');
-      if(!el) return;
-      if(historyChart) historyChart.dispose();
-      historyChart = echarts.init(el, 'dark');
-      // Merge timestamps from both series
-      const allTs = new Set();
-      cpuValues.forEach(v=>allTs.add(v[0]));
-      memValues.forEach(v=>allTs.add(v[0]));
-      const tsList = [...allTs].sort((a,b)=>a-b);
-      const times = tsList.map(t=>new Date(t*1000).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}));
-      const cpuMap = Object.fromEntries(cpuValues.map(v=>[v[0],v[1]]));
-      const memMap = Object.fromEntries(memValues.map(v=>[v[0],v[1]]));
-      const cpuSeries = tsList.map(t=>cpuMap[t]??null);
-      const memSeries = tsList.map(t=>memMap[t]??null);
-      historyChart.setOption({
-        backgroundColor:'transparent',
-        tooltip:{trigger:'axis'},
-        legend:{data:['CPU %','内存 %'],textStyle:{color:'#94a3b8'}},
-        grid:{left:50,right:20,top:40,bottom:30},
-        xAxis:{type:'category',data:times,axisLine:{lineStyle:{color:'#334155'}},axisLabel:{color:'#94a3b8',fontSize:11}},
-        yAxis:{type:'value',max:100,axisLine:{lineStyle:{color:'#334155'}},axisLabel:{color:'#94a3b8',fontSize:11},splitLine:{lineStyle:{color:'#1e293b'}}},
-        series:[
-          {name:'CPU %',type:'line',data:cpuSeries,smooth:true,connectNulls:true,lineStyle:{color:'#38bdf8'},itemStyle:{color:'#38bdf8'},areaStyle:{color:'rgba(56,189,248,0.1)'}},
-          {name:'内存 %',type:'line',data:memSeries,smooth:true,connectNulls:true,lineStyle:{color:'#818cf8'},itemStyle:{color:'#818cf8'},areaStyle:{color:'rgba(129,140,248,0.1)'}},
-        ]
-      });
-    }
-
-    async function fetchManualServices(){
-      try{
-        const r = await fetch(`${API_BASE}/manual-services`);
-        manualServices.value = await r.json();
-      }catch(e){console.error('fetchManualServices',e)}
-    }
-
-    async function addManualService(){
-      if(!newSvc.name||!newSvc.url){toast('名称和URL必填');return;}
-      try{
-        const r = await fetch(`${API_BASE}/manual-services`,{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({...newSvc, server_id: servers.value[0]?.id}),
-        });
-        if(r.ok){
-          toast('添加成功');
-          showAddForm.value = false;
-          Object.assign(newSvc,{name:'',url:'',category:'',icon:'',description:'',group_id:''});
-          await fetchManualServices();
-          await fetchServices();
-          applyGroupMapping();
-        }else{
-          toast('添加失败');
+        const d=await api(`/monitor/${monitorServerId.value}`)
+        const m=d.metrics||{}
+        // Normalize field names for template
+        monitorData.value={
+          cpu_percent:m.cpu, cpu_count:m.cpu_count,
+          memory_percent:m.memory, memory_total:m.memory_total, memory_used:m.memory_used, memory_avail:m.memory_avail,
+          disk_percent:m.disk, disk_total:m.disk_total, disk_used:m.disk_used, disk_avail:m.disk_avail,
+          load_1min:m.load1, load_5min:m.load5, load_15min:m.load15,
+          net_rx:m.net_rx, net_tx:m.net_tx, uptime:m.uptime,
+          containers:d.containers||[],
         }
-      }catch(e){toast('添加失败');console.error(e)}
+        containers.value=d.containers||[]
+        if(monitorTab.value==='charts')await nextTick(),loadHistory()
+      }catch(e){console.error(e)}
     }
-
-    async function deleteManualService(id){
-      if(!confirm('确定删除此服务？')) return;
+    async function loadHistory(){
+      if(!monitorServerId.value)return
       try{
-        const r = await fetch(`${API_BASE}/manual-services/${id}`,{method:'DELETE'});
-        if(r.ok){
-          toast('已删除');
-          await fetchManualServices();
-          await fetchServices();
-          applyGroupMapping();
-        }
-      }catch(e){toast('删除失败');console.error(e)}
+        const d=await api(`/monitor/${monitorServerId.value}/history?metric=${chartMetric.value}&hours=24`)
+        renderChart(d)
+      }catch(e){console.error(e)}
+    }
+    async function loadContainers(){
+      if(!monitorServerId.value)return
+      try{const r=await api(`/monitor/${monitorServerId.value}/containers`);containers.value=r.containers||r||[]}catch(e){containers.value=[]}
+    }
+    async function loadDisks(){
+      if(!monitorServerId.value)return
+      try{const r=await api(`/monitor/${monitorServerId.value}/disks`);disks.value=r.disks||r||[]}catch(e){disks.value=[]}
     }
 
-    // --- Lifecycle ---
+    function renderChart(data){
+      if(!chartEl.value)return
+      if(!chartInstance)chartInstance=echarts.init(chartEl.value)
+      const values=data.values||[]
+      const xData=values.map(v=>{
+        const ts=Array.isArray(v)?v[0]:(v.timestamp||v.time||v.ts)
+        const t=new Date(ts*1000)
+        return isNaN(t)?'':t.getHours().toString().padStart(2,'0')+':'+t.getMinutes().toString().padStart(2,'0')
+      })
+      const yData=values.map(v=>{
+        return Array.isArray(v)?parseFloat(v[1]):(v.value!=null?v.value:v)
+      })
+      const colorMap={cpu:'#38bdf8',memory:'#22c55e',disk:'#f97316',network:'#a78bfa'}
+      const labelMap={cpu:'CPU %',memory:'Memory %',disk:'Disk %',network:'Network (B/s)'}
+      chartInstance.setOption({
+        tooltip:{trigger:'axis',backgroundColor:'#1e293b',borderColor:'#334155',textStyle:{color:'#e2e8f0',fontSize:12}},
+        grid:{top:30,right:20,bottom:30,left:50},
+        xAxis:{type:'category',data:xData,axisLine:{lineStyle:{color:'#334155'}},axisLabel:{color:'#94a3b8',fontSize:11}},
+        yAxis:{type:'value',axisLine:{show:false},splitLine:{lineStyle:{color:'rgba(51,65,85,.5)'}},axisLabel:{color:'#94a3b8',fontSize:11}},
+        series:[{data:yData,type:'line',smooth:true,symbol:'none',lineStyle:{width:2,color:colorMap[chartMetric.value]||'#38bdf8'},areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:(colorMap[chartMetric.value]||'#38bdf8')+'33'},{offset:1,color:'transparent'}])}}],
+        title:{text:labelMap[chartMetric.value]||'',textStyle:{color:'#e2e8f0',fontSize:13,fontWeight:500},left:10,top:5}
+      },true)
+    }
+
+    function selectServer(id){monitorServerId.value=id;page.value='monitor';loadMonitor()}
+
+    // Helpers
+    function pctColor(v){
+      if(v==null)return 'var(--fg2)'
+      if(v>90)return 'var(--red)'
+      if(v>80)return 'var(--orange)'
+      if(v>60)return 'var(--yellow)'
+      return 'var(--green)'
+    }
+    function fmtPct(v){return v!=null?Math.round(v)+'%':'-'}
+    function fmtBytes(b){
+      if(b==null||b===0)return '0 B'
+      const u=['B','KB','MB','GB','TB']
+      const i=Math.floor(Math.log(Math.abs(b))/Math.log(1024))
+      return (b/Math.pow(1024,i)).toFixed(1)+' '+u[i]
+    }
+
+    // Init
     onMounted(async()=>{
-      await Promise.all([fetchServers(), fetchGroups()]);
-      await fetchServices();
-      applyGroupMapping();
-      await fetchManualServices();
-      // Auto refresh every 30s
-      refreshTimer = setInterval(async()=>{
-        await fetchServers();
-        await fetchServices();
-        applyGroupMapping();
-        if(page.value==='monitor' && monitorServer.value) loadMonitor();
-      }, 30000);
-    });
+      await Promise.all([loadServers(),loadHome(),loadGroupConfig(),loadCategories(),loadDiscoveryStatus()])
+      // Auto-select first server for monitor
+      if(allServers.value.length)monitorServerId.value=allServers.value[0].id
+      // Monitor auto-refresh
+      monitorTimer=setInterval(()=>{if(page.value==='monitor'&&monitorServerId.value)loadMonitor()},30000)
+    })
+    onUnmounted(()=>{if(monitorTimer)clearInterval(monitorTimer);if(chartInstance)chartInstance.dispose()})
 
-    onUnmounted(()=>{
-      if(refreshTimer) clearInterval(refreshTimer);
-      if(historyChart) historyChart.dispose();
-    });
+    // Watch chart tab & metric
+    watch(monitorTab,async v=>{
+      if(v==='charts')await nextTick(),loadHistory()
+    })
+    watch(page,async v=>{
+      if(v==='monitor'&&monitorServerId.value){await nextTick();loadMonitor()}
+      if(v==='discovery')loadDiscoveryStatus()
+    })
 
-    // Watch page change
-    watch(page, async(p)=>{
-      if(p==='monitor' && monitorServer.value){
-        await loadMonitor();
-      }
-      if(p==='resources'){
-        await fetchManualServices();
-      }
-    });
-
-    // Watch server change for monitor
-    watch(currentServer, async()=>{
-      if(page.value==='monitor') await loadMonitor();
-    });
-
-    return {
-      page, servers, currentServer, allServices, groups, expandedGroups,
-      loading, monitor, monitorLoading, manualServices, showAddForm, newSvc,
-      toastMsg, credentials, toolCmds,
-      pageTitle, monitorServer, filteredServices, filteredGroups, ungroupedServices,
-      toggleGroup, switchServer, onServerSwitch, getStatusClass, metricClass,
-      openService, getGroupName, getGroupServices, copyText,
-      addManualService, deleteManualService,
-    };
+    return{
+      page,navItems,pageTitle,toasts,
+      allServers,homeData,groupConfig,categories,
+      navSearch,openGroups,filteredGroups,toggleGroup,getServiceIcon,openServiceUrl,
+      showServerModal,editingServer,serverForm,openAddServer,openEditServer,saveServer,deleteServer,checkServer,scanServer,toggleServer,
+      discoveryStatus,discoveryRunning,runDiscovery,runDiscoveryAll,
+      monitorServerId,monitorData,monitorTab,containers,disks,
+      chartMetrics,chartMetric,chartEl,loadMonitor,loadHistory,loadContainers,loadDisks,selectServer,
+      pctColor,fmtPct,fmtBytes,
+    }
   }
-}).mount('#app');
+}).mount('#app')
 </script>
 </body>
 </html>

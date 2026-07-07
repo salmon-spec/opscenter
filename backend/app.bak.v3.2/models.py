@@ -6,41 +6,21 @@ import uuid, enum
 
 Base = declarative_base()
 
-
-# === Enums ===
-
 class ServerStatus(str, enum.Enum):
     online = "online"
     offline = "offline"
-    warning = "warning"
     unknown = "unknown"
-
 
 class ServiceStatus(str, enum.Enum):
     up = "up"
     down = "down"
-    inactive = "inactive"
-    missing = "missing"
     unknown = "unknown"
-
 
 class ServiceSource(str, enum.Enum):
     docker_label = "docker_label"
     docker_auto = "docker_auto"
     nginx = "nginx"
-    systemd = "systemd"
-    port = "port"
-    prometheus = "prometheus"
     manual = "manual"
-
-
-class AuthType(str, enum.Enum):
-    key = "key"
-    password = "password"
-    none = "none"
-
-
-# === Tables ===
 
 class Server(Base):
     __tablename__ = "servers"
@@ -55,20 +35,9 @@ class Server(Base):
     docker_available = Column(Boolean, default=False)
     is_local = Column(Boolean, default=False)
     last_seen = Column(DateTime, nullable=True)
-    # v4.0 new fields
-    auth_type = Column(String(20), default=AuthType.key.value)
-    credential_ref = Column(Text, nullable=True)
-    enabled = Column(Boolean, default=True)
-    last_check_at = Column(DateTime, nullable=True)
-    last_online_at = Column(DateTime, nullable=True)
-    fail_count = Column(Integer, default=0)
-    last_error = Column(Text, nullable=True)
-    remark = Column(Text, nullable=True)
-    # timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     services = relationship("Service", back_populates="server", cascade="all, delete-orphan")
-
 
 class Service(Base):
     __tablename__ = "services"
@@ -88,13 +57,6 @@ class Service(Base):
     image = Column(String(200), nullable=True)
     ports = Column(String(200), nullable=True)
     sort_order = Column(Integer, default=0)
-    # v4.0 new fields
-    discovery_type = Column(String(20), nullable=True)
-    discovered_at = Column(DateTime, nullable=True)
-    last_seen_at = Column(DateTime, nullable=True)
-    port = Column(Integer, nullable=True)
-    svc_metadata = Column("metadata", JSONB, default=dict)
-    # timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     server = relationship("Server", back_populates="services")
