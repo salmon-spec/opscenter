@@ -843,13 +843,22 @@ createApp({
         try {
           const ctrl = new AbortController();
           const timer = setTimeout(() => ctrl.abort(), 5000);
-          const res = await fetch(svc.fullUrl, { method: 'HEAD', mode: 'no-cors', signal: ctrl.signal });
+          await fetch(svc.fullUrl, { method: 'HEAD', mode: 'no-cors', signal: ctrl.signal });
           clearTimeout(timer);
-          // no-cors: response.type is 'opaque', status is 0 but fetch succeeded = online
-          // normal cors: status 200-399 = online, 401 = online (needs auth), 403+ = check
           svc.status = 'online';
         } catch (e) {
-          // fetch failed (timeout, network error) = offline
+          // HTTPS with self-signed cert will fail in browser; fallback to HTTP same port
+          if (/^https:/.test(svc.fullUrl)) {
+            try {
+              const fallbackUrl = svc.fullUrl.replace(/^https:/, 'http:');
+              const ctrl2 = new AbortController();
+              const timer2 = setTimeout(() => ctrl2.abort(), 5000);
+              await fetch(fallbackUrl, { method: 'HEAD', mode: 'no-cors', signal: ctrl2.signal });
+              clearTimeout(timer2);
+              svc.status = 'online';
+              return;
+            } catch (_) { /* fallback also failed */ }
+          }
           svc.status = 'offline';
         }
       }));
