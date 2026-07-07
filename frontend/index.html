@@ -665,18 +665,18 @@ const OpsAPI = {
     return res.json();
   },
   getServers: () => OpsAPI._fetch('/servers'),
-  getServices: (sid) => OpsAPI._fetch(`/servers/${sid}/services`),
-  getCategories: (sid) => OpsAPI._fetch(`/servers/${sid}/categories`),
-  getMonitor: (sid) => OpsAPI._fetch(`/servers/${sid}/monitor`),
-  getHistory: (sid, metric, hours) => OpsAPI._fetch(`/servers/${sid}/history?metric=${metric}&hours=${hours}`),
+  getServices: (sid) => OpsAPI._fetch(`/services?server_id=${sid}`),
+  getCategories: () => OpsAPI._fetch('/categories'),
+  getMonitor: (sid) => OpsAPI._fetch(`/monitor/${sid}`),
+  getHistory: (sid, metric, hours) => OpsAPI._fetch(`/monitor/${sid}/history?metric=${metric}&hours=${hours}`),
   getStats: () => OpsAPI._fetch('/stats'),
   getHealth: () => OpsAPI._fetch('/health'),
   addServer: (data) => OpsAPI._fetch('/servers', { method: 'POST', body: JSON.stringify(data) }),
   deleteServer: (id) => OpsAPI._fetch(`/servers/${id}`, { method: 'DELETE' }),
-  addService: (sid, data) => OpsAPI._fetch(`/servers/${sid}/services`, { method: 'POST', body: JSON.stringify(data) }),
+  addService: (data) => OpsAPI._fetch(`/services?server_id=${data.server_id}`, { method: 'POST', body: JSON.stringify(data) }),
   scanServer: (id) => OpsAPI._fetch(`/servers/${id}/scan`, { method: 'POST' }),
-  testSSH: (id, data) => OpsAPI._fetch(`/servers/${id}/test-ssh`, { method: 'POST', body: JSON.stringify(data) }),
-  togglePin: (sid) => OpsAPI._fetch(`/services/${sid}/pin`, { method: 'POST' }),
+  testSSH: (id, data) => OpsAPI._fetch(`/servers/${id}/ssh-test`, { method: 'POST', body: JSON.stringify(data) }),
+  togglePin: (sid) => OpsAPI._fetch(`/services/${sid}/pin`, { method: 'PATCH' }),
   triggerScan: () => OpsAPI._fetch('/scan', { method: 'POST' }),
 };
 
@@ -854,7 +854,7 @@ createApp({
       try {
         const [svcData, catData] = await Promise.all([
           OpsAPI.getServices(currentServerId.value),
-          OpsAPI.getCategories(currentServerId.value),
+          OpsAPI.getCategories(),
         ]);
         const list = svcData.services || svcData || [];
         autoServices.value = list.map(s => {
@@ -875,8 +875,7 @@ createApp({
             fullUrl: s.url ? (s.url.startsWith('http') ? s.url : origin + s.url) : '',
           };
         });
-        categories.value = catData.categories || catData || [];
-      } catch (e) {
+        categories.value = catData.categories || catData || [];      } catch (e) {
         console.warn('API services load failed:', e.message);
       }
     }
@@ -1035,7 +1034,7 @@ createApp({
     async function addSvc() {
       if (!currentServerId.value || !newSvc.name || !newSvc.url) return;
       try {
-        await OpsAPI.addService(currentServerId.value, newSvc);
+        await OpsAPI.addService({ ...newSvc, server_id: currentServerId.value });
         toast('服务注册成功', 'success');
         Object.assign(newSvc, { name: '', url: '', category: '', description: '' });
         await loadAutoServices();
@@ -1075,9 +1074,9 @@ createApp({
         monitor.network = m.network_mbps ?? ((m.net_rx || 0) + (m.net_tx || 0) || 0);
         monitor.cpu_total = m.cpu_count ?? m.cpu_total ?? 0;
         monitor.memory_total = m.memory_total ?? 0;
-        monitor.memory_used = m.memory_used ?? 0;
+        monitor.memory_used = m.memory_used ?? (m.memory_total != null && m.memory_avail != null ? m.memory_total - m.memory_avail : 0);
         monitor.disk_total = m.disk_total ?? 0;
-        monitor.disk_used = m.disk_used ?? 0;
+        monitor.disk_used = m.disk_used ?? (m.disk_total != null && m.disk_avail != null ? m.disk_total - m.disk_avail : 0);
         monitor.network_in = m.network_in ?? m.net_rx ?? 0;
         monitor.network_out = m.network_out ?? m.net_tx ?? 0;
         monitor.containers = data.containers ?? m.containers ?? [];

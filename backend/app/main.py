@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
@@ -16,7 +16,7 @@ from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_ser
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
-LOCAL_HOST = os.getenv("LOCAL_HOST", "39.99.157.36")
+LOCAL_HOST = os.getenv("LOCAL_HOST", "39.99.139.131")
 
 # === Database ===
 engine = create_engine(DB_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)
@@ -830,7 +830,7 @@ def list_categories(server_id: Optional[str] = None):
 def health_check():
     with get_db() as db:
         try:
-            db.execute("SELECT 1")
+            db.execute(text("SELECT 1"))
             db_ok = True
         except:
             db_ok = False

@@ -187,24 +187,24 @@ def discover_docker_services(server: Server, db: Session, host: str = "39.99.157
                 db.add(svc)
                 discovered.append(svc)
         
-        # Mark stale docker_auto services as offline when their container is gone
+        # Mark stale docker_auto services as down when their container is gone
         active_container_names = {ctr.name for ctr in containers}
         stale_services = db.query(Service).filter(
             Service.server_id == server.id,
             Service.source == ServiceSource.docker_auto.value,
-            Service.status != ServiceStatus.offline.value,
+            Service.status != ServiceStatus.down.value,
         ).all()
         for svc in stale_services:
             if svc.container_name and svc.container_name not in active_container_names:
-                svc.status = ServiceStatus.offline.value
+                svc.status = ServiceStatus.down.value
                 discovered.append(svc)
 
-        # Permanently remove offline docker_auto services whose container has been gone
+        # Permanently remove down docker_auto services whose container has been gone
         # (prevents zombie entries from accumulating indefinitely)
         gone_services = db.query(Service).filter(
             Service.server_id == server.id,
             Service.source == ServiceSource.docker_auto.value,
-            Service.status == ServiceStatus.offline.value,
+            Service.status == ServiceStatus.down.value,
             Service.container_name != None,
         ).all()
         for svc in gone_services:
