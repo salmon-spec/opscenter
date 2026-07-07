@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.0 运维工作台</title>
+<title>OpsCenter v3.1 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
@@ -16,8 +16,6 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--text2)}
-.icon{display:inline-block;width:1em;height:1em;vertical-align:-.125em;fill:currentColor}
-.icon use{pointer-events:none}
 
 /* ===== Layout ===== */
 .app{display:flex;min-height:100vh}
@@ -25,18 +23,16 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .sidebar.collapsed{width:60px}
 .sidebar.collapsed .logo-text,.sidebar.collapsed .nav-item span:not(.nav-icon),.sidebar.collapsed .nav-section-title,.sidebar.collapsed .sidebar-footer-text{display:none}
 .sidebar.collapsed .nav-item{justify-content:center}
-.sidebar-logo{padding:16px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.sidebar-logo{padding:16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
 .sidebar-logo .logo-icon{width:34px;height:34px;background:var(--accent);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#0d1117;flex-shrink:0}
 .sidebar-logo .logo-text{font-size:14px;font-weight:600}
-.sidebar-logo .logo-text span{color:var(--text2);display:block;font-size:10px;font-weight:400}
+.sidebar-logo .logo-text small{color:var(--text2);display:block;font-size:10px;font-weight:400}
 .sidebar-nav{padding:10px 8px;flex:1;overflow-y:auto}
-.nav-section{margin-bottom:14px}
 .nav-section-title{font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;padding:4px 12px;margin-bottom:4px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--text2);transition:all .15s;margin-bottom:2px}
 .nav-item:hover{background:var(--card);color:var(--text1)}
 .nav-item.active{background:rgba(45,212,191,.12);color:var(--accent);font-weight:500}
 .nav-item .nav-icon{width:18px;height:18px;flex-shrink:0}
-.nav-item .nav-badge{margin-left:auto;background:var(--red);color:#fff;font-size:10px;padding:1px 7px;border-radius:10px}
 .sidebar-footer{padding:10px 14px;border-top:1px solid var(--border)}
 .sidebar-footer .online-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:5px;box-shadow:0 0 5px var(--green)}
 .sidebar-footer-text{font-size:11px;color:var(--text2)}
@@ -48,918 +44,337 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .topbar-left{display:flex;align-items:center;gap:14px}
 .topbar h2{font-size:16px;font-weight:600}
 .topbar-right{display:flex;align-items:center;gap:12px}
-.search-input{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:7px 14px 7px 34px;color:var(--text1);font-size:13px;width:260px;outline:none;transition:border-color .15s}
-.search-input:focus{border-color:var(--accent)}
-.search-wrap{position:relative}
-.search-wrap svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);width:14px;height:14px;fill:var(--text2)}
-.topbar-time{font-size:13px;color:var(--text2);font-family:Consolas,monospace}
-.topbar-btn{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);background:var(--card);color:var(--text2);cursor:pointer;transition:all .15s}
-.topbar-btn:hover{border-color:var(--accent);color:var(--accent)}
-.content{padding:20px 24px;max-width:1500px}
-.page{display:none}
-.page.active{display:block}
+.search-box{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:13px}
+.search-box input{background:none;border:none;outline:none;color:var(--text1);font-size:13px;width:160px}
+.search-box svg{width:14px;height:14px;color:var(--text2)}
+.clock{font-size:12px;color:var(--text2);font-variant-numeric:tabular-nums}
+.icon-btn{background:none;border:1px solid var(--border);border-radius:8px;padding:6px 8px;cursor:pointer;color:var(--text2);display:flex;align-items:center;transition:all .15s}
+.icon-btn:hover{color:var(--text1);border-color:var(--accent)}
 
-/* ===== Service Nav ===== */
-.summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:20px}
-.summary-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
-.summary-card .sc-value{font-size:24px;font-weight:700;color:var(--accent)}
-.summary-card .sc-label{font-size:11px;color:var(--text2);margin-top:2px}
-.summary-card.warn .sc-value{color:var(--orange)}
-.summary-card.danger .sc-value{color:var(--red)}
-.alert-bar{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:var(--radius);padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13px}
-.alert-bar svg{width:16px;height:16px;fill:var(--red);flex-shrink:0}
-.alert-bar .alert-count{background:var(--red);color:#fff;padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600}
+/* Content */
+.content{padding:20px 24px}
+.stat-row{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap}
+.stat-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;flex:1;min-width:120px}
+.stat-card .num{font-size:28px;font-weight:700;line-height:1.1}
+.stat-card .label{font-size:11px;color:var(--text2);margin-top:4px}
+.stat-card.green .num{color:var(--green)}
+.stat-card.red .num{color:var(--red)}
+.stat-card.blue .num{color:var(--blue)}
+.stat-card.purple .num{color:var(--purple)}
+.stat-card.orange .num{color:var(--orange)}
+.stat-card.teal .num{color:var(--accent)}
+
+/* ===== Service Group ===== */
 .group-section{margin-bottom:24px}
-.group-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border)}
-.group-icon-box{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.group-icon-box svg{width:15px;height:15px}
-.group-title{font-size:14px;font-weight:600}
-.group-badge{font-size:11px;color:var(--text2);background:var(--card);padding:2px 10px;border-radius:20px;border:1px solid var(--border)}
-.svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
-.svc-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;display:flex;flex-direction:column;gap:8px;transition:border-color .15s,background .15s;cursor:pointer}
-.svc-card:hover{border-color:var(--accent);background:var(--card-hover)}
-.svc-card.offline{opacity:.55}
-.svc-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
-.svc-name{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
-.svc-status{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.svc-status.up{background:var(--green);box-shadow:0 0 4px var(--green)}
-.svc-status.down{background:var(--red)}
-.svc-status.checking{background:var(--blue);animation:pulse 1s infinite}
-.svc-status.unknown{background:var(--orange)}
-.svc-desc{font-size:11px;color:var(--text2)}
-.svc-tags{display:flex;flex-wrap:wrap;gap:4px}
-.svc-tag{font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(45,212,191,.1);color:var(--accent);border:1px solid rgba(45,212,191,.15)}
-.svc-url{font-size:11px;color:var(--text2);word-break:break-all;font-family:Consolas,monospace}
-.svc-account{background:rgba(0,0,0,.2);border-radius:6px;padding:6px 10px;font-size:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.svc-account .field{display:flex;align-items:center;gap:4px}
-.svc-account .field-label{color:var(--text2);font-size:11px}
-.svc-account .field-val{font-family:Consolas,monospace;font-size:12px}
-.svc-account .no-auth{color:var(--text2);font-style:italic;font-size:11px}
-.pwd-mask{cursor:pointer;color:var(--accent);user-select:none;font-size:12px}
-.pwd-mask:hover{text-decoration:underline}
-.svc-actions{display:flex;gap:6px;flex-wrap:wrap}
-.btn{padding:5px 12px;border-radius:6px;font-size:12px;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-family:inherit;transition:opacity .15s}
-.btn:active{transform:scale(.96)}
-.btn-primary{background:var(--accent);color:#0d1117;font-weight:500}
-.btn-primary:hover{background:var(--accent2)}
-.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text2)}
-.btn-ghost:hover{border-color:var(--accent);color:var(--accent)}
-.btn-sm{padding:4px 10px;font-size:11px}
-.btn-danger{background:var(--red);color:#fff}
-.source-badge{font-size:10px;padding:1px 6px;border-radius:4px;margin-left:auto}
-.source-badge.manual{background:rgba(45,212,191,.12);color:var(--accent)}
-.source-badge.auto{background:rgba(139,84,246,.12);color:var(--purple)}
+.group-header{display:flex;align-items:center;gap:10px;margin-bottom:12px;cursor:pointer;padding:8px 0}
+.group-header .group-dot{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.group-header .group-name{font-size:15px;font-weight:600}
+.group-header .group-count{font-size:12px;color:var(--text2);background:var(--bg2);padding:2px 8px;border-radius:10px}
+.group-header .group-actions{margin-left:auto;display:flex;gap:4px}
+.group-header .group-actions button{background:none;border:1px solid var(--border);border-radius:6px;padding:3px 8px;font-size:11px;color:var(--text2);cursor:pointer;transition:all .15s}
+.group-header .group-actions button:hover{color:var(--accent);border-color:var(--accent)}
 
-/* ===== Monitor ===== */
-.monitor-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
-.monitor-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer;transition:border-color .15s}
-.monitor-card:hover{border-color:var(--accent)}
-.monitor-card.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(45,212,191,.2)}
-.mc-label{font-size:11px;color:var(--text2);margin-bottom:4px;display:flex;align-items:center;gap:6px}
-.mc-value{font-size:26px;font-weight:700}
-.mc-bar{height:4px;border-radius:2px;margin-top:6px;background:var(--border);overflow:hidden}
-.mc-bar-fill{height:100%;border-radius:2px;transition:width .5s}
-.chart-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px}
-.ch-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.ch-title{font-size:14px;font-weight:600}
-.chart-tabs{display:flex;gap:4px}
-.chart-tab{padding:4px 12px;border-radius:6px;font-size:12px;cursor:pointer;color:var(--text2);border:none;background:transparent}
-.chart-tab.active{background:var(--accent);color:#0d1117;font-weight:500}
+.svc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
+.svc-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;transition:all .2s;position:relative}
+.svc-card:hover{border-color:var(--accent);box-shadow:0 2px 12px rgba(45,212,191,.08)}
+.svc-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.svc-name{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+.svc-name .status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block}
+.svc-name .status-dot.online{background:var(--green);box-shadow:0 0 6px var(--green)}
+.svc-name .status-dot.offline{background:var(--red);box-shadow:0 0 6px var(--red)}
+.svc-name .status-dot.unknown{background:var(--orange)}
+.svc-name .status-dot.server_offline{background:var(--orange);box-shadow:0 0 6px var(--orange)}
+.svc-name .status-dot.checking{background:var(--blue);animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.svc-badge{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:500}
+.svc-badge.manual{background:rgba(45,212,191,.15);color:var(--accent)}
+.svc-badge.auto{background:rgba(59,130,246,.15);color:var(--blue)}
+.svc-badge.srv-offline{background:rgba(245,158,11,.15);color:var(--orange)}
+.svc-desc{font-size:12px;color:var(--text2);margin-top:6px}
+.svc-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:8px}
+.svc-tag{font-size:10px;padding:2px 7px;border-radius:6px;background:var(--bg2);color:var(--text2);border:1px solid var(--border)}
+.svc-url{font-size:11px;color:var(--text2);margin-top:8px;word-break:break-all;font-family:monospace}
+.svc-url a{color:var(--accent);text-decoration:none}
+.svc-url a:hover{text-decoration:underline}
+.svc-auth{margin-top:8px;display:flex;gap:12px;font-size:12px;align-items:center}
+.svc-auth .auth-item{display:flex;align-items:center;gap:4px}
+.svc-auth .auth-label{color:var(--text2)}
+.svc-auth .auth-val{font-family:monospace;background:var(--bg2);padding:1px 6px;border-radius:4px;cursor:pointer}
+.svc-auth .auth-val.hidden{filter:blur(3px);user-select:none}
+.svc-auth .auth-val:hover{filter:none}
+.svc-footer{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.btn-sm{font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px}
+.btn-sm:hover{color:var(--accent);border-color:var(--accent)}
+.btn-sm.primary{background:var(--accent);color:#0d1117;border-color:var(--accent);font-weight:500}
+.btn-sm.primary:hover{background:var(--accent2)}
+.btn-sm.danger{color:var(--red);border-color:var(--red)}
+.btn-sm.danger:hover{background:rgba(239,68,68,.1)}
+.svc-move-select{font-size:11px;padding:3px 6px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text1);cursor:pointer}
+.svc-server-info{font-size:11px;color:var(--text2);margin-top:4px;display:flex;align-items:center;gap:4px}
 
-/* ===== Terminal ===== */
-.terminal-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;margin-bottom:16px}
-.terminal-header{background:rgba(0,0,0,.3);padding:8px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)}
-.terminal-header .th-dot{width:10px;height:10px;border-radius:50%}
-.terminal-header .th-title{font-size:12px;color:var(--text2);margin-left:8px;font-family:Consolas,monospace}
-.terminal-header .th-badge{margin-left:auto;font-size:10px;padding:2px 8px;border-radius:4px;background:rgba(245,158,11,.15);color:var(--orange)}
-.terminal-body{background:#0c0c0c;padding:14px;height:280px;overflow-y:auto;font-family:Consolas,monospace;font-size:13px;line-height:1.5}
-.terminal-line{margin-bottom:2px}
-.terminal-line .cmd{color:#e2e8f0}
-.terminal-line .cmd::before{content:'$ ';color:var(--green);font-weight:700}
-.terminal-line .output{color:#94a3b8}
-.terminal-input-wrap{display:flex;align-items:center;gap:6px;margin-top:4px}
-.terminal-input-wrap .prompt{color:var(--green);font-weight:700}
-.terminal-input{flex:1;background:transparent;border:none;color:#e2e8f0;font-family:Consolas,monospace;font-size:13px;outline:none}
-.cmd-templates{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-.cmd-group{margin-bottom:8px}
-.cmd-group-title{font-size:11px;color:var(--text2);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
-.cmd-list{display:flex;flex-wrap:wrap;gap:6px}
-.cmd-btn{padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text1);font-size:12px;font-family:Consolas,monospace;cursor:pointer;transition:all .15s}
-.cmd-btn:hover{border-color:var(--accent);color:var(--accent)}
+/* ===== Group Management Modal ===== */
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:100;display:flex;align-items:center;justify-content:center}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:24px;min-width:460px;max-width:90vw;max-height:80vh;overflow-y:auto}
+.modal h3{font-size:16px;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.modal-row{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.modal-row label{font-size:13px;min-width:70px;color:var(--text2)}
+.modal-row input,.modal-row select{flex:1;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text1);font-size:13px}
+.modal-row input:focus,.modal-row select:focus{outline:none;border-color:var(--accent)}
+.group-list-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:var(--card)}
+.group-list-item .g-dot{width:12px;height:12px;border-radius:4px;flex-shrink:0}
+.group-list-item .g-name{font-size:13px;font-weight:500}
+.group-list-item .g-order{font-size:11px;color:var(--text2)}
+.group-list-item .g-btns{margin-left:auto;display:flex;gap:4px}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
 
-/* ===== Settings ===== */
-.settings-tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
-.settings-tab{padding:7px 14px;border-radius:8px;font-size:12px;cursor:pointer;color:var(--text2);background:var(--card);border:1px solid var(--border);display:flex;align-items:center;gap:4px}
-.settings-tab.active{background:var(--accent);color:#0d1117;font-weight:500;border-color:var(--accent)}
-.data-table{width:100%;border-collapse:collapse}
-.data-table th{text-align:left;padding:10px 14px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);font-weight:500}
-.data-table td{padding:10px 14px;font-size:13px;border-bottom:1px solid var(--border)}
-.data-table tr:hover td{background:var(--card-hover)}
-.add-form{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:16px}
-.form-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-bottom:12px}
-.form-field label{display:block;font-size:11px;color:var(--text2);margin-bottom:4px}
-.form-field input,.form-field select,.form-field textarea{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text1);font-size:13px;outline:none;font-family:inherit}
-.form-field input:focus,.form-field select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(45,212,191,.1)}
-.tool-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
-.tool-card h3{font-size:13px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:6px}
+/* ===== Monitor Page ===== */
+.monitor-select{margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.monitor-select select{padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text1);font-size:13px}
+.metric-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.metric-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;cursor:pointer;transition:all .2s}
+.metric-card:hover{border-color:var(--accent)}
+.metric-card .mc-icon{font-size:20px;margin-bottom:6px}
+.metric-card .mc-label{font-size:12px;color:var(--text2)}
+.metric-card .mc-value{font-size:24px;font-weight:700;margin-top:2px}
+.chart-section{margin-bottom:20px}
+.chart-tabs{display:flex;gap:6px;margin-bottom:10px}
+.chart-tab{font-size:12px;padding:4px 12px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer}
+.chart-tab.active{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+.chart-container{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);height:260px;position:relative}
+.container-table{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:auto;max-height:400px}
+.container-table table{width:100%;border-collapse:collapse;font-size:12px}
+.container-table th{background:var(--bg2);padding:8px 12px;text-align:left;font-weight:500;position:sticky;top:0;z-index:1}
+.container-table td{padding:7px 12px;border-top:1px solid var(--border)}
+.running-dot{color:var(--green);font-weight:700}
 
-/* ===== Toast & Modal ===== */
-.toast-wrap{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px}
-.toast-item{padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;display:flex;align-items:center;gap:8px;animation:slideIn .3s ease;box-shadow:0 4px 12px rgba(0,0,0,.3)}
-.toast-item.success{background:var(--green)}
-.toast-item.error{background:var(--red)}
-.toast-item.info{background:var(--blue)}
-@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
-.modal-overlay{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center}
-.modal-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;width:100%;max-width:420px}
-.drawer-overlay{position:fixed;inset:0;z-index:60;background:rgba(0,0,0,.5);display:flex;justify-content:flex-end;animation:fadeIn .2s ease}
-.drawer-panel{width:380px;max-width:90vw;background:var(--card);border-left:1px solid var(--border);padding:24px;overflow-y:auto;animation:slideIn .25s ease}
-@keyframes fadeIn{from{opacity:0}to{opacity:1}}
-.footer{text-align:center;padding:16px;color:var(--text2);font-size:12px;border-top:1px solid var(--border);margin-top:20px}
-.pulse{animation:pulse 2s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+/* ===== Toolbox Page ===== */
+.terminal-box{background:#0c0c0c;border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-family:'Cascadia Code','Consolas',monospace;font-size:13px;color:var(--green);min-height:300px;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+.terminal-input-row{display:flex;gap:8px;margin-top:10px}
+.terminal-input-row input{flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--green);font-family:monospace;font-size:13px}
+.terminal-input-row input:focus{outline:none;border-color:var(--accent)}
+
+/* ===== Resources Page ===== */
+.server-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.server-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+.server-card h4{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.server-card .s-host{font-size:12px;color:var(--text2);margin-bottom:8px}
+.srv-btn-row{display:flex;gap:6px}
 
 /* ===== Responsive ===== */
-@media(max-width:1024px){
-  .sidebar{width:60px}
-  .sidebar .logo-text,.sidebar .nav-item span:not(.nav-icon),.sidebar .nav-section-title,.sidebar .sidebar-footer-text{display:none}
-  .sidebar .nav-item{justify-content:center}
-  .main{margin-left:60px}
-}
-@media(max-width:768px){
-  .sidebar{display:none}
-  .main{margin-left:0}
-  .svc-grid{grid-template-columns:1fr}
-  .search-input{width:140px}
-  .content{padding:12px}
-  .mobile-nav{display:flex!important}
-}
-.mobile-nav{display:none;position:fixed;bottom:0;left:0;right:0;z-index:40;background:var(--bg2);border-top:1px solid var(--border);justify-content:space-around;padding:6px 0}
-.mobile-nav button{display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 12px;border:none;background:none;color:var(--text2);cursor:pointer;font-size:10px}
-.mobile-nav button.active{color:var(--accent)}
+@media(max-width:768px){.sidebar{width:60px}.sidebar .logo-text,.sidebar .nav-item span:not(.nav-icon),.sidebar .nav-section-title,.sidebar .sidebar-footer-text{display:none}.main{margin-left:60px}.svc-grid{grid-template-columns:1fr}.stat-card{min-width:100px}}
 </style>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+<symbol id="fa-server" viewBox="0 0 640 512"><path fill="currentColor" d="M480 96H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zm0 128H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zm0 128H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zM64 0C28.7 0 0 28.7 0 64v64c0 35.3 28.7 64 64 64h512c35.3 0 64-28.7 64-64V64c0-35.3-28.7-64-64-64H64zm0 256c-35.3 0-64 28.7-64 64v64c0 35.3 28.7 64 64 64h512c35.3 0 64-28.7 64-64v-64c0-35.3-28.7-64-64-64H64z"/></symbol>
+<symbol id="fa-gauge" viewBox="0 0 512 512"><path fill="currentColor" d="M0 256a256 256 0 1 1 512 0A256 256 0 1 1 0 256zm320 96c0-15.9-5.8-30.4-15.3-41.6l65.9-83.6c6.6-8.4 5.2-20.5-3.2-27.1s-20.5-5.2-27.1 3.2l-65.9 83.6C267 283.3 261.7 282 256 282c-35.3 0-64 28.7-64 64s28.7 64 64 64 64-28.7 64-70zm-144-96a32 32 0 1 0 0-64 32 32 0 1 0 0 64z"/></symbol>
+<symbol id="fa-wrench" viewBox="0 0 512 512"><path fill="currentColor" d="M78.6 5C61.5 1.4 43.7 6.3 30.9 18.3C18.1 30.3 12 48 14.1 65.6l15.3 107c1.8 12.4 7.9 23.8 17.3 32.2l150 134.6c7.3 6.5 17.4 8.8 26.8 6.1l4.2-1.2c16.5-4.8 28.6-18.7 31.3-35.7 .7-4.2 3.2-7.8 6.9-9.9l6.8-3.9c14.6-8.3 23.6-24 24.1-41.1 .1-4.4 2.6-8.3 6.6-10.2l7.4-3.5c15.6-7.4 25.6-23.5 25.6-41.2v-4.7c0-4.3 2.1-8.3 5.6-10.8l14.8-10.1c13.3-9.1 18.8-26.2 13.5-41.5l-1.2-3.5c-5.3-15.3-20.2-25.2-36.4-24.6l-18.3 .7c-4.6 .2-9-1.6-12-5l-4.5-5.1c-11.5-13-28.9-19.5-46.5-17.5l-6.7 .8c-4.5 .5-9-1-12.2-4.1L178.4 18.2C166.6 7.1 150.8 1.3 134.6 3.8L78.6 5z"/></symbol>
+<symbol id="fa-layer-group" viewBox="0 0 576 512"><path fill="currentColor" d="M264.9 29.5l193.1 77.4c9.8 3.9 15.9 13 15.9 23s-6.1 19.1-15.9 23L264.9 230.3c-5.4 2.2-11.4 3.7-17.5 3.7s-12.1-1.5-17.5-3.7L36.8 152.9C27 149 20.9 139.9 20.9 129.9s6.1-19.1 15.9-23L229.9 29.5c5.4-2.2 11.4-3.7 17.5-3.7s12.1 1.5 17.5 3.7zM42.9 211.6l36.3 14.6L36.8 257.1c-9.8 3.9-15.9 13-15.9 23s6.1 19.1 15.9 23L36.8 308c-9.8 3.9-15.9 13-15.9 23s6.1 19.1 15.9 23l193.1 77.4c5.4 2.2 11.4 3.7 17.5 3.7s12.1-1.5 17.5-3.7l193.1-77.4c9.8-3.9 15.9-13 15.9-23s-6.1-19.1-15.9-23l.1-5.9c9.8-3.9 15.9-13 15.9-23s-6.1-19.1-15.9-23l-42.4-30.9 36.3-14.6c5.7-2.3 9.4-7.7 9.4-13.8s-3.7-11.5-9.4-13.8l-52.3-21c-7.9-3.2-16.6-2.3-23.7 2.4l-56 38.3-56-38.3c-7.1-4.7-15.8-5.6-23.7-2.4l-52.3 21c-5.7 2.3-9.4 7.7-9.4 13.8s3.7 11.5 9.4 13.8z"/></symbol>
+<symbol id="fa-code" viewBox="0 0 640 512"><path fill="currentColor" d="M393.8 46.1c8.1-8.5 7.8-21.9-.7-30-8.5-8.1-21.9-7.8-30 .7L233.1 154.6c-8.1 8.5-7.8 21.9 .7 30l129.1 121.5c1.8 1.7 3.9 3 6.1 3.9l-40.3 40.3c-5.5-2.4-10.6-5.8-14.9-10.2L184.7 218.3c-15.6-16.4-15.6-42.1 0-58.5L314.1 46.1c8.1-8.5 7.8-21.9-.7-30-8.5-8.1-21.9-7.8-30 .7L154.1 127.6c-25 26.6-25 68.1 0 94.7l129.4 137.8c12.5 13.3 29 20.6 45.8 21.8l-42.2 42.2c-8.1 8.5-7.8 21.9 .7 30 4.1 3.9 9.4 5.9 14.7 5.9 5.6 0 11.2-2.2 15.3-6.6L393.8 461.9c8.1-8.5 7.8-21.9-.7-30L264 310.4c-1.8-1.7-3.9-3-6.1-3.9l40.3-40.3c5.5 2.4 10.6 5.8 14.9 10.2L413.3 413.7c15.6 16.4 15.6 42.1 0 58.5L283.9 585.9c-8.1 8.5-7.8 21.9.7 30 4.1 3.9 9.4 5.9 14.7 5.9 5.6 0 11.2-2.2 15.3-6.6L443.9 504.4c25-26.6 25-68.1 0-94.7L314.5 271.9c-12.5-13.3-29-20.6-45.8-21.8l42.2-42.2c8.1-8.5 7.8-21.9-.7-30L181.7 56.4c-8.1-8.5-7.8-21.9.7-30z"/></symbol>
+<symbol id="fa-chart" viewBox="0 0 512 512"><path fill="currentColor" d="M64 400C64 408.8 56.8 416 48 416H48C39.2 416 32 408.8 32 400V48C32 39.2 39.2 32 48 32H48C56.8 32 64 39.2 64 48V400zM144 272C144 280.8 136.8 288 128 288H128C120.2 288 112 280.8 112 272V128C112 120.2 120.2 112 128 112H128C136.8 112 144 120.2 144 128V272zM240 368C240 376.8 232.8 384 224 384H224C216.2 384 208 376.8 208 368V80C208 72.2 216.2 64 224 64H224C232.8 64 240 72.2 240 80V368zM336 304C336 312.8 328.8 320 320 320H320C312.2 320 304 312.8 304 304V176C304 168.2 312.2 160 320 160H320C328.8 160 336 168.2 336 176V304zM432 240C432 248.8 424.8 256 416 256H416C408.2 256 400 248.8 400 240V112C400 104.2 408.2 96 416 96H416C424.8 96 432 104.2 432 112V240z"/></symbol>
+<symbol id="fa-tool" viewBox="0 0 512 512"><path fill="currentColor" d="M78.6 5C61.5 1.4 43.7 6.3 30.9 18.3C18.1 30.3 12 48 14.1 65.6l15.3 107c1.8 12.4 7.9 23.8 17.3 32.2l150 134.6c7.3 6.5 17.4 8.8 26.8 6.1l4.2-1.2c16.5-4.8 28.6-18.7 31.3-35.7 .7-4.2 3.2-7.8 6.9-9.9l6.8-3.9c14.6-8.3 23.6-24 24.1-41.1 .1-4.4 2.6-8.3 6.6-10.2l7.4-3.5c15.6-7.4 25.6-23.5 25.6-41.2v-4.7c0-4.3 2.1-8.3 5.6-10.8l14.8-10.1c13.3-9.1 18.8-26.2 13.5-41.5l-1.2-3.5c-5.3-15.3-20.2-25.2-36.4-24.6l-18.3 .7c-4.6 .2-9-1.6-12-5l-4.5-5.1c-11.5-13-28.9-19.5-46.5-17.5l-6.7 .8c-4.5 .5-9-1-12.2-4.1L178.4 18.2C166.6 7.1 150.8 1.3 134.6 3.8L78.6 5z"/></symbol>
+<symbol id="fa-database" viewBox="0 0 448 512"><path fill="currentColor" d="M448 80v48c0 44.2-100.3 80-224 80S0 172.2 0 128V80C0 35.8 100.3 0 224 0s224 35.8 224 80zM0 176v48c0 44.2 100.3 80 224 80s224-35.8 224-80v-48c-25.7 28.4-89 48-224 48S25.7 204.4 0 176zm0 96v48c0 44.2 100.3 80 224 80s224-35.8 224-80v-48c-25.7 28.4-89 48-224 48S25.7 300.4 0 272zm0 96v48c0 44.2 100.3 80 224 80s224-35.8 224-80v-48c-25.7 28.4-89 48-224 48S25.7 396.4 0 368z"/></symbol>
+<symbol id="fa-bolt" viewBox="0 0 448 512"><path fill="currentColor" d="M349.4 44.6c5.9-13.7 1.5-29.7-10.6-38.5s-28.6-8-39.9 1.8l-256 224c-10 8.8-13.6 22.9-8.9 35.3S50.7 288 64 288h111.5L98.6 467.4c-5.9 13.7-1.5 29.7 10.6 38.5s28.6 8 39.9-1.8l256-224c10-8.8 13.6-22.9 8.9-35.3S397.3 224 384 224H272.5L349.4 44.6z"/></symbol>
+<symbol id="fa-globe" viewBox="0 0 512 512"><path fill="currentColor" d="M352 256c0 22.2-1.2 43.6-3.3 64H163.3c-2.2-20.4-3.3-41.8-3.3-64s1.2-43.6 3.3-64h185.4c2.2 20.4 3.3 41.8 3.3 64zm28.8-64h123.1c5.3 20.5 8.1 41.9 8.1 64s-2.8 43.5-8.1 64H380.8c2.1-20.6 3.2-42 3.2-64s-1.1-43.4-3.2-64zm112.6-32H376.7c-10-63.9-29.8-117.4-55.3-151.6C378.3 32.4 448 101.8 480 184.4zM256 32c31.7 0 72.6 55.8 90.3 136H165.7C183.4 87.8 224.3 32 256 32zM132.6 8.4C107.1 42.6 87.3 96.1 77.3 160H20.6C52.6 77.4 122.3 8 132.6 8.4zM8.1 192h123.1c-2.1 20.6-3.2 42-3.2 64s1.1 43.4 3.2 64H8.1C2.8 299.5 0 278.1 0 256s2.8-43.5 8.1-64zM20.6 352h56.7c10 63.9 29.8 117.4 55.3 151.6C52.6 479.6 20.6 410.2 20.6 352zm151.2 0h168.5c-17.7 80.2-58.6 136-84.3 136s-66.5-55.8-84.2-136zm207.7 0h56.7c0 58.2-32 127.6-112.7 151.6 25.5-34.2 45.3-87.7 55.3-151.6h.7z"/></symbol>
+<symbol id="fa-box" viewBox="0 0 448 512"><path fill="currentColor" d="M50.7 58.5L0 96V416l50.7 37.5L224 448l173.3 5.5L448 416V96L397.3 58.5 224 64 50.7 58.5z"/></symbol>
+</svg>
 </head>
 <body>
-
-<!-- ===== SVG Sprite ===== -->
-<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
-<symbol id="fa-dashboard" viewBox="0 0 24 24"><path fill="currentColor" d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></symbol>
-<symbol id="fa-chart" viewBox="0 0 24 24"><path fill="currentColor" d="M3.5 18.5l6-6.01 4 4.01L20.5 7l-1.41-1.41L13.6 12.6l-4-4L2 17.09l1.5 1.41z"/></symbol>
-<symbol id="fa-tool" viewBox="0 0 24 24"><path fill="currentColor" d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1 .1-1.4z"/></symbol>
-<symbol id="fa-cog" viewBox="0 0 24 24"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94 0 .31.04.64.09.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.21.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></symbol>
-<symbol id="fa-code" viewBox="0 0 24 24"><path fill="currentColor" d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z"/></symbol>
-<symbol id="fa-database" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3C7 3 3 4.79 3 7s4 4 9 4 9-1.79 9-4-4-4-9-4zM3 9v3c0 2.21 4 4 9 4s9-1.79 9-4V9c0 2.21-4 4-9 4S3 11.21 3 9zm0 5v3c0 2.21 4 4 9 4s9-1.79 9-4v-3c0 2.21-4 4-9 4s-9-1.79-9-4z"/></symbol>
-<symbol id="fa-server" viewBox="0 0 24 24"><path fill="currentColor" d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></symbol>
-<symbol id="fa-terminal" viewBox="0 0 24 24"><path fill="currentColor" d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V8h16v10zm-8-2h6v-2h-6v2zM7.5 17l1.41-1.41L6.33 13l2.58-2.59L7.5 9 4 13l3.5 4z"/></symbol>
-<symbol id="fa-search" viewBox="0 0 24 24"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></symbol>
-<symbol id="fa-copy" viewBox="0 0 24 24"><path fill="currentColor" d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></symbol>
-<symbol id="fa-plus" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></symbol>
-<symbol id="fa-trash" viewBox="0 0 24 24"><path fill="currentColor" d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></symbol>
-<symbol id="fa-external" viewBox="0 0 24 24"><path fill="currentColor" d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></symbol>
-<symbol id="fa-bell" viewBox="0 0 24 24"><path fill="currentColor" d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></symbol>
-<symbol id="fa-sun" viewBox="0 0 24 24"><path fill="currentColor" d="M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.5h-2v3h2V1zm7.45 3.16l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zm-3.21 13.7l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 10.5v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 16.95h2V19h-2v2.45zm-7.45-3.91l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z"/></symbol>
-<symbol id="fa-moon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></symbol>
-<symbol id="fa-microchip" viewBox="0 0 24 24"><path fill="currentColor" d="M15 9h-2V7h-2v2H9v2h2v2h2v-2h2V9zm-3-7C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></symbol>
-<symbol id="fa-memory" viewBox="0 0 24 24"><path fill="currentColor" d="M15 9h-2V7h-2v2H9v2h2v2h2v-2h2V9zm-3-7C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></symbol>
-<symbol id="fa-disk" viewBox="0 0 24 24"><path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96z"/></symbol>
-<symbol id="fa-network" viewBox="0 0 24 24"><path fill="currentColor" d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/></symbol>
-<symbol id="fa-box" viewBox="0 0 24 24"><path fill="currentColor" d="M20 7h-4V4c0-1.1-.9-2-2-2h-4c-1.1 0-2 .9-2 2v3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V9c0-1.1-.9-2-2-2zM10 4h4v3h-4V4z"/></symbol>
-<symbol id="fa-clock" viewBox="0 0 24 24"><path fill="currentColor" d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/></symbol>
-<symbol id="fa-check" viewBox="0 0 24 24"><path fill="currentColor" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></symbol>
-<symbol id="fa-warn" viewBox="0 0 24 24"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></symbol>
-<symbol id="fa-arrow" viewBox="0 0 24 24"><path fill="currentColor" d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/></symbol>
-<symbol id="fa-menu" viewBox="0 0 24 24"><path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></symbol>
-</svg>
-
-<!-- ===== Vue App ===== -->
-<div id="app">
-  <!-- Toasts -->
-  <div class="toast-wrap">
-    <div v-for="t in toasts" :key="t.id" :class="['toast-item', t.type]">
-      <span>{{ t.message }}</span>
-    </div>
-  </div>
-
-  <!-- Sidebar -->
-  <aside :class="['sidebar', sidebarCollapsed ? 'collapsed' : '']">
-    <div class="sidebar-logo">
-      <div class="logo-icon">O</div>
-      <div class="logo-text">OpsCenter<span>运维工作台 v3.0</span></div>
-    </div>
-    <nav class="sidebar-nav">
-      <div class="nav-section">
-        <div class="nav-section-title">主导航</div>
-        <div v-for="item in navItems" :key="item.key"
-             :class="['nav-item', currentPage===item.key ? 'active' : '']"
-             @click="switchPage(item.key)">
-          <svg class="nav-icon"><use :href="item.icon"></use></svg>
-          <span>{{ item.label }}</span>
-          <span v-if="item.key==='nav' && offlineCount>0" class="nav-badge">{{ offlineCount }}</span>
-        </div>
-      </div>
-      <div class="nav-section" v-if="servers.length">
-        <div class="nav-section-title">服务器</div>
-        <div v-for="s in servers" :key="s.id" class="nav-item" @click="selectServer(s.id)">
-          <svg class="nav-icon"><use href="#fa-server"></use></svg>
-          <span>{{ s.name }}</span>
-          <span :style="{marginLeft:'auto',width:'7px',height:'7px',borderRadius:'50%',background:s.status==='online'?'var(--green)':s.status==='offline'?'var(--red)':'var(--orange)',display:'inline-block',flexShrink:0}"></span>
-        </div>
-      </div>
-    </nav>
-    <div class="sidebar-footer">
-      <span class="online-dot"></span>
-      <span class="sidebar-footer-text">{{ servers.length }} 服务器 · {{ totalServices }} 服务</span>
-    </div>
-  </aside>
-
-  <!-- Main -->
-  <div :class="['main', sidebarCollapsed ? 'expanded' : '']">
-    <header class="topbar">
-      <div class="topbar-left">
-        <button class="topbar-btn" @click="sidebarCollapsed=!sidebarCollapsed" title="折叠侧边栏">
-          <svg width="14" height="14" fill="currentColor"><use href="#fa-menu"></use></svg>
-        </button>
-        <h2>{{ pageTitle }}</h2>
-      </div>
-      <div class="topbar-right">
-        <div class="search-wrap">
-          <svg viewBox="0 0 24 24"><use href="#fa-search"></use></svg>
-          <input class="search-input" v-model="searchQuery" placeholder="搜索服务... (Ctrl+K)">
-        </div>
-        <span class="topbar-time">{{ clockStr }}</span>
-        <button class="topbar-btn" @click="toggleTheme" :title="isDark?'亮色模式':'暗色模式'">
-          <svg width="14" height="14" fill="currentColor"><use :href="isDark?'#fa-sun':'#fa-moon'"></use></svg>
-        </button>
-      </div>
-    </header>
-
-    <div class="content">
-
-      <!-- ==================== PAGE: 服务导航 ==================== -->
-      <div :class="['page', currentPage==='nav'?'active':'']">
-        <!-- Alert bar -->
-        <div v-if="offlineCount>0" class="alert-bar">
-          <svg viewBox="0 0 24 24"><use href="#fa-warn"></use></svg>
-          <span>异常服务</span>
-          <span class="alert-count">{{ offlineCount }} 个服务离线/异常</span>
-          <span style="color:var(--text2);margin-left:auto;font-size:12px">点击卡片查看详情</span>
-        </div>
-
-        <!-- Summary -->
-        <div class="summary-grid">
-          <div class="summary-card"><div class="sc-value">{{ totalServices }}</div><div class="sc-label">服务总数</div></div>
-          <div class="summary-card"><div class="sc-value" style="color:var(--green)">{{ onlineCount }}</div><div class="sc-label">在线服务</div></div>
-          <div class="summary-card" :class="offlineCount>0?'danger':''"><div class="sc-value">{{ offlineCount }}</div><div class="sc-label">异常服务</div></div>
-          <div class="summary-card"><div class="sc-value">{{ servers.length }}</div><div class="sc-label">服务器</div></div>
-          <div class="summary-card"><div class="sc-value">{{ serviceGroups.length }}</div><div class="sc-label">服务分组</div></div>
-          <div class="summary-card"><div class="sc-value">{{ authRequiredCount }}</div><div class="sc-label">需认证</div></div>
-        </div>
-
-        <!-- Service Groups -->
-        <div v-for="group in filteredGroups" :key="group.group" class="group-section">
-          <div class="group-header">
-            <div class="group-icon-box" :style="{background: group.color+'18'}">
-              <svg :style="{fill:group.color}"><use :href="group.icon"></use></svg>
-            </div>
-            <span class="group-title">{{ group.group }}</span>
-            <span class="group-badge">{{ group.services.length }} 个服务</span>
-          </div>
-          <div class="svc-grid">
-            <div v-for="svc in group.services" :key="svc.name"
-                 :class="['svc-card', svc.status==='offline'?'offline':'']"
-                 @click="openService(svc)">
-              <div class="svc-top">
-                <div>
-                  <div class="svc-name">
-                    <span :class="['svc-status', svc.status==='online'?'up':svc.status==='offline'?'down':svc.status==='checking'?'checking':'unknown']"></span>
-                    {{ svc.name }}
-                  </div>
-                  <div class="svc-desc">{{ svc.desc }}</div>
-                </div>
-                <span :class="['source-badge', svc.source==='manual'?'manual':'auto']">{{ svc.source==='manual'?'手动配置':'自动发现' }}</span>
-              </div>
-              <div v-if="svc.tags && svc.tags.length" class="svc-tags">
-                <span v-for="tag in svc.tags" :key="tag" class="svc-tag">{{ tag }}</span>
-              </div>
-              <div class="svc-url">{{ svc.fullUrl }}</div>
-              <div v-if="svc.username || svc.source==='auto'" class="svc-account">
-                <template v-if="svc.username">
-                  <div class="field"><span class="field-label">账号:</span><span class="field-val">{{ svc.username }}</span></div>
-                  <div class="field">
-                    <span class="field-label">密码:</span>
-                    <span class="pwd-mask" @click.stop="togglePwd($event, svc)">{{ svc._showPwd ? svc.password : '••••••' }}</span>
-                  </div>
-                </template>
-                <template v-else-if="svc.source==='auto'">
-                  <span class="no-auth">自动发现服务（无账号配置）</span>
-                </template>
-                <template v-else>
-                  <span class="no-auth">无需认证</span>
-                </template>
-              </div>
-              <div class="svc-actions">
-                <button class="btn btn-primary btn-sm" @click.stop="openService(svc)">打开服务</button>
-                <button v-if="svc.username" class="btn btn-ghost btn-sm" @click.stop="copyText(svc.username,'账号已复制')">复制账号</button>
-                <button v-if="svc.password" class="btn btn-ghost btn-sm" @click.stop="copyText(svc.password,'密码已复制')">复制密码</button>
-                <button v-if="svc.username" class="btn btn-ghost btn-sm" @click.stop="copyText(svc.username+':'+svc.password,'账号密码已复制')">复制全部</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div v-if="!filteredGroups.length && !loading" style="text-align:center;padding:40px;color:var(--text2)">
-          <p>暂无服务数据</p>
-        </div>
-      </div>
-
-      <!-- ==================== PAGE: 监控中心 ==================== -->
-      <div :class="['page', currentPage==='monitor'?'active':'']">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
-          <select v-model="currentServerId" @change="onServerChange" style="background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 14px;color:var(--text1);font-size:13px;outline:none">
-            <option value="">选择服务器</option>
-            <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }} ({{ s.host }})</option>
-          </select>
-          <span v-if="monitor.connected" style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text2)">
-            <span style="width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 5px var(--green);display:inline-block"></span>
-            实时连接 · 自动刷新 {{ refreshCountdown }}s
-          </span>
-          <button class="btn btn-ghost btn-sm" style="margin-left:auto" @click="loadMonitor">手动刷新</button>
-        </div>
-
-        <!-- Metric Cards -->
-        <div class="monitor-grid">
-          <div v-for="m in metricCards" :key="m.key"
-               :class="['monitor-card', historyMetric===m.key?'active':'']"
-               @click="historyMetric=m.key;loadHistory()">
-            <div class="mc-label"><svg class="icon"><use :href="m.icon"></use></svg> {{ m.label }}</div>
-            <div class="mc-value" :style="{color:m.value>90?'var(--red)':m.value>80?'var(--orange)':m.color}">{{ m.value }}{{ m.unit }}</div>
-            <div class="mc-bar"><div class="mc-bar-fill" :style="{width:Math.min(m.value,100)+'%',background:m.value>90?'var(--red)':m.value>80?'var(--orange)':m.color}"></div></div>
-          </div>
-        </div>
-
-        <!-- History Chart -->
-        <div class="chart-box">
-          <div class="ch-header">
-            <span class="ch-title">历史趋势 (24h)</span>
-            <div class="chart-tabs">
-              <button v-for="hk in [{k:'cpu',l:'CPU'},{k:'memory',l:'内存'},{k:'disk',l:'磁盘'},{k:'network',l:'网络'}]" :key="hk.k"
-                      :class="['chart-tab', historyMetric===hk.k?'active':'']" @click="historyMetric=hk.k;loadHistory()">{{ hk.l }}</button>
-            </div>
-          </div>
-          <div ref="historyChart" style="height:260px"></div>
-        </div>
-
-        <!-- Containers Table -->
-        <div class="chart-box">
-          <div class="ch-header">
-            <span class="ch-title">容器列表</span>
-            <span style="font-size:12px;color:var(--text2)">{{ monitor.containers.length }} 个容器</span>
-          </div>
-          <div style="overflow-x:auto">
-            <table class="data-table">
-              <thead><tr><th>名称</th><th>镜像</th><th>状态</th><th>端口</th></tr></thead>
-              <tbody>
-                <tr v-for="c in monitor.containers" :key="c.name">
-                  <td style="font-weight:500">{{ c.name }}</td>
-                  <td style="font-size:12px;color:var(--text2)">{{ c.image }}</td>
-                  <td><span :style="{color:c.status==='running'?'var(--green)':'var(--red)'}">● {{ c.status }}</span></td>
-                  <td style="font-size:12px;color:var(--text2);font-family:Consolas,monospace">{{ formatPorts(c.ports) }}</td>
-                </tr>
-                <tr v-if="!monitor.containers.length"><td colspan="4" style="text-align:center;color:var(--text2);padding:20px">暂无容器数据</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-
-      <!-- ==================== PAGE: 工具箱 ==================== -->
-      <div :class="['page', currentPage==='tools'?'active':'']">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;font-size:13px;color:var(--text2)">
-          <svg width="16" height="16" fill="currentColor"><use href="#fa-server"></use></svg>
-          当前服务器: <strong style="color:var(--text1)">{{ currentServerName }}</strong>
-        </div>
-
-        <!-- Terminal -->
-        <div class="terminal-box">
-          <div class="terminal-header">
-            <span class="th-dot" style="background:#ff5f56"></span>
-            <span class="th-dot" style="background:#ffbd2e"></span>
-            <span class="th-dot" style="background:#27c93f"></span>
-            <span class="th-title">{{ currentServerName }} - SSH</span>
-            <span class="th-badge">模拟模式</span>
-          </div>
-          <div ref="termBody" class="terminal-body">
-            <div v-for="(line,i) in termLines" :key="i" class="terminal-line">
-              <span v-if="line.type==='cmd'" class="cmd">{{ line.text }}</span>
-              <span v-else :style="{color:line.type==='error'?'var(--red)':line.type==='info'?'var(--green)':'var(--text2)'}">{{ line.text }}</span>
-            </div>
-            <div class="terminal-input-wrap">
-              <span class="prompt">$</span>
-              <input class="terminal-input" v-model="termInput" @keydown.enter="execTerm" placeholder="输入命令...">
-            </div>
-          </div>
-        </div>
-
-        <!-- Command Templates -->
-        <div class="chart-box" style="margin-bottom:16px">
-          <div class="ch-header">
-            <span class="ch-title">常用命令模板</span>
-            <span style="font-size:12px;color:var(--text2)">点击自动填入终端</span>
-          </div>
-          <div class="cmd-templates">
-            <div v-for="grp in cmdGroups" :key="grp.name" class="cmd-group">
-              <div class="cmd-group-title">{{ grp.name }}</div>
-              <div class="cmd-list">
-                <button v-for="cmd in grp.commands" :key="cmd" class="cmd-btn" @click="termInput=cmd">{{ cmd }}</button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Tool Cards Grid -->
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px">
-          <!-- Timestamp -->
-          <div class="tool-card">
-            <h3><svg class="icon" style="color:var(--purple)"><use href="#fa-clock"></use></svg> 时间戳转换</h3>
-            <div class="form-row">
-              <div class="form-field"><label>Unix 时间戳</label><input v-model="tsTool.unix" @input="convertTs('unix')"></div>
-              <div class="form-field"><label>日期时间</label><input v-model="tsTool.date" @input="convertTs('date')"></div>
-            </div>
-            <div style="font-size:11px;color:var(--text2)">当前: <span style="color:var(--accent);font-family:Consolas">{{ tsTool.now }}</span> · ISO: <span style="color:var(--accent);font-family:Consolas">{{ tsTool.iso }}</span></div>
-          </div>
-          <!-- Base64 -->
-          <div class="tool-card">
-            <h3><svg class="icon" style="color:var(--orange)"><use href="#fa-code"></use></svg> Base64 编解码</h3>
-            <div class="form-field" style="margin-bottom:8px"><label>原始文本</label><textarea v-model="b64Tool.input" @input="encB64" rows="2" style="resize:none"></textarea></div>
-            <div class="form-field"><label>Base64 编码</label><textarea v-model="b64Tool.encoded" @input="decB64" rows="2" style="resize:none;font-family:Consolas,monospace"></textarea></div>
-            <div v-if="b64Tool.error" style="font-size:11px;color:var(--red)">{{ b64Tool.error }}</div>
-          </div>
-          <!-- JSON -->
-          <div class="tool-card">
-            <h3><svg class="icon" style="color:var(--blue)"><use href="#fa-code"></use></svg> JSON 格式化</h3>
-            <div class="form-field" style="margin-bottom:8px"><label>输入 JSON</label><textarea v-model="jsonTool.input" rows="3" style="resize:none;font-family:Consolas,monospace" placeholder='{"key":"value"}'></textarea></div>
-            <div style="display:flex;gap:6px;margin-bottom:8px">
-              <button class="btn btn-primary btn-sm" @click="fmtJson">格式化</button>
-              <button class="btn btn-ghost btn-sm" @click="jsonTool.output=JSON.stringify(JSON.parse(jsonTool.input||'{}'))">压缩</button>
-              <button class="btn btn-ghost btn-sm" @click="copyText(jsonTool.output,'JSON已复制')">复制</button>
-            </div>
-            <div v-if="jsonTool.error" style="font-size:11px;color:var(--red)">{{ jsonTool.error }}</div>
-            <textarea v-model="jsonTool.output" readonly rows="3" style="width:100%;resize:none;font-family:Consolas,monospace;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text1);font-size:12px"></textarea>
-          </div>
-          <!-- Password -->
-          <div class="tool-card">
-            <h3><svg class="icon" style="color:var(--accent)"><use href="#fa-cog"></use></svg> 密码生成器</h3>
-            <div style="margin-bottom:8px">
-              <label style="font-size:11px;color:var(--text2)">长度: {{ pwdTool.length }}</label>
-              <input type="range" v-model.number="pwdTool.length" min="4" max="64" @input="genPwd" style="width:100%;accent-color:var(--accent)">
-            </div>
-            <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;margin-bottom:10px">
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" v-model="pwdTool.upper" @change="genPwd" style="accent-color:var(--accent)"> 大写</label>
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" v-model="pwdTool.lower" @change="genPwd" style="accent-color:var(--accent)"> 小写</label>
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" v-model="pwdTool.digits" @change="genPwd" style="accent-color:var(--accent)"> 数字</label>
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" v-model="pwdTool.symbols" @change="genPwd" style="accent-color:var(--accent)"> 符号</label>
-            </div>
-            <div style="display:flex;gap:8px">
-              <input :value="pwdTool.result" readonly style="flex:1;font-family:Consolas,monospace;color:var(--accent);background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:13px">
-              <button class="btn btn-primary btn-sm" @click="copyText(pwdTool.result,'密码已复制')">复制</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- ==================== PAGE: 资源管理 ==================== -->
-      <div :class="['page', currentPage==='settings'?'active':'']">
-        <div class="settings-tabs">
-          <span v-for="tab in settingTabs" :key="tab.key"
-                :class="['settings-tab', settingsTab===tab.key?'active':'']"
-                @click="settingsTab=tab.key">
-            <svg width="12" height="12" fill="currentColor"><use :href="tab.icon"></use></svg>
-            {{ tab.label }}
-          </span>
-        </div>
-
-        <!-- Servers Tab -->
-        <div v-if="settingsTab==='servers'">
-          <div class="summary-grid" style="margin-bottom:16px">
-            <div class="summary-card"><div class="sc-value">{{ servers.length }}</div><div class="sc-label">服务器总数</div></div>
-            <div class="summary-card"><div class="sc-value" style="color:var(--green)">{{ servers.filter(s=>s.status==='online').length }}</div><div class="sc-label">在线</div></div>
-            <div class="summary-card" :class="servers.filter(s=>s.status!=='online').length?'danger':''"><div class="sc-value">{{ servers.filter(s=>s.status!=='online').length }}</div><div class="sc-label">离线</div></div>
-            <div class="summary-card"><div class="sc-value">{{ totalServices }}</div><div class="sc-label">服务总数</div></div>
-          </div>
-          <div class="chart-box">
-            <div class="ch-header">
-              <span class="ch-title">服务器管理</span>
-              <button class="btn btn-primary btn-sm" @click="showAddServer=!showAddServer">+ 添加服务器</button>
-            </div>
-            <div v-if="showAddServer" class="add-form" style="margin-bottom:16px">
-              <div class="form-row">
-                <div class="form-field"><label>名称 *</label><input v-model="newServer.name" placeholder="如: 生产服务器"></div>
-                <div class="form-field"><label>IP地址 *</label><input v-model="newServer.host" placeholder="如: 192.168.1.100"></div>
-                <div class="form-field"><label>SSH端口</label><input v-model.number="newServer.ssh_port" value="22"></div>
-                <div class="form-field"><label>SSH用户</label><input v-model="newServer.username" placeholder="root"></div>
-                <div class="form-field"><label>SSH密码</label><input v-model="newServer.password" type="password" placeholder="可选"></div>
-              </div>
-              <div style="display:flex;gap:8px">
-                <button class="btn btn-primary btn-sm" @click="addServer">保存并扫描</button>
-                <button class="btn btn-ghost btn-sm" @click="testSSH">测试连接</button>
-                <button class="btn btn-ghost btn-sm" @click="showAddServer=false">取消</button>
-              </div>
-              <div v-if="sshTestMsg" :style="{marginTop:'8px',fontSize:'12px',color:sshTestOk?'var(--green)':'var(--red)'}">{{ sshTestMsg }}</div>
-            </div>
-            <table class="data-table">
-              <thead><tr><th>名称</th><th>IP地址</th><th>SSH用户</th><th>状态</th><th>操作</th></tr></thead>
-              <tbody>
-                <tr v-for="s in servers" :key="s.id">
-                  <td style="font-weight:500">{{ s.name }}</td>
-                  <td style="font-family:Consolas">{{ s.host }}</td>
-                  <td>{{ s.ssh_user || s.username || '-' }}</td>
-                  <td><span :style="{color:s.status==='online'?'var(--green)':'var(--red)'}">● {{ s.status==='online'?'在线':'离线' }}</span></td>
-                  <td>
-                    <button class="btn btn-ghost btn-sm" @click="selectServer(s.id);switchPage('monitor')">监控</button>
-                    <button class="btn btn-ghost btn-sm" @click="scanServerS(s.id)">扫描</button>
-                    <button class="btn btn-ghost btn-sm" style="color:var(--red)" @click="delServer(s.id)">删除</button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- Service Config Tab -->
-        <div v-if="settingsTab==='services'">
-          <div class="chart-box">
-            <div class="ch-header">
-              <span class="ch-title">手动注册服务</span>
-            </div>
-            <div class="add-form" style="margin-bottom:0;border:none;padding:0">
-              <div class="form-row">
-                <div class="form-field"><label>服务名称 *</label><input v-model="newSvc.name" placeholder="如: Nginx"></div>
-                <div class="form-field"><label>URL *</label><input v-model="newSvc.url" placeholder="如: http://localhost:80"></div>
-                <div class="form-field"><label>分类</label><input v-model="newSvc.category" placeholder="如: 基础设施"></div>
-                <div class="form-field"><label>描述</label><input v-model="newSvc.description" placeholder="服务描述"></div>
-              </div>
-              <button class="btn btn-primary btn-sm" @click="addSvc" :disabled="!newSvc.name||!newSvc.url||!currentServerId">注册服务</button>
-              <span v-if="!currentServerId" style="margin-left:8px;font-size:12px;color:var(--orange)">请先选择服务器</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Scan Tab -->
-        <div v-if="settingsTab==='scan'">
-          <div class="chart-box">
-            <div class="ch-header"><span class="ch-title">服务扫描</span></div>
-            <div style="display:flex;align-items:center;gap:12px">
-              <button class="btn btn-primary btn-sm" @click="triggerScan" :disabled="scanning">{{ scanning?'扫描中...':'触发全量扫描' }}</button>
-              <span style="font-size:12px;color:var(--text2)">扫描将自动发现服务器上的运行服务</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Appearance Tab -->
-        <div v-if="settingsTab==='appearance'">
-          <div class="chart-box">
-            <div class="ch-title" style="margin-bottom:12px">主题</div>
-            <div style="display:flex;gap:12px">
-              <button @click="isDark=true" :class="['btn',isDark?'btn-primary':'btn-ghost']" style="flex:1;padding:16px">🌙 深色模式</button>
-              <button @click="isDark=false" :class="['btn',!isDark?'btn-primary':'btn-ghost']" style="flex:1;padding:16px">☀️ 亮色模式</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <div class="footer">
-      OpsCenter v3.0 运维工作台 · 手动配置: services.json · 自动发现: 后端API · 编辑配置后刷新即生效
-    </div>
-
-    <!-- Mobile Nav -->
-    <nav class="mobile-nav">
-      <button v-for="item in navItems" :key="item.key" :class="{active:currentPage===item.key}" @click="switchPage(item.key)">
-        <svg width="18" height="18" fill="currentColor"><use :href="item.icon"></use></svg>
-        {{ item.label }}
-      </button>
-    </nav>
-  </div>
-
-  <!-- Confirm Modal -->
-  <div v-if="confirmShow" class="modal-overlay" @click="confirmShow=false">
-    <div class="modal-box" @click.stop>
-      <h3 style="font-size:14px;font-weight:600;margin-bottom:8px">{{ confirmTitle }}</h3>
-      <p style="font-size:12px;color:var(--text2);margin-bottom:16px">{{ confirmMsg }}</p>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button class="btn btn-ghost btn-sm" @click="confirmShow=false">取消</button>
-        <button class="btn btn-danger btn-sm" @click="confirmAction();confirmShow=false">确认</button>
-      </div>
-    </div>
-  </div>
-</div>
-
+<div id="app"></div>
 <script>
-const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
 
-/* ===== API Layer (inline, replaces external api.js) ===== */
-const API_BASE = '/ops/api/v2';
-const OpsAPI = {
-  async _fetch(url, opts = {}) {
-    const res = await fetch(API_BASE + url, { headers: { 'Content-Type': 'application/json' }, ...opts });
-    if (!res.ok) throw new Error(`API ${res.status}: ${res.statusText}`);
-    return res.json();
-  },
-  getServers: () => OpsAPI._fetch('/servers'),
-  getServices: (sid) => OpsAPI._fetch(`/services?server_id=${sid}`),
-  getCategories: () => OpsAPI._fetch('/categories'),
-  getMonitor: (sid) => OpsAPI._fetch(`/monitor/${sid}`),
-  getHistory: (sid, metric, hours) => OpsAPI._fetch(`/monitor/${sid}/history?metric=${metric}&hours=${hours}`),
-  getStats: () => OpsAPI._fetch('/stats'),
-  getHealth: () => OpsAPI._fetch('/health'),
-  addServer: (data) => OpsAPI._fetch('/servers', { method: 'POST', body: JSON.stringify(data) }),
-  deleteServer: (id) => OpsAPI._fetch(`/servers/${id}`, { method: 'DELETE' }),
-  addService: (data) => OpsAPI._fetch(`/services?server_id=${data.server_id}`, { method: 'POST', body: JSON.stringify(data) }),
-  scanServer: (id) => OpsAPI._fetch(`/servers/${id}/scan`, { method: 'POST' }),
-  testSSH: (id, data) => OpsAPI._fetch(`/servers/${id}/ssh-test`, { method: 'POST', body: JSON.stringify(data) }),
-  togglePin: (sid) => OpsAPI._fetch(`/services/${sid}/pin`, { method: 'PATCH' }),
-  triggerScan: () => OpsAPI._fetch('/scan', { method: 'POST' }),
-};
+const API = '/ops/api/v2';
+const iconMap = {code:'#fa-code',chart:'#fa-chart',tool:'#fa-tool',database:'#fa-database',globe:'#fa-globe',bolt:'#fa-bolt',box:'#fa-box',server:'#fa-server'};
 
 createApp({
   setup() {
-    /* ========== State ========== */
-    const isDark = ref(localStorage.getItem('oc-theme') !== 'light');
     const currentPage = ref('nav');
-    const currentServerId = ref('');
-    const sidebarCollapsed = ref(localStorage.getItem('oc-sidebar-collapsed') === 'true');
+    const darkMode = ref(true);
     const searchQuery = ref('');
-    const mobileView = ref(window.innerWidth < 769);
-    const toasts = ref([]);
-    const loading = ref(false);
+    const clock = ref('');
+    const collapsed = ref(false);
 
-    /* Navigation */
-    const navItems = [
-      { key: 'nav', label: '服务导航', icon: '#fa-dashboard' },
-      { key: 'monitor', label: '监控中心', icon: '#fa-chart' },
-      { key: 'tools', label: '工具箱', icon: '#fa-tool' },
-      { key: 'settings', label: '资源管理', icon: '#fa-cog' },
-    ];
-
-    /* Services from services.json (manual) + API (auto-discovered) */
-    const manualGroups = ref([]);
-    const autoServices = ref([]);
+    // ========== Data ==========
+    const groupConfig = reactive({ groups: [], serviceGroupMap: {} });
+    const manualServices = ref([]);   // from services.json
+    const autoServices = ref([]);     // from /api/v2/services-with-status
     const servers = ref([]);
-    const categories = ref([]);
+    const currentServerId = ref('');
+    const monitorData = ref(null);
+    const containers = ref([]);
+    const selectedMetric = ref('cpu');
 
-    /* Monitor */
-    const monitor = reactive({
-      connected: false,
-      cpu: 0, memory: 0, disk: 0, network: 0,
-      cpu_total: 0, memory_total: 0, memory_used: 0,
-      disk_total: 0, disk_used: 0,
-      network_in: 0, network_out: 0,
-      containers: [], history: [],
-    });
-    const historyMetric = ref('cpu');
-    const refreshCountdown = ref(30);
-    let refreshTimer = null;
-    const historyChart = ref(null);
-    let chartInstance = null;
-    const serverMetrics = reactive({});
+    // ========== Modals ==========
+    const showGroupModal = ref(false);
+    const newGroupName = ref('');
+    const newGroupId = ref('');
+    const newGroupColor = ref('#64748b');
 
-    /* Terminal */
-    const termLines = ref([]);
+    // ========== Terminal ==========
+    const termLines = ref(['$ Welcome to OpsCenter Terminal Simulator', '$ Type "help" for commands']);
     const termInput = ref('');
-    const termHistoryList = [];
-    const termHistoryIdx = ref(-1);
-
-    /* Tools */
-    const tsTool = reactive({ unix: '', date: '', now: '', iso: '' });
-    const b64Tool = reactive({ input: '', encoded: '', error: '' });
-    const jsonTool = reactive({ input: '', output: '', error: '' });
-    const pwdTool = reactive({ length: 16, upper: true, lower: true, digits: true, symbols: true, result: '' });
-
-    /* Settings */
-    const settingsTab = ref('servers');
-    const showAddServer = ref(false);
-    const newServer = reactive({ name: '', host: '', ssh_port: 22, username: 'root', password: '' });
-    const sshTestMsg = ref('');
-    const sshTestOk = ref(false);
-    const newSvc = reactive({ name: '', url: '', category: '', description: '' });
-    const scanning = ref(false);
-    const confirmShow = ref(false);
-    const confirmTitle = ref('');
-    const confirmMsg = ref('');
-    const confirmAction = ref(() => {});
-    const clockStr = ref('');
-
-    /* Command template groups */
-    const cmdGroups = [
-      { name: 'Docker', commands: ['docker ps', 'docker ps -a', 'docker stats', 'docker compose ps', 'docker images', 'docker system df'] },
-      { name: '系统', commands: ['df -h', 'free -h', 'top -bn1', 'uptime', 'ps aux', 'systemctl status'] },
-      { name: '网络', commands: ['ss -tlnp', 'netstat -tlnp', 'curl -I localhost', 'ping -c 3', 'traceroute'] },
-      { name: 'Nginx', commands: ['nginx -t', 'nginx -s reload', 'tail -f /var/log/nginx/access.log', 'tail -f /var/log/nginx/error.log'] },
-    ];
-
-    const settingTabs = [
-      { key: 'servers', label: '服务器管理', icon: '#fa-server' },
-      { key: 'services', label: '服务注册', icon: '#fa-code' },
-      { key: 'scan', label: '服务扫描', icon: '#fa-search' },
-      { key: 'appearance', label: '外观设置', icon: '#fa-cog' },
-    ];
-
-    /* Group color map */
-    const groupColors = {
-      '代码与CI/CD': '#3b82f6',
-      '监控与日志': '#8b5cf6',
-      '运维工具': '#22c55e',
-      '数据采集': '#f59e0b',
-      '基础设施': '#ef4444',
-      '应用服务': '#06b6d4',
-      '安全': '#f97316',
+    const cmdTemplates = {
+      'Docker': ['docker ps','docker ps -a','docker logs --tail 50 <container>','docker stats --no-stream','docker compose -f /opt/cicd/docker-compose.yml ps','docker compose -f /opt/cicd/docker-compose.yml restart <service>'],
+      'System': ['df -h','free -h','top -bn1 | head -20','uptime','journalctl -u opscenter-backend -n 20 --no-pager','ss -tlnp'],
+      'Network': ['curl -s http://localhost/gitea/ -o /dev/null -w "%{http_code}"','netstat -tlnp 2>/dev/null || ss -tlnp','curl -s http://localhost:9091/api/v2/health','ufw status'],
+      'Security': ['fail2ban-client status','fail2ban-client status sshd','cat /etc/fail2ban/jail.local | head -30','ausearch -m avc -ts recent 2>/dev/null | tail -5','aide --check 2>/dev/null | tail -10']
     };
+    const activeCmdGroup = ref('Docker');
 
-    /* ========== Theme ========== */
-    function applyTheme() {
-      document.documentElement.classList.toggle('light', !isDark.value);
-      localStorage.setItem('oc-theme', isDark.value ? 'dark' : 'light');
-    }
-    function toggleTheme() {
-      isDark.value = !isDark.value;
-      applyTheme();
-      updateChart();
-    }
+    // ========== Clock ==========
+    let clockTimer;
+    function updateClock() { clock.value = new Date().toLocaleTimeString('zh-CN',{hour12:false}); }
 
-    /* ========== Toast ========== */
-    function toast(msg, type = 'info') {
-      const id = Date.now() + Math.random();
-      toasts.value.push({ id, message: msg, type });
-      setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, 3000);
-    }
+    // ========== API helpers ==========
+    async function apiGet(url) { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return r.json(); }
+    async function apiPost(url, body) { return fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
+    async function apiPut(url, body) { return fetch(url, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
+    async function apiPatch(url) { return fetch(url, { method:'PATCH' }); }
+    async function apiDelete(url) { return fetch(url, { method:'DELETE' }); }
 
-    /* ========== Page Switching ========== */
-    function switchPage(key) {
-      currentPage.value = key;
-      if (key === 'monitor' && currentServerId.value) {
-        nextTick(async () => { await loadEcharts(); await initChart(); loadMonitor(); loadHistory(); });
-      }
-      if (key === 'tools') {
-        if (currentServerId.value && !termLines.value.length) initTerminal();
-      }
+    // ========== Load groups.json via backend API ==========
+    async function loadGroupConfig() {
+      try {
+        const data = await apiGet(`${API}/group-config`);
+        groupConfig.groups = data.groups || [];
+        groupConfig.serviceGroupMap = data.serviceGroupMap || {};
+      } catch(e) { console.warn('group-config load failed:', e.message); }
     }
 
-    const pageTitle = computed(() => {
-      const item = navItems.find(n => n.key === currentPage.value);
-      return item ? item.label : '';
-    });
-
-    /* ========== Load services.json (manual config) ========== */
+    // ========== Load services.json (manual) ==========
     async function loadManualServices() {
       try {
-        const res = await fetch('/ops/services.json');
-        if (!res.ok) throw new Error('services.json not found');
-        const data = await res.json();
-        const origin = window.location.origin;
-        manualGroups.value = (data.groups || []).map(g => ({
-          ...g,
-          icon: '#' + (g.icon || 'database'),
-          color: groupColors[g.group] || '#8b5cf6',
-          services: g.services.map(s => ({
-            ...s,
-            source: 'manual',
-            _showPwd: false,
-            status: 'checking',
-            fullUrl: s.url.startsWith('http') ? s.url : (s.url.startsWith(':') ? origin + s.url : origin + s.url),
-          })),
-        }));
-        // Health check all manual services
-        checkManualServices();
-      } catch (e) {
-        console.warn('services.json load failed:', e.message);
-        manualGroups.value = [];
-      }
-    }
-
-    /* Health check manual services via HTTP HEAD/GET */
-    async function checkManualServices() {
-      const allManual = manualGroups.value.flatMap(g => g.services);
-      await Promise.allSettled(allManual.map(async (svc) => {
-        try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 5000);
-          await fetch(svc.fullUrl, { method: 'HEAD', mode: 'no-cors', signal: ctrl.signal });
-          clearTimeout(timer);
-          svc.status = 'online';
-        } catch (e) {
-          // HTTPS with self-signed cert will fail in browser; fallback to HTTP same port
-          if (/^https:/.test(svc.fullUrl)) {
-            try {
-              const fallbackUrl = svc.fullUrl.replace(/^https:/, 'http:');
-              const ctrl2 = new AbortController();
-              const timer2 = setTimeout(() => ctrl2.abort(), 5000);
-              await fetch(fallbackUrl, { method: 'HEAD', mode: 'no-cors', signal: ctrl2.signal });
-              clearTimeout(timer2);
-              svc.status = 'online';
-              return;
-            } catch (_) { /* fallback also failed */ }
+        const data = await apiGet('/ops/groups.json/../services.json');
+        if (!data.groups) { manualServices.value = []; return; }
+        const Host = location.host;
+        const proto = location.protocol;
+        const svcs = [];
+        for (const g of data.groups) {
+          for (const s of (g.services || [])) {
+            let fullUrl = s.url || '';
+            if (fullUrl.startsWith('/')) fullUrl = `${proto}//${Host}${fullUrl}`;
+            else if (fullUrl.startsWith(':')) fullUrl = `${proto}//${Host}${fullUrl}`;
+            else if (!fullUrl.startsWith('http')) fullUrl = `${proto}//${Host}/${fullUrl}`;
+            svcs.push({
+              ...s, fullUrl, origin: 'manual',
+              status: 'checking', // will be updated by health check
+              serviceKey: `manual:${s.name}`,
+              groupId: groupConfig.serviceGroupMap[`manual:${s.name}`] || null,
+              serverStatus: 'online', // manual services assumed online server
+            });
           }
-          svc.status = 'offline';
         }
-      }));
+        manualServices.value = svcs;
+      } catch(e) { console.warn('services.json load failed:', e.message); manualServices.value = []; }
     }
 
-    /* ========== Load API Services (auto-discovered) ========== */
-    async function loadServers() {
-      try {
-        const data = await OpsAPI.getServers();
-        servers.value = data.servers || data || [];
-        if (servers.value.length) {
-          const saved = localStorage.getItem('oc-server');
-          currentServerId.value = (saved && servers.value.find(s => s.id === saved)) ? saved : servers.value[0].id;
-          await loadAutoServices();
-          loadServerMetrics();
-        }
-      } catch (e) {
-        console.warn('API servers load failed:', e.message);
-      }
-    }
-
+    // ========== Load auto services via backend API ==========
     async function loadAutoServices() {
-      if (!currentServerId.value) return;
       try {
-        const [svcData, catData] = await Promise.all([
-          OpsAPI.getServices(currentServerId.value),
-          OpsAPI.getCategories(),
-        ]);
-        const list = svcData.services || svcData || [];
-        autoServices.value = list.map(s => {
-          let status = s.status;
-          if (status === 'up' || status === 'running') status = 'online';
-          else if (status === 'down') status = 'offline';
-          else if (!status) status = 'unknown';
-          const origin = window.location.origin;
-          return {
-            ...s,
-            status,
-            source: 'auto',
-            _showPwd: false,
-            username: '',
-            password: '',
-            desc: s.description || s.category || '',
-            tags: [],
-            fullUrl: s.url ? (s.url.startsWith('http') ? s.url : origin + s.url) : '',
-          };
-        });
-        categories.value = catData.categories || catData || [];      } catch (e) {
-        console.warn('API services load failed:', e.message);
-      }
+        const data = await apiGet(`${API}/services-with-status`);
+        const svcs = data.map(s => ({
+          id: s.id, serverId: s.server_id, name: s.name,
+          url: s.url, category: s.category, icon: s.icon,
+          description: s.description, source: s.source,
+          status: s.status === 'up' ? 'online' : s.status === 'down' ? 'offline' : 'unknown',
+          pinned: s.pinned, containerName: s.container_name,
+          image: s.image, ports: s.ports,
+          serverName: s.server_name, serverHost: s.server_host,
+          serverStatus: s.server_status, serverIsLocal: s.server_is_local,
+          origin: 'auto',
+          serviceKey: `auto:${s.server_id}:${s.id}`,
+          groupId: groupConfig.serviceGroupMap[`auto:${s.server_id}:${s.id}`] || null,
+          fullUrl: '',
+        }));
+        // Build fullUrl for auto services
+        const proto = location.protocol;
+        const Host = location.host;
+        for (const s of svcs) {
+          if (!s.url) { s.fullUrl = ''; continue; }
+          if (s.url.startsWith('http')) { s.fullUrl = s.url; }
+          else if (s.url.startsWith('/')) { s.fullUrl = `${proto}//${Host}${s.url}`; }
+          else if (s.url.startsWith(':')) { s.fullUrl = `${proto}//${Host}${s.url}`; }
+          else { s.fullUrl = `${proto}//${s.serverHost}${s.url.startsWith('/') ? '' : '/'}${s.url}`; }
+        }
+        autoServices.value = svcs;
+      } catch(e) { console.warn('auto services load failed:', e.message); autoServices.value = []; }
     }
 
-    async function loadServerMetrics() {
-      for (const s of servers.value) {
+    // ========== Health check manual services via backend ==========
+    async function checkManualServices() {
+      const promises = manualServices.value.map(async (svc) => {
+        if (!svc.fullUrl) { svc.status = 'unknown'; return; }
         try {
-          const data = await OpsAPI.getMonitor(s.id);
-          const m = data.metrics || data.monitor || data;
-          serverMetrics[s.id] = {
-            cpu: m.cpu_percent ?? m.cpu ?? null,
-            memory: m.memory_percent ?? m.memory ?? null,
-            disk: m.disk_percent ?? m.disk ?? null,
-            container_count: (data.containers || m.containers || []).length,
-          };
-        } catch (e) {
-          serverMetrics[s.id] = { cpu: null, memory: null, disk: null, container_count: null };
-        }
-      }
+          const res = await apiGet(`${API}/health-check-url?url=${encodeURIComponent(svc.fullUrl)}`);
+          svc.status = res.status === 'online' ? 'online' : 'offline';
+        } catch(e) { svc.status = 'offline'; }
+      });
+      await Promise.allSettled(promises);
     }
 
-    /* ========== Merged Computed: Manual + Auto Services ========== */
+    // ========== Compute effective status ==========
+    function effectiveStatus(svc) {
+      if (svc.origin === 'auto' && svc.serverStatus === 'offline') return 'server_offline';
+      if (svc.status === 'checking') return 'checking';
+      if (svc.status === 'online') return 'online';
+      if (svc.status === 'offline') return 'offline';
+      return 'unknown';
+    }
+
+    // ========== Compute service groups ==========
+    const allServices = computed(() => {
+      const all = [...manualServices.value, ...autoServices.value];
+      return all;
+    });
+
     const serviceGroups = computed(() => {
-      const groups = [...manualGroups.value];
-      // Helper: normalize name for dedup comparison (lowercase, strip spaces/hyphens/underscores)
-      const normalize = n => (n || '').toLowerCase().replace(/[\s\-_]/g, '');
-      // Build set of all manual service normalized names (global dedup)
-      const manualNorms = new Set(groups.flatMap(g => g.services.map(s => normalize(s.name))));
-      // Build auto service groups by category, skip already-manually-configured services
-      const autoByCategory = {};
-      for (const svc of autoServices.value) {
-        if (manualNorms.has(normalize(svc.name))) continue; // Skip duplicate
-        const cat = svc.category || '其他';
-        if (!autoByCategory[cat]) autoByCategory[cat] = [];
-        autoByCategory[cat].push(svc);
-      }
-      // Merge auto services into matching manual groups (by category name overlap)
-      for (const [cat, svcs] of Object.entries(autoByCategory)) {
-        const matched = groups.find(g =>
-          g.group === cat || g.group.toLowerCase().includes(cat.toLowerCase()) || cat.toLowerCase().includes(g.group.toLowerCase())
-        );
-        if (matched) {
-          matched.services.push(...svcs);
-        } else {
-          groups.push({
-            group: cat,
-            icon: '#fa-box',
-            color: groupColors[cat] || '#64748b',
-            services: svcs,
-          });
+      // Get groups from config, sorted by order
+      const groups = [...groupConfig.groups].sort((a, b) => (a.order || 100) - (b.order || 100));
+      const result = [];
+
+      for (const g of groups) {
+        const svcs = allServices.value.filter(s => {
+          // Priority 1: explicit mapping in serviceGroupMap
+          const mapped = groupConfig.serviceGroupMap[s.serviceKey];
+          if (mapped) return mapped === g.id;
+          // Priority 2: for manual services, check if groupId matches
+          if (s.groupId && s.groupId === g.id) return true;
+          // Priority 3: for auto services, match by category name
+          if (s.origin === 'auto' && s.category) {
+            const catNorm = (s.category || '').toLowerCase().replace(/[\s\-_]/g, '');
+            const gNorm = (g.name || '').toLowerCase().replace(/[\s\-_]/g, '');
+            if (catNorm === gNorm || catNorm.includes(gNorm) || gNorm.includes(catNorm)) return true;
+          }
+          return false;
+        });
+        if (svcs.length > 0 || g.id !== 'ungrouped') {
+          result.push({ ...g, services: svcs });
         }
       }
-      return groups;
+
+      // Add ungrouped services
+      const ungrouped = allServices.value.filter(s => {
+        const mapped = groupConfig.serviceGroupMap[s.serviceKey];
+        if (mapped) return false; // has mapping
+        if (s.groupId && s.groupId !== 'ungrouped') return false; // has explicit group
+        // Check if auto service was already matched by category
+        if (s.origin === 'auto' && s.category) {
+          const matched = result.some(g => {
+            if (g.id === 'ungrouped') return false;
+            const catNorm = (s.category || '').toLowerCase().replace(/[\s\-_]/g, '');
+            const gNorm = (g.name || '').toLowerCase().replace(/[\s\-_]/g, '');
+            return catNorm === gNorm || catNorm.includes(gNorm) || gNorm.includes(catNorm);
+          });
+          if (matched) return false;
+        }
+        return true;
+      });
+      if (ungrouped.length > 0) {
+        const ug = result.find(g => g.id === 'ungrouped');
+        if (ug) { ug.services = ungrouped; }
+        else { result.push({ id: 'ungrouped', name: '未分组', order: 999, color: '#475569', icon: 'box', services: ungrouped }); }
+      }
+
+      return result;
     });
 
     const filteredGroups = computed(() => {
@@ -968,402 +383,331 @@ createApp({
       return serviceGroups.value.map(g => ({
         ...g,
         services: g.services.filter(s =>
-          (s.name || '').toLowerCase().includes(q) ||
-          (s.desc || '').toLowerCase().includes(q) ||
+          s.name.toLowerCase().includes(q) ||
+          (s.desc || s.description || '').toLowerCase().includes(q) ||
           (s.tags || []).some(t => t.toLowerCase().includes(q))
-        ),
+        )
       })).filter(g => g.services.length > 0);
     });
 
-    const allMergedServices = computed(() => serviceGroups.value.flatMap(g => g.services));
-    const totalServices = computed(() => allMergedServices.value.length);
-    const onlineCount = computed(() => allMergedServices.value.filter(s => s.status === 'online').length);
-    const offlineCount = computed(() => allMergedServices.value.filter(s => s.status === 'offline').length);
-    const authRequiredCount = computed(() => allMergedServices.value.filter(s => s.authType === 'manual' || s.username).length);
+    // ========== Stats ==========
+    const stats = computed(() => {
+      const all = allServices.value;
+      const online = all.filter(s => effectiveStatus(s) === 'online').length;
+      const offline = all.filter(s => effectiveStatus(s) === 'offline').length;
+      const srvOff = all.filter(s => effectiveStatus(s) === 'server_offline').length;
+      const unknown = all.filter(s => effectiveStatus(s) === 'unknown' || effectiveStatus(s) === 'checking').length;
+      const manual = all.filter(s => s.origin === 'manual').length;
+      const auto = all.filter(s => s.origin === 'auto').length;
+      return { total: all.length, online, offline, srvOff, unknown, manual, auto };
+    });
 
-    /* ========== Service Actions ========== */
-    function openService(svc) {
-      if (svc.fullUrl || svc.url) {
-        window.open(svc.fullUrl || svc.url, '_blank');
-      }
-    }
-
-    function togglePwd(evt, svc) {
-      evt.stopPropagation();
-      svc._showPwd = !svc._showPwd;
-    }
-
-    function copyText(text, msg) {
-      navigator.clipboard?.writeText(text).then(() => toast(msg || '已复制', 'success'));
-    }
-
-    /* ========== Server Actions ========== */
-    async function onServerChange() {
-      localStorage.setItem('oc-server', currentServerId.value);
-      await loadAutoServices();
-      if (currentPage.value === 'monitor') loadMonitor();
-    }
-
-    function selectServer(id) {
-      currentServerId.value = id;
-      localStorage.setItem('oc-server', id);
-      loadAutoServices();
-    }
-
-    async function addServer() {
+    // ========== Group management ==========
+    async function addGroup() {
+      if (!newGroupId.value || !newGroupName.value) return;
       try {
-        const payload = { name: newServer.name, host: newServer.host, ssh_port: newServer.ssh_port, ssh_user: newServer.username };
-        if (newServer.password) payload.ssh_password = newServer.password;
-        const res = await OpsAPI.addServer(payload);
-        toast('服务器添加成功', 'success');
-        showAddServer.value = false;
-        Object.assign(newServer, { name: '', host: '', ssh_port: 22, username: 'root', password: '' });
-        await loadServers();
-        if (res.id && newServer.password) {
-          try { await OpsAPI.scanServer(res.id); } catch (e) {}
-          await loadAutoServices();
+        await apiPost(`${API}/group-config/groups`, { id: newGroupId.value, name: newGroupName.value, order: (groupConfig.groups.length + 1) * 10, color: newGroupColor.value, icon: 'box' });
+        newGroupId.value = ''; newGroupName.value = ''; newGroupColor.value = '#64748b';
+        await loadGroupConfig();
+      } catch(e) { alert('添加分组失败: ' + e.message); }
+    }
+
+    async function deleteGroup(gid) {
+      if (gid === 'ungrouped') { alert('不能删除"未分组"'); return; }
+      if (!confirm(`确定删除分组？映射到此分组的服务将移至"未分组"`)) return;
+      try {
+        await apiDelete(`${API}/group-config/groups/${gid}`);
+        await loadGroupConfig();
+      } catch(e) { alert('删除分组失败: ' + e.message); }
+    }
+
+    async function moveServiceToGroup(serviceKey, groupId) {
+      try {
+        await fetch(`${API}/group-config/service-map?serviceKey=${encodeURIComponent(serviceKey)}&groupId=${encodeURIComponent(groupId)}`, { method: 'PATCH' });
+        await loadGroupConfig();
+      } catch(e) { console.error('move failed:', e); }
+    }
+
+    // ========== Copy ==========
+    function copyText(text) { navigator.clipboard.writeText(text).catch(() => {}); }
+
+    // ========== Monitor ==========
+    async function loadServers() {
+      try {
+        const data = await apiGet(`${API}/servers`);
+        servers.value = data.servers || data || [];
+        if (servers.value.length) {
+          const saved = localStorage.getItem('oc-server');
+          currentServerId.value = (saved && servers.value.find(s => s.id === saved)) ? saved : servers.value[0].id;
         }
-      } catch (e) {
-        toast('添加失败: ' + e.message, 'error');
-      }
+      } catch(e) { console.warn('servers load failed:', e.message); }
     }
 
-    async function testSSH() {
-      if (!newServer.host) { toast('请填写主机地址', 'error'); return; }
-      sshTestMsg.value = '测试中...';
-      try {
-        const payload = { name: newServer.name || 'test', host: newServer.host, ssh_port: newServer.ssh_port, ssh_user: newServer.username };
-        if (newServer.password) payload.ssh_password = newServer.password;
-        const res = await OpsAPI.addServer(payload);
-        const testRes = await OpsAPI.testSSH(res.id, { password: newServer.password });
-        sshTestOk.value = testRes.success;
-        sshTestMsg.value = testRes.message || (testRes.success ? '连接成功' : '连接失败');
-      } catch (e) {
-        sshTestOk.value = false;
-        sshTestMsg.value = '测试失败: ' + e.message;
-      }
-    }
-
-    function delServer(id) {
-      const s = servers.value.find(x => x.id === id);
-      confirmTitle.value = '删除服务器';
-      confirmMsg.value = `确定删除 "${s?.name}" 及其所有服务？`;
-      confirmAction.value = async () => {
-        try { await OpsAPI.deleteServer(id); toast('已删除', 'success'); await loadServers(); }
-        catch (e) { toast('删除失败: ' + e.message, 'error'); }
-      };
-      confirmShow.value = true;
-    }
-
-    async function scanServerS(id) {
-      try { toast('正在扫描...', 'info'); await OpsAPI.scanServer(id); toast('扫描完成', 'success'); await loadAutoServices(); }
-      catch (e) { toast('扫描失败: ' + e.message, 'error'); }
-    }
-
-    async function addSvc() {
-      if (!currentServerId.value || !newSvc.name || !newSvc.url) return;
-      try {
-        await OpsAPI.addService({ ...newSvc, server_id: currentServerId.value });
-        toast('服务注册成功', 'success');
-        Object.assign(newSvc, { name: '', url: '', category: '', description: '' });
-        await loadAutoServices();
-      } catch (e) { toast('注册失败: ' + e.message, 'error'); }
-    }
-
-    async function triggerScan() {
-      scanning.value = true;
-      try { await OpsAPI.triggerScan(); toast('扫描已触发', 'success'); setTimeout(() => loadAutoServices(), 3000); }
-      catch (e) { toast('扫描失败: ' + e.message, 'error'); }
-      finally { scanning.value = false; }
-    }
-
-    /* ========== ECharts Lazy Load ========== */
-    let echartsLib = null;
-    async function loadEcharts() {
-      if (echartsLib) return echartsLib;
-      return new Promise((resolve) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js';
-        s.onload = () => { echartsLib = window.echarts; resolve(echartsLib); };
-        s.onerror = () => { console.error('ECharts load failed'); resolve(null); };
-        document.head.appendChild(s);
-      });
-    }
-
-    /* ========== Monitor ========== */
     async function loadMonitor() {
       if (!currentServerId.value) return;
       try {
-        const data = await OpsAPI.getMonitor(currentServerId.value);
-        const m = data.metrics || data.monitor || data;
-        monitor.connected = true;
-        monitor.cpu = m.cpu_percent ?? m.cpu ?? 0;
-        monitor.memory = m.memory_percent ?? m.memory ?? 0;
-        monitor.disk = m.disk_percent ?? m.disk ?? 0;
-        monitor.network = m.network_mbps ?? ((m.net_rx || 0) + (m.net_tx || 0) || 0);
-        monitor.cpu_total = m.cpu_count ?? m.cpu_total ?? 0;
-        monitor.memory_total = m.memory_total ?? 0;
-        monitor.memory_used = m.memory_used ?? (m.memory_total != null && m.memory_avail != null ? m.memory_total - m.memory_avail : 0);
-        monitor.disk_total = m.disk_total ?? 0;
-        monitor.disk_used = m.disk_used ?? (m.disk_total != null && m.disk_avail != null ? m.disk_total - m.disk_avail : 0);
-        monitor.network_in = m.network_in ?? m.net_rx ?? 0;
-        monitor.network_out = m.network_out ?? m.net_tx ?? 0;
-        monitor.containers = data.containers ?? m.containers ?? [];
-      } catch (e) {
-        monitor.connected = false;
-      }
+        const data = await apiGet(`${API}/monitor/${currentServerId.value}`);
+        monitorData.value = data;
+        containers.value = data.containers || [];
+      } catch(e) { console.warn('monitor load failed:', e.message); }
     }
 
-    async function loadHistory() {
-      if (!currentServerId.value) return;
-      try {
-        const data = await OpsAPI.getHistory(currentServerId.value, historyMetric.value, 24);
-        monitor.history = data.values || data.history || data.points || [];
-        updateChart();
-      } catch (e) {}
+    function getMetricValue(key) {
+      if (!monitorData.value) return '-';
+      const m = monitorData.value.metrics || {};
+      return m[key] != null ? m[key] : '-';
     }
 
-    async function initChart() {
-      if (!echartsLib) await loadEcharts();
-      if (!echartsLib || !historyChart.value || chartInstance) return;
-      chartInstance = echartsLib.init(historyChart.value, isDark.value ? 'dark' : null);
-      window.addEventListener('resize', () => chartInstance?.resize());
-    }
-
-    function updateChart() {
-      if (!chartInstance || !echartsLib) return;
-      const labels = { cpu: 'CPU 使用率', memory: '内存使用率', disk: '磁盘使用率', network: '网络流量' };
-      const units = { cpu: '%', memory: '%', disk: '%', network: 'MB/s' };
-      const colors = { cpu: '#22c55e', memory: '#3b82f6', disk: '#f59e0b', network: '#8b5cf6' };
-      const h = monitor.history;
-      const normalized = Array.isArray(h) ? h.map(p => {
-        if (Array.isArray(p)) return { timestamp: p[0] * 1000, value: parseFloat(p[1]) };
-        return p;
-      }) : [];
-      const xData = normalized.map(p => {
-        const d = new Date(p.timestamp || p.time || p.x);
-        return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
-      });
-      const yData = normalized.map(p => p.value ?? p.y ?? 0);
-      chartInstance.setOption({
-        backgroundColor: 'transparent',
-        textStyle: { color: isDark.value ? '#94a3b8' : '#64748b' },
-        grid: { left: 45, right: 15, top: 15, bottom: 30 },
-        tooltip: { trigger: 'axis', backgroundColor: isDark.value ? '#1e293b' : '#fff', borderColor: isDark.value ? '#334155' : '#e2e8f0', textStyle: { color: isDark.value ? '#e2e8f0' : '#1e293b', fontSize: 12 } },
-        xAxis: { type: 'category', data: xData, axisLine: { lineStyle: { color: isDark.value ? '#334155' : '#e2e8f0' } }, axisLabel: { fontSize: 10 }, boundaryGap: false },
-        yAxis: { type: 'value', axisLine: { show: false }, splitLine: { lineStyle: { color: isDark.value ? '#1e293b' : '#f1f5f9' } }, axisLabel: { fontSize: 10, formatter: '{value}' + units[historyMetric.value] } },
-        series: [{ type: 'line', data: yData, smooth: true, symbol: 'none', lineStyle: { width: 2, color: colors[historyMetric.value] },
-          areaStyle: { color: new echartsLib.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: colors[historyMetric.value] + '40' },
-            { offset: 1, color: colors[historyMetric.value] + '05' },
-          ]) },
-        }],
-      });
-    }
-
-    const metricCards = computed(() => {
-      const fmtNet = (v) => {
-        if (v > 1000) return { value: (v / 1000).toFixed(1), unit: 'Gbps' };
-        return { value: v.toFixed ? v.toFixed(1) : v, unit: 'Mbps' };
-      };
-      const net = fmtNet(monitor.network);
-      return [
-        { key: 'cpu', label: 'CPU', value: monitor.cpu.toFixed ? monitor.cpu.toFixed(1) : monitor.cpu, unit: '%', icon: '#fa-microchip', color: '#22c55e' },
-        { key: 'memory', label: '内存', value: monitor.memory.toFixed ? monitor.memory.toFixed(1) : monitor.memory, unit: '%', icon: '#fa-memory', color: '#3b82f6' },
-        { key: 'disk', label: '磁盘', value: monitor.disk.toFixed ? monitor.disk.toFixed(1) : monitor.disk, unit: '%', icon: '#fa-disk', color: '#f59e0b' },
-        { key: 'network', label: '网络', value: net.value, unit: net.unit, icon: '#fa-network', color: '#8b5cf6' },
-      ];
-    });
-
-    function formatPorts(ports) {
-      if (!ports || ports === '-') return '-';
-      return ports.split(',').map(p => { const m = p.trim().match(/:(\d+)$/); return m ? m[1] : p.trim(); }).filter((v, i, a) => a.indexOf(v) === i).join(', ');
-    }
-
-    /* ========== Terminal Simulator ========== */
-    const currentServerName = computed(() => {
-      const s = servers.value.find(s => s.id === currentServerId.value);
-      return s ? s.name : '未选择';
-    });
-
-    function initTerminal() {
-      const s = servers.value.find(s => s.id === currentServerId.value);
-      termLines.value = [
-        { type: 'info', text: `连接到 ${s?.name || 'server'} (${s?.host || '0.0.0.0'})...` },
-        { type: 'info', text: 'SSH 连接成功 (模拟模式)' },
-        { type: 'output', text: `Last login: ${new Date().toLocaleString('zh-CN')}` },
-        { type: 'output', text: `Welcome to Ubuntu 24.04 LTS` },
-      ];
-      termHistoryList.length = 0;
-      termHistoryIdx.value = -1;
-    }
-
-    function execTerm() {
+    // ========== Terminal ==========
+    function execCmd() {
       const cmd = termInput.value.trim();
       if (!cmd) return;
-      termLines.value.push({ type: 'cmd', text: cmd });
-      termHistoryList.unshift(cmd);
-      termHistoryIdx.value = -1;
+      termLines.value.push(`$ ${cmd}`);
+      if (cmd === 'help') { termLines.value.push('Available: help, clear, docker ps, df -h, free -h, uptime, ping <host>'); }
+      else if (cmd === 'clear') { termLines.value = []; }
+      else { termLines.value.push(`[simulated] ${cmd} -> OK`); }
       termInput.value = '';
-      const parts = cmd.split(/\s+/);
-      const command = parts[0].toLowerCase();
-      // Simple simulated responses
-      const responses = {
-        'ls': 'bin  boot  dev  etc  home  lib  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var',
-        'pwd': '/root',
-        'whoami': 'root',
-        'date': new Date().toLocaleString('zh-CN'),
-        'uptime': ' ' + new Date().toLocaleTimeString('zh-CN') + ' up 42 days, 3:17, 1 user, load average: 0.15, 0.12, 0.08',
-        'clear': '__CLEAR__',
-        'help': '可用命令: ls, pwd, whoami, date, uptime, clear, docker ps, df -h, free -h, top, uname -a, hostname',
-        'uname -a': 'Linux ubuntu 6.8.0-124-generic #124-Ubuntu SMP x86_64 GNU/Linux',
-        'hostname': servers.value.find(s => s.id === currentServerId.value)?.host || 'localhost',
-        'docker ps': monitor.containers.map(c => `${c.name}\t${c.image}\t${c.status}\t${c.ports || '-'}`).join('\n') || 'CONTAINER ID   IMAGE   COMMAND   CREATED   STATUS   PORTS   NAMES',
-        'df -h': 'Filesystem      Size  Used Avail Use% Mounted on\n/dev/vda1        30G   25G  3.4G  89% /\ntmpfs           3.6G     0  3.6G   0% /dev/shm',
-        'free -h': '              total        used        free      shared  buff/cache   available\nMem:          7.1Gi       3.8Gi       620Mi        12Mi       2.7Gi       2.7Gi\nSwap:            0B          0B          0B',
-        'top': 'top - ' + new Date().toLocaleTimeString('zh-CN') + ' up 42 days,  3:17,  1 user,  load average: 0.15, 0.12, 0.08\nTasks: 128 total,   1 running, 127 sleeping,   0 stopped,   0 zombie\n%Cpu(s):  3.2 us,  1.1 sy,  0.0 ni, 95.4 id,  0.2 wa,  0.0 hi,  0.1 si\nMiB Mem :   7280.0 total,    620.0 free,   3850.0 used,   2810.0 buff/cache',
-      };
-      if (command === 'clear') {
-        termLines.value = [];
-        return;
-      }
-      const resp = responses[cmd] || responses[command];
-      if (resp) {
-        resp.split('\n').forEach(line => termLines.value.push({ type: 'output', text: line.replace(/</g, '&lt;').replace(/>/g, '&gt;') }));
-      } else {
-        termLines.value.push({ type: 'error', text: `bash: ${command}: 模拟模式下不支持此命令，输入 help 查看可用命令` });
-      }
-      nextTick(() => {
-        const el = document.querySelector('.terminal-body');
-        if (el) el.scrollTop = el.scrollHeight;
-      });
     }
 
-    function termHistoryUp() {
-      if (termHistoryIdx.value < termHistoryList.length - 1) {
-        termHistoryIdx.value++;
-        termInput.value = termHistoryList[termHistoryIdx.value];
-      }
-    }
-    function termHistoryDown() {
-      if (termHistoryIdx.value > 0) { termHistoryIdx.value--; termInput.value = termHistoryList[termHistoryIdx.value]; }
-      else { termHistoryIdx.value = -1; termInput.value = ''; }
+    function insertCmd(cmd) { termInput.value = cmd; }
+
+    // ========== Resource ==========
+    async function triggerScan(sid) {
+      try { await apiPost(`${API}/servers/${sid}/scan`); await loadMonitor(); } catch(e) { alert('扫描失败'); }
     }
 
-    /* ========== Tools ========== */
-    function convertTs(dir) {
-      if (dir === 'unix') {
-        const v = parseInt(tsTool.unix);
-        if (!isNaN(v)) { const d = new Date(v * 1000); tsTool.date = d.toLocaleString('zh-CN'); tsTool.iso = d.toISOString(); }
-      } else {
-        const d = new Date(tsTool.date);
-        if (!isNaN(d.getTime())) { tsTool.unix = Math.floor(d.getTime() / 1000); tsTool.iso = d.toISOString(); }
-      }
-    }
-
-    function updateClock() {
-      const now = new Date();
-      clockStr.value = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      tsTool.now = Math.floor(now.getTime() / 1000).toString();
-      tsTool.iso = now.toISOString();
-    }
-
-    function encB64() {
-      try { b64Tool.encoded = btoa(unescape(encodeURIComponent(b64Tool.input))); b64Tool.error = ''; }
-      catch (e) { b64Tool.error = '编码失败: ' + e.message; }
-    }
-
-    function decB64() {
-      try { b64Tool.input = decodeURIComponent(escape(atob(b64Tool.encoded))); b64Tool.error = ''; }
-      catch (e) { b64Tool.error = '解码失败: 非 Base64 格式'; }
-    }
-
-    function fmtJson() {
-      try { jsonTool.output = JSON.stringify(JSON.parse(jsonTool.input), null, 2); jsonTool.error = ''; }
-      catch (e) { jsonTool.error = 'JSON 格式错误: ' + e.message; }
-    }
-
-    function genPwd() {
-      let chars = '';
-      if (pwdTool.upper) chars += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-      if (pwdTool.lower) chars += 'abcdefghijklmnopqrstuvwxyz';
-      if (pwdTool.digits) chars += '0123456789';
-      if (pwdTool.symbols) chars += '!@#$%^&*()_+-=[]{}|;:,.<>?';
-      if (!chars) chars = 'abcdefghijklmnopqrstuvwxyz';
-      let result = '';
-      const arr = new Uint32Array(pwdTool.length);
-      crypto.getRandomValues(arr);
-      for (let i = 0; i < pwdTool.length; i++) result += chars[arr[i] % chars.length];
-      pwdTool.result = result;
-    }
-
-    /* ========== Watchers ========== */
-    watch(historyMetric, () => loadHistory());
-    watch(sidebarCollapsed, (v) => localStorage.setItem('oc-sidebar-collapsed', v));
-    watch(isDark, () => applyTheme());
-
-    /* ========== Keyboard ========== */
-    function onKeyDown(e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        currentPage.value = 'nav';
-        nextTick(() => { const input = document.querySelector('.search-input'); if (input) input.focus(); });
-      }
-      if (e.key === 'Escape') searchQuery.value = '';
-    }
-
-    /* ========== Lifecycle ========== */
+    // ========== Init ==========
     onMounted(async () => {
-      applyTheme();
-      window.addEventListener('keydown', onKeyDown);
-      window.addEventListener('resize', () => { mobileView.value = window.innerWidth < 769; });
       updateClock();
-      setInterval(updateClock, 1000);
-      genPwd();
-
-      // Load data
-      loading.value = true;
-      await Promise.all([loadManualServices(), loadServers()]);
-      loading.value = false;
-
-      // Auto refresh monitor
-      refreshTimer = setInterval(() => {
-        refreshCountdown.value--;
-        if (refreshCountdown.value <= 0) {
-          refreshCountdown.value = 30;
-          if (currentPage.value === 'monitor' && currentServerId.value) {
-            loadMonitor();
-            loadHistory();
-          }
-        }
-      }, 1000);
+      clockTimer = setInterval(updateClock, 1000);
+      await loadGroupConfig();
+      await Promise.all([loadManualServices(), loadAutoServices(), loadServers()]);
+      checkManualServices();
+      loadMonitor();
     });
+    onUnmounted(() => clearInterval(clockTimer));
 
-    onUnmounted(() => {
-      window.removeEventListener('keydown', onKeyDown);
-      if (refreshTimer) clearInterval(refreshTimer);
-      if (chartInstance) chartInstance.dispose();
-    });
+    // Watch server change for monitor
+    watch(currentServerId, () => { loadMonitor(); });
 
-    /* ========== Return ========== */
+    // ========== Template data ==========
     return {
-      isDark, currentPage, currentServerId, sidebarCollapsed, searchQuery, mobileView, toasts, loading,
-      navItems, manualGroups, autoServices, servers, categories, serviceGroups, filteredGroups,
-      totalServices, onlineCount, offlineCount, authRequiredCount,
-      monitor, historyMetric, refreshCountdown, historyChart, metricCards, serverMetrics,
-      termLines, termInput, currentServerName, cmdGroups,
-      tsTool, b64Tool, jsonTool, pwdTool,
-      settingsTab, settingTabs, showAddServer, newServer, newSvc, scanning,
-      confirmShow, confirmTitle, confirmMsg, confirmAction,
-      sshTestMsg, sshTestOk, clockStr,
-      toggleTheme, switchPage, pageTitle,
-      openService, togglePwd, copyText,
-      onServerChange, selectServer, addServer, testSSH, delServer, scanServerS, addSvc, triggerScan,
-      loadMonitor, loadHistory, formatPorts,
-      execTerm, termHistoryUp, termHistoryDown,
-      convertTs, encB64, decB64, fmtJson, genPwd,
+      currentPage, darkMode, searchQuery, clock, collapsed,
+      groupConfig, manualServices, autoServices,
+      filteredGroups, stats, effectiveStatus,
+      showGroupModal, newGroupName, newGroupId, newGroupColor,
+      addGroup, deleteGroup, moveServiceToGroup,
+      copyText, iconMap,
+      servers, currentServerId, monitorData, containers,
+      selectedMetric, getMetricValue, loadMonitor,
+      termLines, termInput, execCmd, insertCmd, cmdTemplates, activeCmdGroup,
+      triggerScan,
     };
   },
+
+  template: `
+<div class="app" :class="{light: !darkMode}">
+  <!-- Sidebar -->
+  <aside class="sidebar" :class="{collapsed}">
+    <div class="sidebar-logo">
+      <div class="logo-icon">O</div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.1</small></div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section-title">主导航</div>
+      <div class="nav-item" :class="{active:currentPage==='nav'}" @click="currentPage='nav'">
+        <svg class="nav-icon"><use href="#fa-server"/></svg><span>服务导航</span>
+      </div>
+      <div class="nav-item" :class="{active:currentPage==='monitor'}" @click="currentPage='monitor'">
+        <svg class="nav-icon"><use href="#fa-gauge"/></svg><span>监控中心</span>
+      </div>
+      <div class="nav-item" :class="{active:currentPage==='tools'}" @click="currentPage='tools'">
+        <svg class="nav-icon"><use href="#fa-wrench"/></svg><span>工具箱</span>
+      </div>
+      <div class="nav-item" :class="{active:currentPage==='resources'}" @click="currentPage='resources'">
+        <svg class="nav-icon"><use href="#fa-layer-group"/></svg><span>资源管理</span>
+      </div>
+      <div class="nav-section-title">服务器</div>
+      <div class="nav-item" v-for="srv in servers" :key="srv.id" @click="currentServerId=srv.id; currentPage='monitor'">
+        <svg class="nav-icon"><use href="#fa-server"/></svg><span>{{srv.name}}</span>
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <span class="online-dot"></span><span class="sidebar-footer-text">{{servers.length}} 服务器 · {{stats.total}} 服务</span>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main" :class="{expanded:collapsed}">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="icon-btn" @click="collapsed=!collapsed" :title="collapsed?'展开':'折叠'">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v1.5H2zm0 4.25h12v1.5H2zm0 4.25h8v1.5H2z"/></svg>
+        </button>
+        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':currentPage==='tools'?'工具箱':'资源管理'}}</h2>
+      </div>
+      <div class="topbar-right">
+        <div class="search-box" v-if="currentPage==='nav'">
+          <svg><use href="#fa-globe" style="width:14px;height:14px"/></svg>
+          <input v-model="searchQuery" placeholder="搜索服务... (Ctrl+K)">
+        </div>
+        <span class="clock">{{clock}}</span>
+        <button class="icon-btn" @click="darkMode=!darkMode" :title="darkMode?'亮色模式':'暗色模式'">{{darkMode?'☀':'🌙'}}</button>
+      </div>
+    </header>
+
+    <!-- ===== NAV PAGE ===== -->
+    <div class="content" v-if="currentPage==='nav'">
+      <div class="stat-row">
+        <div class="stat-card teal"><div class="num">{{stats.total}}</div><div class="label">服务总数</div></div>
+        <div class="stat-card green"><div class="num">{{stats.online}}</div><div class="label">在线服务</div></div>
+        <div class="stat-card red"><div class="num">{{stats.offline}}</div><div class="label">离线服务</div></div>
+        <div class="stat-card orange"><div class="num">{{stats.srvOff}}</div><div class="label">服务器离线</div></div>
+        <div class="stat-card purple"><div class="num">{{stats.manual}}</div><div class="label">手动配置</div></div>
+        <div class="stat-card blue"><div class="num">{{stats.auto}}</div><div class="label">自动检测</div></div>
+      </div>
+
+      <div style="margin-bottom:16px">
+        <button class="btn-sm primary" @click="showGroupModal=true">管理分组</button>
+      </div>
+
+      <div class="group-section" v-for="g in filteredGroups" :key="g.id">
+        <div class="group-header">
+          <span class="group-dot" :style="{background:g.color}"></span>
+          <span class="group-name">{{g.name}}</span>
+          <span class="group-count">{{g.services.length}} 个服务</span>
+          <div class="group-actions" v-if="g.id!=='ungrouped'">
+            <button @click="deleteGroup(g.id)" title="删除分组" v-if="g.services.length===0">删除</button>
+          </div>
+        </div>
+        <div class="svc-grid">
+          <div class="svc-card" v-for="s in g.services" :key="s.serviceKey">
+            <div class="svc-card-top">
+              <div class="svc-name">
+                <span class="status-dot" :class="effectiveStatus(s)"></span>
+                {{s.name}}
+              </div>
+              <span class="svc-badge"
+                :class="effectiveStatus(s)==='server_offline' ? 'srv-offline' : s.origin">
+                {{effectiveStatus(s)==='server_offline' ? '服务器离线' : s.origin==='manual' ? '手动配置' : '自动检测'}}
+              </span>
+            </div>
+            <div class="svc-desc">{{s.desc || s.description || ''}}</div>
+            <div class="svc-tags" v-if="s.tags && s.tags.length">
+              <span class="svc-tag" v-for="t in s.tags" :key="t">{{t}}</span>
+            </div>
+            <div class="svc-server-info" v-if="s.origin==='auto'">
+              <svg width="12" height="12"><use href="#fa-server"/></svg>
+              {{s.serverName}} ({{s.serverHost}})
+              <span v-if="s.containerName" style="margin-left:6px">| {{s.containerName}}</span>
+            </div>
+            <div class="svc-url" v-if="s.fullUrl">
+              <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
+            </div>
+            <div class="svc-auth" v-if="s.username">
+              <div class="auth-item"><span class="auth-label">账号:</span><span class="auth-val" @click="copyText(s.username)">{{s.username}}</span></div>
+              <div class="auth-item"><span class="auth-label">密码:</span><span class="auth-val hidden" @click="copyText(s.password)" title="点击复制">{{s.password}}</span></div>
+            </div>
+            <div class="svc-footer">
+              <a v-if="s.fullUrl" :href="s.fullUrl" target="_blank" rel="noopener" class="btn-sm primary">打开服务</a>
+              <button v-if="s.username" class="btn-sm" @click="copyText(s.username)">复制账号</button>
+              <button v-if="s.password" class="btn-sm" @click="copyText(s.password)">复制密码</button>
+              <select class="svc-move-select" :value="groupConfig.serviceGroupMap[s.serviceKey] || ''" @change="moveServiceToGroup(s.serviceKey, $event.target.value)">
+                <option value="">-- 移动到分组 --</option>
+                <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
+                <option value="ungrouped">未分组</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== MONITOR PAGE ===== -->
+    <div class="content" v-if="currentPage==='monitor'">
+      <div class="monitor-select">
+        <select v-model="currentServerId"><option v-for="s in servers" :key="s.id" :value="s.id">{{s.name}} ({{s.host}})</option></select>
+        <button class="btn-sm" @click="loadMonitor">手动刷新</button>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-card" @click="selectedMetric='cpu'"><div class="mc-icon">⚡</div><div class="mc-label">CPU</div><div class="mc-value" :style="{color:getMetricValue('cpu_percent')>80?'var(--red)':'var(--green)'}">{{getMetricValue('cpu_percent')}}%</div></div>
+        <div class="metric-card" @click="selectedMetric='memory'"><div class="mc-icon">💾</div><div class="mc-label">内存</div><div class="mc-value" :style="{color:getMetricValue('memory_percent')>80?'var(--red)':'var(--green)'}">{{getMetricValue('memory_percent')}}%</div></div>
+        <div class="metric-card" @click="selectedMetric='disk'"><div class="mc-icon">💿</div><div class="mc-label">磁盘</div><div class="mc-value" :style="{color:getMetricValue('disk_percent')>80?'var(--red)':'var(--green)'}">{{getMetricValue('disk_percent')}}%</div></div>
+        <div class="metric-card"><div class="mc-icon">🌐</div><div class="mc-label">网络</div><div class="mc-value" style="color:var(--blue)">{{getMetricValue('network_speed') || '-'}}</div></div>
+      </div>
+      <div class="container-table">
+        <table>
+          <thead><tr><th>名称</th><th>镜像</th><th>状态</th><th>端口</th></tr></thead>
+          <tbody><tr v-for="c in containers" :key="c.name||c.id">
+            <td>{{c.name||c.Names}}</td>
+            <td>{{c.image||c.Image}}</td>
+            <td><span :class="{'running-dot':(c.status||c.Status||'').includes('running')}">{{c.status||c.Status}}</span></td>
+            <td>{{c.ports||c.Ports||'-'}}</td>
+          </tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ===== TOOLS PAGE ===== -->
+    <div class="content" v-if="currentPage==='tools'">
+      <div class="terminal-box" ref="termBox"><div v-for="(l,i) in termLines" :key="i">{{l}}</div></div>
+      <div class="terminal-input-row">
+        <input v-model="termInput" @keyup.enter="execCmd" placeholder="输入命令...">
+        <button class="btn-sm primary" @click="execCmd">执行</button>
+      </div>
+      <div style="margin-top:16px">
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <button v-for="(cmds,cat) in cmdTemplates" :key="cat" class="btn-sm" :class="{primary:activeCmdGroup===cat}" @click="activeCmdGroup=cat">{{cat}}</button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <button v-for="cmd in cmdTemplates[activeCmdGroup]" :key="cmd" class="btn-sm" @click="insertCmd(cmd)">{{cmd}}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== RESOURCES PAGE ===== -->
+    <div class="content" v-if="currentPage==='resources'">
+      <div class="server-grid">
+        <div class="server-card" v-for="srv in servers" :key="srv.id">
+          <h4><span class="status-dot" :class="srv.status==='online'?'online':'offline'"></span>{{srv.name}}</h4>
+          <div class="s-host">{{srv.host}} · {{srv.status}}</div>
+          <div class="srv-btn-row">
+            <button class="btn-sm" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
+            <button class="btn-sm" @click="triggerScan(srv.id)">扫描</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Group Management Modal ===== -->
+    <div class="modal-overlay" v-if="showGroupModal" @click.self="showGroupModal=false">
+      <div class="modal">
+        <h3>分组管理</h3>
+        <div v-for="g in groupConfig.groups" :key="g.id" class="group-list-item">
+          <span class="g-dot" :style="{background:g.color}"></span>
+          <span class="g-name">{{g.name}}</span>
+          <span class="g-order">排序: {{g.order}}</span>
+          <div class="g-btns">
+            <button class="btn-sm danger" @click="deleteGroup(g.id)" v-if="g.id!=='ungrouped'">删除</button>
+          </div>
+        </div>
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
+          <div style="font-size:13px;font-weight:500;margin-bottom:8px">新增分组</div>
+          <div class="modal-row"><label>ID</label><input v-model="newGroupId" placeholder="英文标识如 cicd"></div>
+          <div class="modal-row"><label>名称</label><input v-model="newGroupName" placeholder="如: 代码与CI/CD"></div>
+          <div class="modal-row"><label>颜色</label><input type="color" v-model="newGroupColor"></div>
+          <div style="text-align:right"><button class="btn-sm primary" @click="addGroup">添加</button></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-sm" @click="showGroupModal=false">关闭</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+`
 }).mount('#app');
 </script>
+</body>
 </html>

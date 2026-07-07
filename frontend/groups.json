@@ -1,0 +1,66 @@
+{
+  "groups": [
+    {
+      "id": "cicd",
+      "name": "代码与CI/CD",
+      "order": 10,
+      "color": "#2dd4bf",
+      "icon": "code"
+    },
+    {
+      "id": "monitor",
+      "name": "监控与日志",
+      "order": 20,
+      "color": "#3b82f6",
+      "icon": "chart"
+    },
+    {
+      "id": "ops_tool",
+      "name": "运维工具",
+      "order": 30,
+      "color": "#8b5cf6",
+      "icon": "tool"
+    },
+    {
+      "id": "data",
+      "name": "数据采集",
+      "order": 40,
+      "color": "#f59e0b",
+      "icon": "database"
+    },
+    {
+      "id": "network",
+      "name": "网络与代理",
+      "order": 50,
+      "color": "#64748b",
+      "icon": "globe"
+    },
+    {
+      "id": "auto_workflow",
+      "name": "自动化工作流",
+      "order": 60,
+      "color": "#ec4899",
+      "icon": "bolt"
+    },
+    {
+      "id": "ungrouped",
+      "name": "未分组",
+      "order": 999,
+      "color": "#475569",
+      "icon": "box"
+    }
+  ],
+  "serviceGroupMap": {
+    "manual:Gitea": "cicd",
+    "manual:Jenkins": "cicd",
+    "manual:Harbor": "cicd",
+    "manual:Prometheus": "monitor",
+    "manual:Grafana": "monitor",
+    "manual:OpsCenter": "ops_tool",
+    "manual:IT-Tools": "ops_tool",
+    "manual:Stirling-PDF": "ops_tool",
+    "manual:1Panel": "ops_tool",
+    "manual:DataHub": "data",
+    "auto:ba8b865e-c1c0-4f56-9417-c9ee10a18e1b:d1738355-df3d-47f3-b260-b23ffbbfc798": "cicd"
+  }
+}
