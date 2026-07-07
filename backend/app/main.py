@@ -897,7 +897,7 @@ def health_check_url(url: str = Query(..., description="URL to check")):
 
 
 # === Group Config API (read/write groups.json) ===
-GROUPS_JSON_PATH = "/opt/cicd/nginx/html/ops/groups.json"
+GROUPS_JSON_PATH = "/opt/cicd/nginx/html/groups.json"
 
 def _read_groups_json():
     import json as _json
@@ -981,83 +981,6 @@ def delete_group(group_id: str):
 
 
 # === Services with server status (enhanced) ===
-
-# === Manual Services Configuration ===
-MANUAL_SERVICES_JSON_PATH = "/opt/cicd/nginx/html/ops/manual-services.json"
-
-class ManualServiceItem(BaseModel):
-    id: str = ""
-    name: str
-    url: str
-    desc: str = ""
-    groupId: str = "ungrouped"
-    username: str = ""
-    password: str = ""
-    authType: str = "none"
-    serverId: Optional[str] = None
-    enabled: bool = True
-
-def _read_manual_services():
-    import json as _json
-    try:
-        with open(MANUAL_SERVICES_JSON_PATH, "r", encoding="utf-8") as f:
-            return _json.load(f)
-    except Exception:
-        return {"services": []}
-
-def _write_manual_services(data):
-    import json as _json
-    with open(MANUAL_SERVICES_JSON_PATH, "w", encoding="utf-8") as f:
-        _json.dump(data, f, ensure_ascii=False, indent=2)
-    return True
-
-@app.get("/api/v2/manual-services")
-def list_manual_services(server_id: Optional[str] = None):
-    data = _read_manual_services()
-    services = data.get("services", [])
-    if server_id:
-        services = [s for s in services if not s.get("serverId") or s.get("serverId") == server_id]
-    return services
-
-@app.post("/api/v2/manual-services")
-def add_manual_service(item: ManualServiceItem):
-    data = _read_manual_services()
-    if not item.id:
-        item.id = str(uuid.uuid4())[:8]
-    if any(s.get("id") == item.id for s in data.get("services", [])):
-        raise HTTPException(400, "Service id already exists")
-    data.setdefault("services", []).append(item.model_dump())
-    _write_manual_services(data)
-    return {"ok": True, "service": item.model_dump()}
-
-@app.patch("/api/v2/manual-services/{service_id}")
-def update_manual_service(service_id: str, item: ManualServiceItem):
-    data = _read_manual_services()
-    services = data.get("services", [])
-    found = False
-    for i, s in enumerate(services):
-        if s.get("id") == service_id:
-            item.id = service_id
-            services[i] = item.model_dump()
-            found = True
-            break
-    if not found:
-        raise HTTPException(404, "Service not found")
-    data["services"] = services
-    _write_manual_services(data)
-    return {"ok": True, "service": item.model_dump()}
-
-@app.delete("/api/v2/manual-services/{service_id}")
-def delete_manual_service(service_id: str):
-    data = _read_manual_services()
-    services = data.get("services", [])
-    new_services = [s for s in services if s.get("id") != service_id]
-    if len(new_services) == len(services):
-        raise HTTPException(404, "Service not found")
-    data["services"] = new_services
-    _write_manual_services(data)
-    return {"ok": True, "deleted": service_id}
-
 @app.get("/api/v2/services-with-status")
 def list_services_with_status(server_id: Optional[str] = None):
     """List services with their server status included for frontend display."""
