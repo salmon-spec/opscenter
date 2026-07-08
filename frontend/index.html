@@ -484,6 +484,7 @@ createApp({
       try {
         await fetch(`${API}/group-config/service-map?serviceKey=${encodeURIComponent(serviceKey)}&groupId=${encodeURIComponent(groupId)}`, { method: 'PATCH' });
         await loadGroupConfig();
+        await loadAutoServices();
       } catch(e) { console.error('move failed:', e); }
     }
 
@@ -818,18 +819,12 @@ createApp({
         <div class="stat-card orange"><div class="num">{{stats.srvOff}}</div><div class="label">服务器离线</div></div>
       </div>
 
-      <div style="margin-bottom:16px">
-        <button class="btn-sm primary" @click="showGroupModal=true">管理分组</button>
-      </div>
-
       <div class="group-section" v-for="g in filteredGroups" :key="g.id">
         <div class="group-header">
           <span class="group-dot" :style="{background:g.color}"></span>
           <span class="group-name">{{g.name}}</span>
           <span class="group-count">{{g.services.length}} 个服务</span>
-          <div class="group-actions" v-if="g.id!=='ungrouped'">
-            <button @click="deleteGroup(g.id)" title="删除分组" v-if="g.services.length===0">删除</button>
-          </div>
+
         </div>
         <div class="svc-grid">
           <div class="svc-card" v-for="s in g.services" :key="s.serviceKey" @click="openService(s.fullUrl)">
@@ -855,13 +850,7 @@ createApp({
             <div class="svc-url" v-if="s.fullUrl">
               <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
             </div>
-            <div class="svc-footer">
-              <select class="svc-move-select" :value="groupConfig.serviceGroupMap[s.serviceKey] || ''" @change="moveServiceToGroup(s.serviceKey, $event.target.value)">
-                <option value="">-- 移动到分组 --</option>
-                <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
-                <option value="ungrouped">未分组</option>
-              </select>
-            </div>
+
           </div>
         </div>
       </div>
@@ -961,6 +950,9 @@ createApp({
           <span style="font-size:14px;font-weight:600;color:var(--text1)">{{servers.length}} 台服务器</span>
           <span style="font-size:12px;color:var(--text2)">{{servers.filter(s=>s.status==='online').length}} 在线</span>
         </div>
+        <button class="btn-sm" @click="showGroupModal=true" style="font-size:13px;padding:6px 16px;margin-right:8px">
+          管理分组
+        </button>
         <button class="btn-sm primary" @click="showAddServerModal=true" style="font-size:13px;padding:6px 16px">
           + 添加服务器
         </button>
@@ -993,6 +985,11 @@ createApp({
             <div class="svc-item" v-for="s in serverServices[srv.id]" :key="s.id" :class="{'hidden-svc': s.hidden}">
               <span class="svc-name" :title="s.description || s.name">{{s.name}}</span>
               <span class="svc-cat" v-if="s.category">{{s.category}}</span>
+              <select class="svc-move-select" :value="groupConfig.serviceGroupMap['auto:'+s.server_id+':'+s.id] || ''" @change="moveServiceToGroup('auto:'+s.server_id+':'+s.id, $event.target.value)" style="font-size:10px;padding:2px 4px;max-width:90px">
+                <option value="">分组</option>
+                <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
+                <option value="ungrouped">未分组</option>
+              </select>
               <button class="svc-tag" :class="s.hidden ? 'hid' : 'vis'" @click="toggleSvcHidden(s)" :title="s.hidden ? '点击显示' : '点击隐藏'">
                 {{s.hidden ? '已隐藏' : '可见'}}
               </button>
