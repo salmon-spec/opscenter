@@ -432,6 +432,8 @@ def list_services(server_id: Optional[str] = None, category: Optional[str] = Non
             q = q.filter(Service.pinned == pinned)
         if search:
             q = q.filter(Service.name.ilike(f"%{search}%"))
+        # Only show services that have a web-accessible URL
+        q = q.filter(Service.url != None, Service.url != '')
         q = q.order_by(Service.sort_order, Service.category, Service.name)
         services = q.all()
         result = []
@@ -1047,6 +1049,8 @@ def list_services_with_status(server_id: Optional[str] = None):
         q = db.query(Service)
         if server_id:
             q = q.filter(Service.server_id == uuid.UUID(server_id))
+        # Only show services that have a web-accessible URL
+        q = q.filter(Service.url != None, Service.url != '')
         q = q.order_by(Service.sort_order, Service.category, Service.name)
         services = q.all()
         
