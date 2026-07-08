@@ -69,6 +69,8 @@ class Service(Base):
     ports = Column(String(200), nullable=True)
     sort_order = Column(Integer, default=0)
     hidden = Column(Boolean, default=False)
+    account = Column(String(100), nullable=True)
+    password = Column(String(200), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     server = relationship("Server", back_populates="services")

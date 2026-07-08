@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.6 运维工作台</title>
+<title>OpsCenter v3.7 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
@@ -209,6 +209,25 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .svc-count{font-size:11px;color:var(--text2);margin-bottom:2px}
 
 .srv-btn-row{display:flex;gap:6px}
+/* ===== Service Credentials ===== */
+.svc-creds{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.svc-cred{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:6px;background:var(--bg);border:1px solid var(--border)}
+.svc-cred .cred-label{color:var(--text2);margin-right:2px}
+.svc-cred .cred-val{color:var(--text1);font-family:Consolas,monospace;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.svc-cred .cred-copy{background:none;border:none;color:var(--text2);cursor:pointer;padding:1px 3px;font-size:10px;border-radius:3px}
+.svc-cred .cred-copy:hover{color:var(--accent)}
+.svc-cred-empty{font-size:10px;color:var(--text2);opacity:.6;font-style:italic}
+/* ===== Resource Server Tabs ===== */
+.res-server-tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.res-server-tab{display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:8px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;color:var(--text2);transition:all .15s;min-width:140px}
+.res-server-tab:hover{border-color:var(--accent);color:var(--text1)}
+.res-server-tab.active{background:rgba(45,212,191,.12);border-color:var(--accent);color:var(--accent);font-weight:500}
+.res-server-tab .rst-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.res-server-tab .rst-dot.online{background:var(--green);box-shadow:0 0 4px var(--green)}
+.res-server-tab .rst-dot.offline{background:var(--red);box-shadow:0 0 4px var(--red)}
+.res-server-tab .rst-info{display:flex;flex-direction:column;gap:2px}
+.res-server-tab .rst-name{font-weight:500}
+.res-server-tab .rst-detail{font-size:10px;color:var(--text2)}
 
 /* ===== Responsive ===== */
 @media(max-width:768px){.sidebar{width:60px}.sidebar .logo-text,.sidebar .nav-item span:not(.nav-icon),.sidebar .nav-section-title,.sidebar .sidebar-footer-text{display:none}.main{margin-left:60px}.svc-grid{grid-template-columns:1fr}.stat-card{min-width:100px}}
@@ -261,6 +280,14 @@ createApp({
     let monitorCache = null;    // { serverId: { monitorData, containers } }
     let historyCache = null;    // { key: { historyData } }  key = serverId:metric:hours
 
+    // ========== Resource: Server Tab ==========
+    const resServerId = ref('');   // selected server in resources page
+
+    function switchResServer(sid) {
+      resServerId.value = sid;
+      localStorage.setItem('oc-res-server', sid);
+    }
+
     // ========== Modals ==========
     const showGroupModal = ref(false);
     const newGroupName = ref('');
@@ -270,7 +297,7 @@ createApp({
     // ========== Resource: Service Management ==========
     const serverServices = ref({});   // { serverId: [services] }
     const showEditSvcModal = ref(false);
-    const editSvcForm = reactive({ id:'', name:'', description:'', hidden:false });
+    const editSvcForm = reactive({ id:'', name:'', description:'', hidden:false, account:'', password:'' });
 
     async function loadServerServices(sid) {
       try {
@@ -300,6 +327,8 @@ createApp({
       editSvcForm.name = svc.name;
       editSvcForm.description = svc.description || '';
       editSvcForm.hidden = svc.hidden;
+      editSvcForm.account = svc.account || '';
+      editSvcForm.password = svc.password || '';
       showEditSvcModal.value = true;
     }
     async function saveEditSvc() {
@@ -308,6 +337,8 @@ createApp({
           name: editSvcForm.name,
           description: editSvcForm.description,
           hidden: editSvcForm.hidden,
+          account: editSvcForm.account,
+          password: editSvcForm.password,
         });
         showEditSvcModal.value = false;
         // Reload services for all servers to reflect changes
@@ -779,6 +810,14 @@ createApp({
       await Promise.all([loadAutoServices(), loadServers()]);
       const onlineSrv = servers.value.find(s => s.status === 'online');
       if (onlineSrv) navServerId.value = onlineSrv.id;
+      if (servers.value.length) {
+        const savedResSrv = localStorage.getItem('oc-res-server');
+        if (savedResSrv && servers.value.find(s => s.id === savedResSrv)) {
+          resServerId.value = savedResSrv;
+        } else {
+          resServerId.value = servers.value[0].id;
+        }
+      }
       await loadMonitor();
       await loadAllServerServices();
     });
@@ -820,6 +859,7 @@ createApp({
       triggerScan,
       serverServices, getSvcCount, toggleSvcHidden, openEditSvc,
       showEditSvcModal, editSvcForm, saveEditSvc,
+      resServerId, switchResServer,
       showAddServerModal, newServer, sshTestResult,
       addServer, testSsh, deleteServer,
     };
@@ -831,7 +871,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.6</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.7</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -1025,17 +1065,32 @@ createApp({
           <span style="font-size:14px;font-weight:600;color:var(--text1)">{{servers.length}} 台服务器</span>
           <span style="font-size:12px;color:var(--text2)">{{servers.filter(s=>s.status==='online').length}} 在线</span>
         </div>
-        <button class="btn-sm" @click="showGroupModal=true" style="font-size:13px;padding:6px 16px;margin-right:8px">
-          管理分组
-        </button>
-        <button class="btn-sm primary" @click="showAddServerModal=true" style="font-size:13px;padding:6px 16px">
-          + 添加服务器
-        </button>
+        <div style="display:flex;gap:8px">
+          <button class="btn-sm" @click="showGroupModal=true" style="font-size:13px;padding:6px 16px">
+            管理分组
+          </button>
+          <button class="btn-sm primary" @click="showAddServerModal=true" style="font-size:13px;padding:6px 16px">
+            + 添加服务器
+          </button>
+        </div>
       </div>
 
-      <div class="server-grid">
-        <div class="server-card" v-for="srv in servers" :key="srv.id">
-          <h4>
+      <!-- Server Tab Bar -->
+      <div class="res-server-tabs">
+        <div class="res-server-tab" v-for="srv in servers" :key="srv.id"
+             :class="{active: resServerId===srv.id}" @click="switchResServer(srv.id)">
+          <span class="rst-dot" :class="srv.status==='online'?'online':'offline'"></span>
+          <div class="rst-info">
+            <span class="rst-name">{{srv.name}}</span>
+            <span class="rst-detail">{{srv.host}}:{{srv.ssh_port||22}} · {{getSvcCount(srv.id).visible}}/{{getSvcCount(srv.id).total}} 服务</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Selected Server Detail -->
+      <template v-for="srv in servers" :key="srv.id">
+      <div class="server-card" v-if="resServerId===srv.id">
+          <h4 style="font-size:16px">
             <span class="status-dot" :class="srv.status==='online'?'online':'offline'"></span>
             {{srv.name}}
             <span v-if="srv.is_local" style="font-size:10px;padding:2px 6px;border-radius:6px;background:rgba(45,212,191,.12);color:var(--accent);margin-left:6px;font-weight:500">本机</span>
@@ -1063,23 +1118,45 @@ createApp({
           </div>
           <!-- Service list -->
           <div class="svc-list" v-if="(serverServices[srv.id]||[]).length">
-            <div class="svc-item" v-for="s in serverServices[srv.id]" :key="s.id" :class="{'hidden-svc': s.hidden}">
-              <span class="svc-name" :title="s.description || s.name">{{s.name}}</span>
-              <span class="svc-cat" v-if="s.category">{{s.category}}</span>
-              <select class="svc-move-select" :value="groupConfig.serviceGroupMap['auto:'+s.server_id+':'+s.id] || ''" @change="moveServiceToGroup('auto:'+s.server_id+':'+s.id, $event.target.value)" style="font-size:10px;padding:2px 4px;max-width:90px">
-                <option value="">分组</option>
-                <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
-                <option value="ungrouped">未分组</option>
-              </select>
-              <button class="svc-tag" :class="s.hidden ? 'hid' : 'vis'" @click="toggleSvcHidden(s)" :title="s.hidden ? '点击显示' : '点击隐藏'">
-                {{s.hidden ? '已隐藏' : '可见'}}
-              </button>
-              <button class="svc-edit-btn" @click="openEditSvc(s)" title="编辑">&#9998;</button>
+            <div class="svc-item" v-for="s in serverServices[srv.id]" :key="s.id" :class="{'hidden-svc': s.hidden}" style="flex-wrap:wrap;gap:4px 8px">
+              <div style="display:flex;align-items:center;gap:6px;min-width:0;flex:1">
+                <span class="svc-name" :title="s.description || s.name" style="min-width:80px">{{s.name}}</span>
+                <span class="svc-cat" v-if="s.category">{{s.category}}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap">
+                <!-- Account/Password display -->
+                <template v-if="s.account || s.password">
+                  <span class="svc-cred" v-if="s.account">
+                    <span class="cred-label">账号</span>
+                    <span class="cred-val" :title="s.account">{{s.account}}</span>
+                    <button class="cred-copy" @click="copyText(s.account)" title="复制账号">复制</button>
+                  </span>
+                  <span class="svc-cred" v-if="s.password">
+                    <span class="cred-label">密码</span>
+                    <span class="cred-val">****</span>
+                    <button class="cred-copy" @click="copyText(s.password)" title="复制密码">复制</button>
+                  </span>
+                </template>
+                <template v-else>
+                  <span class="svc-cred-empty">未配置凭证</span>
+                </template>
+              </div>
+              <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+                <select class="svc-move-select" :value="groupConfig.serviceGroupMap['auto:'+s.server_id+':'+s.id] || ''" @change="moveServiceToGroup('auto:'+s.server_id+':'+s.id, $event.target.value)" style="font-size:10px;padding:2px 4px;max-width:90px">
+                  <option value="">分组</option>
+                  <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
+                  <option value="ungrouped">未分组</option>
+                </select>
+                <button class="svc-tag" :class="s.hidden ? 'hid' : 'vis'" @click="toggleSvcHidden(s)" :title="s.hidden ? '点击显示' : '点击隐藏'">
+                  {{s.hidden ? '已隐藏' : '可见'}}
+                </button>
+                <button class="svc-edit-btn" @click="openEditSvc(s)" title="编辑">&#9998;</button>
+              </div>
             </div>
           </div>
           <div v-else style="font-size:11px;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">暂无服务数据，点击"扫描"发现服务</div>
         </div>
-      </div>
+      </template>
     </div>
 
     <!-- ===== Group Management Modal ===== -->
@@ -1118,6 +1195,17 @@ createApp({
         <div class="modal-row">
           <label>描述</label>
           <input v-model="editSvcForm.description" placeholder="服务描述" style="flex:1">
+        </div>
+        <div style="margin:12px 0 8px;padding-top:10px;border-top:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:8px">登录凭证（可选）</div>
+          <div class="modal-row">
+            <label>账号</label>
+            <input v-model="editSvcForm.account" placeholder="登录账号，留空清除" style="flex:1">
+          </div>
+          <div class="modal-row">
+            <label>密码</label>
+            <input v-model="editSvcForm.password" type="password" placeholder="登录密码，留空清除" style="flex:1">
+          </div>
         </div>
         <div style="margin:12px 0;display:flex;align-items:center;gap:8px">
           <label style="font-size:13px;color:var(--text1);cursor:pointer;display:flex;align-items:center;gap:6px">

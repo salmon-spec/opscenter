@@ -78,6 +78,8 @@ class ServiceUpdate(BaseModel):
     health_path: Optional[str] = None
     pinned: Optional[bool] = None
     hidden: Optional[bool] = None
+    account: Optional[str] = None
+    password: Optional[str] = None
 
 class PinToggle(BaseModel):
     pinned: bool
@@ -481,6 +483,8 @@ def list_services(server_id: Optional[str] = None, category: Optional[str] = Non
                 "source": s.source, "status": s.status, "pinned": s.pinned,
                 "health_path": s.health_path, "container_name": s.container_name,
                 "image": s.image, "ports": s.ports,
+                "account": s.account or "",
+                "password": s.password or "",
             })
         return result
 
@@ -510,6 +514,13 @@ def update_service(service_id: str, data: ServiceUpdate):
         for field, val in data.model_dump(exclude_unset=True).items():
             if val is not None:
                 setattr(svc, field, val)
+        # Handle account/password explicitly (allow empty string to clear)
+        if 'account' in data.model_dump(exclude_unset=True):
+            acct = data.model_dump(exclude_unset=True).get('account')
+            svc.account = acct if acct else ''
+        if 'password' in data.model_dump(exclude_unset=True):
+            pwd = data.model_dump(exclude_unset=True).get('password')
+            svc.password = pwd if pwd else ''
         db.commit()
         return {"ok": True}
 
@@ -1579,6 +1590,8 @@ def list_all_services(server_id: Optional[str] = None):
                 "health_path": s.health_path, "container_name": s.container_name,
                 "image": s.image, "ports": s.ports,
                 "hidden": s.hidden or False,
+                "account": s.account or "",
+                "password": s.password or "",
                 "server_name": si.get("name", ""),
                 "server_host": si.get("host", ""),
                 "server_status": si.get("status", "unknown"),
