@@ -162,6 +162,12 @@ def collect_remote_metrics(client: paramiko.SSHClient) -> Dict:
     except:
         metrics['load1'] = 0; metrics['load5'] = 0; metrics['load15'] = 0
 
+    out, _, _ = ssh_exec(client, "cat /proc/uptime")
+    try:
+        metrics['uptime'] = round(float(out.strip().split()[0]), 0)
+    except:
+        metrics['uptime'] = 0
+
     out, _, _ = ssh_exec(client, "cat /proc/net/dev | grep -E 'eth|ens|enp' | head -1")
     try:
         parts = out.strip().split()
@@ -171,9 +177,13 @@ def collect_remote_metrics(client: paramiko.SSHClient) -> Dict:
     except:
         metrics['net_rx_bytes'] = 0; metrics['net_tx_bytes'] = 0
 
-    out, _, _ = ssh_exec(client, "docker ps -q | wc -l")
-    try: metrics['containers'] = int(out.strip())
-    except: metrics['containers'] = 0
+    out, _, _ = ssh_exec(client, "docker ps -a --format '{{.Status}}'")
+    try:
+        lines = [l.strip() for l in out.strip().split('\n') if l.strip()]
+        metrics['container_running'] = sum(1 for l in lines if 'Up' in l)
+        metrics['container_stopped'] = len(lines) - metrics['container_running']
+    except:
+        metrics['container_running'] = 0; metrics['container_stopped'] = 0
 
     return metrics
 

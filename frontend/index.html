@@ -508,21 +508,32 @@ createApp({
       if (!currentServerId.value) return;
       const srv = servers.value.find(s => s.id === currentServerId.value);
       if (srv && srv.status === 'offline') { monitorData.value = null; containers.value = []; historyData.value = []; if (chartInstance) { chartInstance.clear(); } return; }
+      // Clear stale data immediately before async fetch
+      monitorData.value = null;
+      containers.value = [];
       try {
         const data = await apiGet(`${API}/servers/${currentServerId.value}/monitor`);
-        monitorData.value = data;
-        containers.value = data.containers || [];
+        // Verify we're still on the same server (prevent race condition)
+        if (currentServerId.value === data.server_id) {
+          monitorData.value = data;
+          containers.value = data.containers || [];
+        }
       } catch(e) { console.warn('monitor load failed:', e.message); }
     }
 
     async function loadHistory() {
       if (!currentServerId.value) return;
       if (isCurrentServerOffline.value) { historyData.value = []; if (chartInstance) { chartInstance.clear(); } return; }
+      // Clear stale data immediately before async fetch
+      historyData.value = [];
+      if (chartInstance) { chartInstance.clear(); }
       try {
         const data = await apiGet(`${API}/servers/${currentServerId.value}/history?metric=${selectedMetric.value}&hours=${historyHours.value}`);
         historyData.value = data.values || [];
         await nextTick();
-        renderChart();
+        // Re-init chart if container was remounted (e.g. after loading state toggle)
+        if (!chartInstance || !chartBox.value) { await initChart(); }
+        if (chartInstance) { renderChart(); }
       } catch(e) { console.warn('history load failed:', e.message); }
     }
 
@@ -882,7 +893,7 @@ createApp({
         <div class="offline-sub">无法获取监控数据，请检查服务器连接状态</div>
       </div>
       <!-- Online Content -->
-      <template v-else>
+      <template v-if="!isCurrentServerOffline">
       <!-- Core Metrics (CPU / Memory / Disk) -->
       <div class="mon-metrics">
         <div class="mon-metrics-row primary">

@@ -705,9 +705,13 @@ def get_monitor(server_id: str):
             return {
                 "server_id": server_id,
                 "timestamp": datetime.utcnow().isoformat(),
-                "metrics": {"cpu_percent": 0, "memory_percent": 0, "disk_percent": 0, "cpu_count": 0,
-                           "memory_total": 0, "memory_used": 0, "disk_total": 0, "disk_used": 0, "disk_avail": 0,
-                           "load1": 0, "load5": 0, "load15": 0, "net_rx_bytes": 0, "net_tx_bytes": 0, "containers": 0},
+                "metrics": {"cpu": 0, "memory": 0, "disk": 0, "cpu_count": 0,
+                           "memory_total": 0, "memory_used": 0, "memory_avail": 0,
+                           "disk_total": 0, "disk_used": 0, "disk_avail": 0,
+                           "disk_read": 0, "disk_write": 0,
+                           "load1": 0, "load5": 0, "load15": 0,
+                           "net_rx": 0, "net_tx": 0, "uptime": 0,
+                           "container_running": 0, "container_stopped": 0},
                 "containers": [],
                 "error": "Cannot connect via SSH",
             }
@@ -715,10 +719,33 @@ def get_monitor(server_id: str):
             m = collect_remote_metrics(client)
             containers = get_remote_containers(client)
             client.close()
+            # Normalize remote metric keys to match local Prometheus format
+            normalized = {
+                "cpu": m.get("cpu_percent", 0),
+                "cpu_count": m.get("cpu_count", 0),
+                "memory": m.get("memory_percent", 0),
+                "memory_total": m.get("memory_total", 0),
+                "memory_used": m.get("memory_used", 0),
+                "memory_avail": m.get("memory_total", 0) - m.get("memory_used", 0),
+                "disk": m.get("disk_percent", 0),
+                "disk_total": m.get("disk_total", 0),
+                "disk_used": m.get("disk_used", 0),
+                "disk_avail": m.get("disk_avail", 0),
+                "disk_read": 0,
+                "disk_write": 0,
+                "load1": m.get("load1", 0),
+                "load5": m.get("load5", 0),
+                "load15": m.get("load15", 0),
+                "net_rx": m.get("net_rx_bytes", 0),
+                "net_tx": m.get("net_tx_bytes", 0),
+                "uptime": m.get("uptime", 0),
+                "container_running": len([c for c in containers if c.get("status") == "running"]),
+                "container_stopped": len([c for c in containers if c.get("status") != "running"]),
+            }
             return {
                 "server_id": server_id,
                 "timestamp": datetime.utcnow().isoformat(),
-                "metrics": m,
+                "metrics": normalized,
                 "containers": containers,
             }
         except Exception as e:
@@ -822,9 +849,17 @@ def get_monitor(server_id: str):
 @app.get("/api/v2/servers/{server_id}/history")
 @app.get("/api/v2/monitor/{server_id}/history")
 def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
-    """Get historical monitoring data from Prometheus."""
+    """Get historical monitoring data from Prometheus (local server only)."""
     import requests as req
-    
+
+    # Remote servers have no Prometheus history data
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if not srv.is_local:
+            return {"metric": metric, "values": [], "note": "No historical data for remote servers"}
+
     prom_url = os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090")
     
     metric_queries = {
