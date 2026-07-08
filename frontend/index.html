@@ -132,20 +132,29 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
 
 /* ===== Monitor Page ===== */
-.monitor-select{margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.monitor-select select{padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text1);font-size:13px}
-.monitor-info-bar{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;color:var(--text2)}
-.monitor-info-bar span{display:flex;align-items:center;gap:4px}
-.metric-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:16px}
-.metric-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer;transition:all .2s;position:relative}
-.metric-card:hover{border-color:var(--accent)}
+.mon-header{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.mon-header-left{display:flex;align-items:center;gap:12px;min-width:200px}
+.mon-header-left select{padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text1);font-size:13px;font-weight:500}
+.mon-header-left .mon-status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2)}
+.mon-header-left .mon-status .dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+.mon-header-right{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+.mon-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:6px;background:var(--bg);border:1px solid var(--border);font-size:11px;color:var(--text2);white-space:nowrap}
+.mon-tag .tag-label{color:var(--text2)}
+.mon-tag .tag-val{color:var(--text1);font-weight:500;font-variant-numeric:tabular-nums}
+.mon-metrics{margin-bottom:16px}
+.mon-metrics-row{display:grid;gap:12px;margin-bottom:12px}
+.mon-metrics-row.primary{grid-template-columns:repeat(3,1fr)}
+.mon-metrics-row.secondary{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
+.metric-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
+.metric-card:hover{border-color:var(--accent);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.15)}
 .metric-card.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(45,212,191,.18)}
-.metric-card .mc-icon{font-size:18px;margin-bottom:4px}
-.metric-card .mc-label{font-size:11px;color:var(--text2)}
-.metric-card .mc-value{font-size:22px;font-weight:700;margin-top:1px;line-height:1.2}
-.metric-card .mc-bar{height:4px;background:var(--border);border-radius:2px;margin-top:6px;overflow:hidden}
+.metric-card .mc-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.metric-card .mc-icon{font-size:20px}
+.metric-card .mc-label{font-size:11px;color:var(--text2);font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+.metric-card .mc-value{font-size:28px;font-weight:700;line-height:1.1}
+.metric-card .mc-bar{height:4px;background:var(--border);border-radius:2px;margin-top:10px;overflow:hidden}
 .metric-card .mc-bar-fill{height:100%;border-radius:2px;transition:width .5s}
-.metric-card .mc-detail{font-size:10px;color:var(--text2);margin-top:3px}
+.metric-card .mc-detail{font-size:11px;color:var(--text2);margin-top:6px}
 .chart-section{margin-bottom:20px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
 .chart-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px}
 .chart-header .ch-title{font-size:13px;font-weight:600}
@@ -743,32 +752,45 @@ createApp({
 
     <!-- ===== MONITOR PAGE ===== -->
     <div class="content" v-if="currentPage==='monitor'">
-      <div class="monitor-select">
-        <select v-model="currentServerId"><option v-for="s in servers" :key="s.id" :value="s.id">{{s.name}} ({{s.host}})</option></select>
-        <button class="btn-sm" @click="loadMonitor">手动刷新</button>
-        <span v-if="monitorData" style="font-size:12px;color:var(--text2);margin-left:8px">
-          <span style="width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px"></span>实时数据
-        </span>
+      <!-- Server Header -->
+      <div class="mon-header" v-if="monitorData">
+        <div class="mon-header-left">
+          <select v-model="currentServerId"><option v-for="s in servers" :key="s.id" :value="s.id">{{s.name}}</option></select>
+          <div class="mon-status"><span class="dot"></span>在线</div>
+          <button class="btn-sm" @click="loadMonitor">刷新</button>
+        </div>
+        <div class="mon-header-right">
+          <div class="mon-tag"><span class="tag-label">⏱</span><span class="tag-val">{{formatUptime(getMetric('uptime'))}}</span></div>
+          <div class="mon-tag"><span class="tag-label">🖥</span><span class="tag-val">{{getMetric('cpu_count') || '-'}} 核</span></div>
+          <div class="mon-tag"><span class="tag-label">💾</span><span class="tag-val">{{formatBytes(getMetric('memory_used'))}} / {{formatBytes(getMetric('memory_total'))}}</span></div>
+          <div class="mon-tag"><span class="tag-label">💿</span><span class="tag-val">{{formatBytes(getMetric('disk_used'))}} / {{formatBytes(getMetric('disk_total'))}}</span></div>
+          <div class="mon-tag"><span class="tag-label">📦</span><span class="tag-val">{{getMetric('container_running')||0}} 运行 / {{getMetric('container_stopped')||0}} 停止</span></div>
+        </div>
       </div>
 
-      <!-- Server info bar -->
-      <div class="monitor-info-bar" v-if="monitorData">
-        <span>⏱ 运行: {{formatUptime(getMetric('uptime'))}}</span>
-        <span>🖥 CPU核: {{getMetric('cpu_count') || '-'}}</span>
-        <span>💾 内存: {{formatBytes(getMetric('memory_used'))}} / {{formatBytes(getMetric('memory_total'))}}</span>
-        <span>💿 磁盘: {{formatBytes(getMetric('disk_used'))}} / {{formatBytes(getMetric('disk_total'))}}</span>
-        <span>🔄 Swap: {{formatBytes(getMetric('swap_used'))}} / {{formatBytes(getMetric('swap_total'))}}</span>
-        <span>📦 容器: {{getMetric('container_running')||0}} 运行 / {{getMetric('container_stopped')||0}} 停止</span>
-      </div>
-
-      <!-- Metric Cards -->
-      <div class="metric-grid">
-        <div v-for="mc in metricCards" :key="mc.key" class="metric-card" :class="{active:selectedMetric===mc.key}" @click="selectedMetric=mc.key;loadHistory()">
-          <div class="mc-icon">{{mc.icon}}</div>
-          <div class="mc-label">{{mc.label}}</div>
-          <div class="mc-value" :style="{color:mc.value>90?'var(--red)':mc.value>80?'var(--orange)':mc.color}">{{mc.display}}</div>
-          <div class="mc-bar"><div class="mc-bar-fill" :style="{width:Math.min(mc.value,100)+'%',background:mc.value>90?'var(--red)':mc.value>80?'var(--orange)':mc.color}"></div></div>
-          <div class="mc-detail">{{mc.detail}}</div>
+      <!-- Core Metrics (CPU / Memory / Disk) -->
+      <div class="mon-metrics">
+        <div class="mon-metrics-row primary">
+          <div v-for="mc in metricCards.filter(c=>c.key==='cpu'||c.key==='memory'||c.key==='disk')" :key="mc.key" class="metric-card" :class="{active:selectedMetric===mc.key}" @click="selectedMetric=mc.key;loadHistory()">
+            <div class="mc-top">
+              <span class="mc-icon">{{mc.icon}}</span>
+              <span class="mc-label">{{mc.label}}</span>
+            </div>
+            <div class="mc-value" :style="{color:mc.value>90?'var(--red)':mc.value>80?'var(--orange)':mc.color}">{{mc.display}}</div>
+            <div class="mc-bar"><div class="mc-bar-fill" :style="{width:Math.min(mc.value,100)+'%',background:mc.value>90?'var(--red)':mc.value>80?'var(--orange)':mc.color}"></div></div>
+            <div class="mc-detail">{{mc.detail}}</div>
+          </div>
+        </div>
+        <!-- Secondary Metrics (Network / Load / IO) -->
+        <div class="mon-metrics-row secondary">
+          <div v-for="mc in metricCards.filter(c=>c.key!=='cpu'&&c.key!=='memory'&&c.key!=='disk')" :key="mc.key" class="metric-card" :class="{active:selectedMetric===mc.key}" @click="selectedMetric=mc.key;loadHistory()">
+            <div class="mc-top">
+              <span class="mc-icon">{{mc.icon}}</span>
+              <span class="mc-label">{{mc.label}}</span>
+            </div>
+            <div class="mc-value" :style="{color:mc.color}">{{mc.display}}</div>
+            <div class="mc-detail">{{mc.detail}}</div>
+          </div>
         </div>
       </div>
 
