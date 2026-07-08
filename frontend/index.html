@@ -692,10 +692,7 @@ createApp({
       <div class="nav-item" :class="{active:currentPage==='resources'}" @click="currentPage='resources'">
         <svg class="nav-icon"><use href="#fa-layer-group"/></svg><span>资源管理</span>
       </div>
-      <div class="nav-section-title">服务器</div>
-      <div class="nav-item" v-for="srv in servers" :key="srv.id" @click="currentServerId=srv.id; currentPage='monitor'">
-        <svg class="nav-icon"><use href="#fa-server"/></svg><span>{{srv.name}}</span>
-      </div>
+
     </nav>
     <div class="sidebar-footer">
       <span class="online-dot"></span><span class="sidebar-footer-text">{{servers.length}} 服务器 · {{stats.total}} 服务</span>
