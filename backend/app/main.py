@@ -759,9 +759,9 @@ def get_monitor(server_id: str):
                 "error": str(e),
             }
     
-    # Local server: use Prometheus
+    # Local server: use Prometheus (parallel batch query)
     prom_url = os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090")
-    
+
     queries = {
         "cpu": '100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100',
         "cpu_count": 'count(node_cpu_seconds_total{mode="idle"}) without (cpu, mode)',
@@ -785,54 +785,65 @@ def get_monitor(server_id: str):
         "uptime": 'time() - node_boot_time_seconds',
         "containers": 'count(container_last_seen)',
     }
-    
-    result = {}
-    for key, query in queries.items():
+
+    def _query_one(item):
+        key, query = item
         try:
-            resp = req.get(f"{prom_url}/api/v1/query", params={"query": query}, timeout=5)
+            resp = req.get(f"{prom_url}/api/v1/query", params={"query": query}, timeout=3)
             data = resp.json()
             if data.get("status") == "success" and data.get("data", {}).get("result"):
-                val = data["data"]["result"][0]["value"][1]
-                result[key] = float(val)
-            else:
-                result[key] = None
+                return key, float(data["data"]["result"][0]["value"][1])
+            return key, None
         except Exception:
-            result[key] = None
+            return key, None
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    result = {}
+    with ThreadPoolExecutor(max_workers=len(queries)) as pool:
+        futures = {pool.submit(_query_one, item): item[0] for item in queries.items()}
+        for f in as_completed(futures):
+            key, val = f.result()
+            result[key] = val
     
-    # Get container list from Docker if available
+    # Get container list via subprocess (much faster than Docker SDK)
     container_list = []
     container_running = 0
     container_stopped = 0
     try:
-        import docker as docker_sdk
-        dc = docker_sdk.from_env()
-        all_ctr = dc.containers.list(all=True)
-        for c in all_ctr:
-            try:
-                ports = []
-                for p in c.ports.values():
-                    if p and isinstance(p, list):
-                        for binding in p:
-                            ports.append(f"{binding.get('HostIp','0.0.0.0')}:{binding.get('HostPort','?')}")
-                if c.status == "running":
-                    container_running += 1
-                else:
-                    container_stopped += 1
-                # Gracefully handle missing image metadata (e.g. after docker image prune)
-                try:
-                    image_name = c.image.tags[0] if c.image.tags else str(c.image.id[:12])
-                except Exception:
-                    image_name = c.attrs.get("Image", "unknown")[:20]
-                container_list.append({
-                    "name": c.name,
-                    "image": image_name,
-                    "status": c.status,
-                    "ports": ", ".join(ports) if ports else "-",
-                })
-            except Exception as ce:
-                print(f"[WARN] Container listing error for {getattr(c,'name','?')}: {ce}", flush=True)
+        import subprocess, json as _json
+        out = subprocess.check_output(
+            ['docker', 'ps', '-a', '--format', '{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}'],
+            timeout=5, stderr=subprocess.DEVNULL
+        ).decode('utf-8', errors='replace')
+        for line in out.strip().split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split('|', 3)
+            name = parts[0].strip() if len(parts) > 0 else ''
+            image = parts[1].strip() if len(parts) > 1 else ''
+            status = parts[2].strip() if len(parts) > 2 else ''
+            ports_raw = parts[3].strip() if len(parts) > 3 else ''
+            # Simplify port display: extract host port only
+            import re as _re
+            host_ports = _re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', ports_raw)
+            port_strs = [m[0] or m[1] for m in host_ports]
+            # Also include 127.0.0.1 bound ports
+            local_ports = _re.findall(r'127\.0\.0\.1:(\d+)->', ports_raw)
+            port_strs.extend(local_ports)
+            ports_display = ', '.join(dict.fromkeys(port_strs)) if port_strs else '-'
+            is_running = 'Up' in status
+            if is_running:
+                container_running += 1
+            else:
+                container_stopped += 1
+            container_list.append({
+                "name": name,
+                "image": image if image else 'unknown',
+                "status": 'running' if is_running else 'exited',
+                "ports": ports_display,
+            })
     except Exception as e:
-        print(f"[ERROR] Docker SDK error: {type(e).__name__}: {e}", flush=True)
+        print(f"[WARN] Container list via subprocess failed: {e}", flush=True)
 
     result["container_running"] = container_running
     result["container_stopped"] = container_stopped

@@ -243,6 +243,9 @@ createApp({
     let chartInstance = null;
     const chartBox = ref(null);
     let autoRefreshTimer = null;
+    // Cache for instant display on page switch
+    let monitorCache = null;    // { serverId: { monitorData, containers } }
+    let historyCache = null;    // { key: { historyData } }  key = serverId:metric:hours
 
     // ========== Modals ==========
     const showGroupModal = ref(false);
@@ -506,34 +509,48 @@ createApp({
 
     async function loadMonitor() {
       if (!currentServerId.value) return;
-      const srv = servers.value.find(s => s.id === currentServerId.value);
+      const sid = currentServerId.value;
+      const srv = servers.value.find(s => s.id === sid);
       if (srv && srv.status === 'offline') { monitorData.value = null; containers.value = []; historyData.value = []; if (chartInstance) { chartInstance.clear(); } return; }
-      // Clear stale data immediately before async fetch
-      monitorData.value = null;
-      containers.value = [];
+      // Show cached data instantly if available
+      const cached = monitorCache && monitorCache[sid];
+      if (cached) { monitorData.value = cached.monitorData; containers.value = cached.containers; }
       try {
-        const data = await apiGet(`${API}/servers/${currentServerId.value}/monitor`);
-        // Verify we're still on the same server (prevent race condition)
-        if (currentServerId.value === data.server_id) {
+        const data = await apiGet(`${API}/servers/${sid}/monitor`);
+        if (currentServerId.value === sid) {
           monitorData.value = data;
           containers.value = data.containers || [];
+          // Update cache
+          if (!monitorCache) monitorCache = {};
+          monitorCache[sid] = { monitorData: data, containers: data.containers || [] };
         }
       } catch(e) { console.warn('monitor load failed:', e.message); }
     }
 
     async function loadHistory() {
       if (!currentServerId.value) return;
+      const sid = currentServerId.value;
+      const hKey = `${sid}:${selectedMetric.value}:${historyHours.value}`;
       if (isCurrentServerOffline.value) { historyData.value = []; if (chartInstance) { chartInstance.clear(); } return; }
-      // Clear stale data immediately before async fetch
-      historyData.value = [];
-      if (chartInstance) { chartInstance.clear(); }
-      try {
-        const data = await apiGet(`${API}/servers/${currentServerId.value}/history?metric=${selectedMetric.value}&hours=${historyHours.value}`);
-        historyData.value = data.values || [];
+      // Show cached history instantly if available
+      const cached = historyCache && historyCache[hKey];
+      if (cached) {
+        historyData.value = cached.historyData;
         await nextTick();
-        // Re-init chart if container was remounted (e.g. after loading state toggle)
         if (!chartInstance || !chartBox.value) { await initChart(); }
         if (chartInstance) { renderChart(); }
+      }
+      try {
+        const data = await apiGet(`${API}/servers/${sid}/history?metric=${selectedMetric.value}&hours=${historyHours.value}`);
+        if (currentServerId.value === sid) {
+          historyData.value = data.values || [];
+          await nextTick();
+          if (!chartInstance || !chartBox.value) { await initChart(); }
+          if (chartInstance) { renderChart(); }
+          // Update cache
+          if (!historyCache) historyCache = {};
+          historyCache[hKey] = { historyData: data.values || [] };
+        }
       } catch(e) { console.warn('history load failed:', e.message); }
     }
 
@@ -710,28 +727,25 @@ createApp({
     onMounted(async () => {
       updateClock();
       clockTimer = setInterval(updateClock, 1000);
+      // Preload ECharts immediately (non-blocking)
+      loadEcharts();
       await loadGroupConfig();
       await Promise.all([loadAutoServices(), loadServers()]);
-      // Default nav server to first online server
       const onlineSrv = servers.value.find(s => s.status === 'online');
       if (onlineSrv) navServerId.value = onlineSrv.id;
       await loadMonitor();
       await loadAllServerServices();
-      await loadEcharts();
     });
     onUnmounted(() => { clearInterval(clockTimer); if (autoRefreshTimer) clearInterval(autoRefreshTimer); });
 
-    // Watch server change for monitor
+    // Watch server change for monitor (parallel loading)
     watch(currentServerId, async () => {
-      await loadMonitor();
-      await loadHistory();
+      await Promise.all([loadMonitor(), loadHistory()]);
     });
     watch(currentPage, async (val) => {
       if (val === 'monitor') {
-        await loadMonitor();
-        await nextTick();
-        await initChart();
-        await loadHistory();
+        // Parallel: load data while initializing chart
+        await Promise.all([loadMonitor(), loadHistory(), initChart()]);
         if (autoRefreshTimer) clearInterval(autoRefreshTimer);
         autoRefreshTimer = setInterval(loadMonitor, 15000);
       } else {
