@@ -750,24 +750,33 @@ def get_monitor(server_id: str):
     try:
         import docker as docker_sdk
         dc = docker_sdk.from_env()
-        for c in dc.containers.list(all=True):
-            ports = []
-            for p in c.ports.values():
-                if p and isinstance(p, list):
-                    for binding in p:
-                        ports.append(f"{binding.get('HostIp','0.0.0.0')}:{binding.get('HostPort','?')}")
-            if c.status == "running":
-                container_running += 1
-            else:
-                container_stopped += 1
-            container_list.append({
-                "name": c.name,
-                "image": c.image.tags[0] if c.image.tags else str(c.image.id[:12]),
-                "status": c.status,
-                "ports": ", ".join(ports) if ports else "-",
-            })
-    except Exception:
-        pass
+        all_ctr = dc.containers.list(all=True)
+        for c in all_ctr:
+            try:
+                ports = []
+                for p in c.ports.values():
+                    if p and isinstance(p, list):
+                        for binding in p:
+                            ports.append(f"{binding.get('HostIp','0.0.0.0')}:{binding.get('HostPort','?')}")
+                if c.status == "running":
+                    container_running += 1
+                else:
+                    container_stopped += 1
+                # Gracefully handle missing image metadata (e.g. after docker image prune)
+                try:
+                    image_name = c.image.tags[0] if c.image.tags else str(c.image.id[:12])
+                except Exception:
+                    image_name = c.attrs.get("Image", "unknown")[:20]
+                container_list.append({
+                    "name": c.name,
+                    "image": image_name,
+                    "status": c.status,
+                    "ports": ", ".join(ports) if ports else "-",
+                })
+            except Exception as ce:
+                print(f"[WARN] Container listing error for {getattr(c,'name','?')}: {ce}", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Docker SDK error: {type(e).__name__}: {e}", flush=True)
 
     result["container_running"] = container_running
     result["container_stopped"] = container_stopped
