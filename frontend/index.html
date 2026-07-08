@@ -132,7 +132,12 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
 
 /* ===== Monitor Page ===== */
-.mon-header{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.mon-offline{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;gap:12px}
+    .offline-icon{font-size:48px;opacity:0.6}
+    .offline-text{font-size:20px;font-weight:600;color:var(--text1)}
+    .offline-sub{font-size:13px;color:var(--text2)}
+    .mon-status.offline{color:var(--red)}
+    .mon-header{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .mon-header-left{display:flex;align-items:center;gap:12px;min-width:200px}
 .mon-header-left select{padding:6px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg2);color:var(--text1);font-size:13px;font-weight:500}
 .mon-header-left .mon-status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2)}
@@ -439,6 +444,8 @@ createApp({
 
     async function loadMonitor() {
       if (!currentServerId.value) return;
+      const srv = servers.value.find(s => s.id === currentServerId.value);
+      if (srv && srv.status === 'offline') { monitorData.value = null; containers.value = []; historyData.value = []; if (chartInstance) { chartInstance.clear(); } return; }
       try {
         const data = await apiGet(`${API}/servers/${currentServerId.value}/monitor`);
         monitorData.value = data;
@@ -448,6 +455,7 @@ createApp({
 
     async function loadHistory() {
       if (!currentServerId.value) return;
+      if (isCurrentServerOffline.value) { historyData.value = []; if (chartInstance) { chartInstance.clear(); } return; }
       try {
         const data = await apiGet(`${API}/servers/${currentServerId.value}/history?metric=${selectedMetric.value}&hours=${historyHours.value}`);
         historyData.value = data.values || [];
@@ -553,7 +561,10 @@ createApp({
       ];
     });
 
-
+    const isCurrentServerOffline = computed(() => {
+      const srv = servers.value.find(s => s.id === currentServerId.value);
+      return srv && srv.status === 'offline';
+    });
 
     // ========== Add Server ==========
     async function addServer() {
@@ -662,7 +673,7 @@ createApp({
       showGroupModal, newGroupName, newGroupId, newGroupColor,
       addGroup, deleteGroup, moveServiceToGroup,
       copyText, iconMap, openService,
-      servers, currentServerId, monitorData, containers,
+      servers, currentServerId, monitorData, containers, isCurrentServerOffline,
       selectedMetric, historyHours, historyData, chartBox, metricCards,
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
 
@@ -793,13 +804,14 @@ createApp({
     <!-- ===== MONITOR PAGE ===== -->
     <div class="content" v-if="currentPage==='monitor'">
       <!-- Server Header -->
-      <div class="mon-header" v-if="monitorData">
+      <div class="mon-header">
         <div class="mon-header-left">
           <select v-model="currentServerId"><option v-for="s in servers" :key="s.id" :value="s.id">{{s.name}}</option></select>
-          <div class="mon-status"><span class="dot"></span>在线</div>
+          <div class="mon-status" v-if="!isCurrentServerOffline"><span class="dot"></span>在线</div>
+          <div class="mon-status offline" v-else><span class="dot" style="background:var(--red);box-shadow:0 0 6px var(--red)"></span>离线</div>
           <button class="btn-sm" @click="loadMonitor">刷新</button>
         </div>
-        <div class="mon-header-right">
+        <div class="mon-header-right" v-if="!isCurrentServerOffline">
           <div class="mon-tag"><span class="tag-label">⏱</span><span class="tag-val">{{formatUptime(getMetric('uptime'))}}</span></div>
           <div class="mon-tag"><span class="tag-label">🖥</span><span class="tag-val">{{getMetric('cpu_count') || '-'}} 核</span></div>
           <div class="mon-tag"><span class="tag-label">💾</span><span class="tag-val">{{formatBytes(getMetric('memory_used'))}} / {{formatBytes(getMetric('memory_total'))}}</span></div>
@@ -808,6 +820,14 @@ createApp({
         </div>
       </div>
 
+      <!-- Offline State -->
+      <div v-if="isCurrentServerOffline" class="mon-offline">
+        <div class="offline-icon"><svg viewBox="0 0 48 48" width="48" height="48"><circle cx="24" cy="24" r="22" fill="none" stroke="var(--red)" stroke-width="2" opacity="0.5"/><line x1="16" y1="16" x2="32" y2="32" stroke="var(--red)" stroke-width="2.5" stroke-linecap="round"/><line x1="32" y1="16" x2="16" y2="32" stroke="var(--red)" stroke-width="2.5" stroke-linecap="round"/></svg></div>
+        <div class="offline-text">服务器离线</div>
+        <div class="offline-sub">无法获取监控数据，请检查服务器连接状态</div>
+      </div>
+      <!-- Online Content -->
+      <template v-else>
       <!-- Core Metrics (CPU / Memory / Disk) -->
       <div class="mon-metrics">
         <div class="mon-metrics-row primary">
@@ -862,6 +882,7 @@ createApp({
           </tr></tbody>
         </table>
       </div>
+      </template>
     </div>
 
 
