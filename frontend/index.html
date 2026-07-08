@@ -790,6 +790,10 @@ createApp({
     });
     watch(currentPage, async (val) => {
       if (val === 'monitor') {
+        // Dispose stale chartInstance (v-if destroyed its DOM element)
+        if (chartInstance) { try { chartInstance.dispose(); } catch(e){} chartInstance = null; }
+        // Wait for Vue to recreate the monitor DOM (v-if)
+        await nextTick();
         // Parallel: load data while initializing chart
         await Promise.all([loadMonitor(), loadHistory(), initChart()]);
         if (autoRefreshTimer) clearInterval(autoRefreshTimer);
