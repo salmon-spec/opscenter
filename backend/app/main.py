@@ -10,9 +10,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
+from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
@@ -227,6 +228,8 @@ async def startup():
 
     # Start background health check
     asyncio.create_task(background_health_check())
+    # Start background agent metrics collector
+    asyncio.create_task(background_agent_collector())
 
 
 # === Server APIs ===
@@ -251,6 +254,9 @@ def list_servers():
                 "last_seen": s.last_seen.isoformat() if s.last_seen else None,
                 "service_count": svc_count,
                 "has_credentials": has_creds,
+                "agent_status": s.agent_status or "not_deployed",
+                "agent_port": s.agent_port or 19100,
+                "agent_version": s.agent_version or "",
             })
         return result
 
@@ -268,7 +274,36 @@ def create_server(data: ServerCreate):
         db.add(srv)
         db.commit()
         db.refresh(srv)
-        return {"id": str(srv.id), "name": srv.name, "host": srv.host}
+        result = {"id": str(srv.id), "name": srv.name, "host": srv.host}
+    
+    # Auto-deploy agent for remote servers with SSH credentials
+    if not data.is_local and (data.ssh_password or data.ssh_key):
+        try:
+            deploy_result = deploy_agent(srv, password=data.ssh_password)
+            if deploy_result.get("success"):
+                with get_db() as db2:
+                    s = db2.query(Server).filter(Server.id == srv.id).first()
+                    if s:
+                        s.agent_status = "running"
+                        s.agent_port = deploy_result.get("agent_port", 19100)
+                        s.agent_token = deploy_result.get("agent_token", "")
+                        s.agent_version = deploy_result.get("agent_version", "1.0.0")
+                        db2.commit()
+                result["agent_deployed"] = True
+                result["agent_message"] = deploy_result.get("message", "")
+            else:
+                with get_db() as db2:
+                    s = db2.query(Server).filter(Server.id == srv.id).first()
+                    if s:
+                        s.agent_status = "error"
+                        db2.commit()
+                result["agent_deployed"] = False
+                result["agent_message"] = deploy_result.get("message", "")
+        except Exception as e:
+            result["agent_deployed"] = False
+            result["agent_message"] = f"Agent部署异常: {str(e)}"
+    
+    return result
 
 @app.get("/api/v2/servers/{server_id}")
 def get_server(server_id: str):
@@ -695,8 +730,72 @@ def get_monitor(server_id: str):
         if not srv:
             raise HTTPException(404, "Server not found")
     
-    # Remote server: collect via SSH
+    # Remote server: try Agent first, then SSH fallback
     if not srv.is_local:
+        # Try Agent if deployed
+        if srv.agent_status == "running" and srv.agent_port:
+            agent_data = fetch_agent_metrics(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+            if agent_data:
+                containers = agent_data.get("containers", [])
+                # Calculate rate metrics from cumulative Agent values
+                _cur_net_rx = agent_data.get("net_rx_bytes", 0) or 0
+                _cur_net_tx = agent_data.get("net_tx_bytes", 0) or 0
+                _cur_disk_read = agent_data.get("disk_read_bytes", 0) or 0
+                _cur_disk_write = agent_data.get("disk_write_bytes", 0) or 0
+                _net_rx_rate = 0.0
+                _net_tx_rate = 0.0
+                _disk_read_rate = 0.0
+                _disk_write_rate = 0.0
+                from sqlalchemy import func as _sa_func
+                for _mn, _cv in [("net_rx_raw", _cur_net_rx), ("net_tx_raw", _cur_net_tx), ("disk_read_raw", _cur_disk_read), ("disk_write_raw", _cur_disk_write)]:
+                    _last = db.query(MetricHistory).filter(
+                        MetricHistory.server_id == srv.id,
+                        MetricHistory.metric == _mn,
+                    ).order_by(MetricHistory.timestamp.desc()).first()
+                    if _last and _last.value:
+                        _elapsed = (datetime.utcnow() - _last.timestamp).total_seconds()
+                        if _elapsed > 0:
+                            _rv = max(0, (_cv - _last.value) / _elapsed)
+                        else:
+                            _rv = 0
+                    else:
+                        _rv = 0
+                    if _mn == "net_rx_raw": _net_rx_rate = _rv
+                    elif _mn == "net_tx_raw": _net_tx_rate = _rv
+                    elif _mn == "disk_read_raw": _disk_read_rate = _rv
+                    elif _mn == "disk_write_raw": _disk_write_rate = _rv
+                
+                normalized = {
+                    "cpu": agent_data.get("cpu_percent", 0),
+                    "cpu_count": agent_data.get("cpu_count", 0),
+                    "memory": agent_data.get("memory_percent", 0),
+                    "memory_total": agent_data.get("memory_total", 0),
+                    "memory_used": agent_data.get("memory_used", 0),
+                    "memory_avail": agent_data.get("memory_available", 0),
+                    "disk": agent_data.get("disk_percent", 0),
+                    "disk_total": agent_data.get("disk_total", 0),
+                    "disk_used": agent_data.get("disk_used", 0),
+                    "disk_avail": agent_data.get("disk_avail", 0),
+                    "disk_read": _disk_read_rate,
+                    "disk_write": _disk_write_rate,
+                    "load1": agent_data.get("load1", 0),
+                    "load5": agent_data.get("load5", 0),
+                    "load15": agent_data.get("load15", 0),
+                    "net_rx": _net_rx_rate,
+                    "net_tx": _net_tx_rate,
+                    "uptime": agent_data.get("uptime", 0),
+                    "container_running": agent_data.get("container_running", 0),
+                    "container_stopped": agent_data.get("container_stopped", 0),
+                }
+                return {
+                    "server_id": server_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "metrics": normalized,
+                    "containers": containers,
+                    "source": "agent",
+                }
+            # Agent unreachable, fallback to SSH
+        
         password = None
         if srv.ssh_key and srv.ssh_key.startswith("__password__"):
             password = srv.ssh_key[len("__password__"):]
@@ -869,7 +968,18 @@ def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
         if not srv:
             raise HTTPException(404, "Server not found")
         if not srv.is_local:
-            return {"metric": metric, "values": [], "note": "No historical data for remote servers"}
+            # Try Agent-collected history
+            from datetime import timedelta
+            cutoff = datetime.utcnow() - timedelta(hours=hours)
+            records = db.query(MetricHistory).filter(
+                MetricHistory.server_id == srv.id,
+                MetricHistory.metric == metric,
+                MetricHistory.timestamp >= cutoff,
+            ).order_by(MetricHistory.timestamp).all()
+            values = [[r.timestamp.timestamp(), r.value] for r in records]
+            if values:
+                return {"metric": metric, "values": values[-200:], "source": "agent"}
+            return {"metric": metric, "values": [], "note": "Agent未部署或无历史数据"}
 
     prom_url = os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090")
     
@@ -932,6 +1042,322 @@ def list_categories(server_id: Optional[str] = None):
         result.sort(key=lambda x: x["order"])
         return result
 
+
+
+# === Agent Management APIs ===
+
+@app.post("/api/v2/servers/{server_id}/deploy-agent")
+def deploy_agent_api(server_id: str):
+    """Deploy or re-deploy OpsAgent on a remote server."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            return {"success": False, "message": "本机无需部署Agent，使用Prometheus采集"}
+    
+    # Mark as deploying
+    with get_db() as db:
+        s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        s.agent_status = "deploying"
+        db.commit()
+    
+    result = deploy_agent(srv)
+    
+    # Update status
+    with get_db() as db:
+        s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if result.get("success"):
+            s.agent_status = "running"
+            s.agent_port = result.get("agent_port", 19100)
+            s.agent_token = result.get("agent_token", "")
+            s.agent_version = result.get("agent_version", "1.0.0")
+        else:
+            s.agent_status = "error"
+        db.commit()
+    
+    return result
+
+
+@app.get("/api/v2/servers/{server_id}/agent-status")
+def agent_status_api(server_id: str):
+    """Check OpsAgent status on a remote server."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+    
+    if srv.is_local:
+        return {"status": "local", "message": "本机使用Prometheus采集，无需Agent"}
+    
+    result = check_agent_status(srv)
+    # Update DB
+    with get_db() as db:
+        s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if result.get("status") == "running":
+            s.agent_status = "running"
+            if result.get("agent_port"):
+                s.agent_port = result["agent_port"]
+            if result.get("agent_token"):
+                s.agent_token = result["agent_token"]
+            if result.get("agent_version"):
+                s.agent_version = result["agent_version"]
+        elif result.get("status") in ("stopped", "installed_stopped"):
+            s.agent_status = "stopped"
+        elif result.get("status") == "not_deployed":
+            s.agent_status = "not_deployed"
+        db.commit()
+    return result
+
+
+@app.delete("/api/v2/servers/{server_id}/agent")
+def uninstall_agent_api(server_id: str):
+    """Uninstall OpsAgent from a remote server."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            return {"success": False, "message": "本机无需卸载Agent"}
+    
+    result = uninstall_agent(srv)
+    if result.get("success"):
+        with get_db() as db:
+            s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+            s.agent_status = "not_deployed"
+            s.agent_port = 19100
+            s.agent_token = None
+            s.agent_version = None
+            db.commit()
+    return result
+
+
+# === Agent Metrics Collection ===
+
+def _collect_agent_metrics():
+    """Synchronous: collect metrics from all running agents and store history."""
+    import requests as req
+    try:
+        with get_db() as db:
+            # Create table if not exists
+            Base.metadata.create_all(bind=engine)
+            
+            servers = db.query(Server).filter(
+                Server.is_local == False,
+                Server.agent_status == "running"
+            ).all()
+            
+            for srv in servers:
+                try:
+                    data = fetch_agent_metrics(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+                    if not data:
+                        # Agent unreachable
+                        srv.agent_status = "stopped"
+                        continue
+                    
+                    # Store historical metrics
+                    from sqlalchemy import func as sa_func
+                    now = datetime.utcnow()
+                    # Get current cumulative values from agent
+                    cur_net_rx = data.get("net_rx_bytes", 0) or 0
+                    cur_net_tx = data.get("net_tx_bytes", 0) or 0
+                    cur_disk_read = data.get("disk_read_bytes", 0) or 0
+                    cur_disk_write = data.get("disk_write_bytes", 0) or 0
+                    
+                    # Calculate rates from last raw values
+                    net_rx_rate = 0.0
+                    net_tx_rate = 0.0
+                    disk_read_rate = 0.0
+                    disk_write_rate = 0.0
+                    
+                    for metric_name, raw_val in [("net_rx_raw", cur_net_rx), ("net_tx_raw", cur_net_tx), ("disk_read_raw", cur_disk_read), ("disk_write_raw", cur_disk_write)]:
+                        last_rec = db.query(MetricHistory).filter(
+                            MetricHistory.server_id == srv.id,
+                            MetricHistory.metric == metric_name,
+                        ).order_by(MetricHistory.timestamp.desc()).first()
+                        if last_rec and last_rec.value:
+                            elapsed = (now - last_rec.timestamp).total_seconds()
+                            if elapsed > 0:
+                                rate_val = max(0, (raw_val - last_rec.value) / elapsed)
+                            else:
+                                rate_val = 0
+                        else:
+                            rate_val = 0
+                        if metric_name == "net_rx_raw": net_rx_rate = rate_val
+                        elif metric_name == "net_tx_raw": net_tx_rate = rate_val
+                        elif metric_name == "disk_read_raw": disk_read_rate = rate_val
+                        elif metric_name == "disk_write_raw": disk_write_rate = rate_val
+                    
+                    metrics_to_store = {
+                        "cpu": data.get("cpu_percent", 0),
+                        "memory": data.get("memory_percent", 0),
+                        "disk": data.get("disk_percent", 0),
+                        "load1": data.get("load1", 0),
+                        "load5": data.get("load5", 0),
+                        "load15": data.get("load15", 0),
+                        "net_rx": net_rx_rate,
+                        "net_tx": net_tx_rate,
+                        "disk_read": disk_read_rate,
+                        "disk_write": disk_write_rate,
+                        "net_rx_raw": cur_net_rx,
+                        "net_tx_raw": cur_net_tx,
+                        "disk_read_raw": cur_disk_read,
+                        "disk_write_raw": cur_disk_write,
+                    }
+                    for metric_name, value in metrics_to_store.items():
+                        record = MetricHistory(
+                            server_id=srv.id,
+                            timestamp=now,
+                            metric=metric_name,
+                            value=float(value) if value else 0,
+                        )
+                        db.add(record)
+                    
+                    # Update server status
+                    srv.status = ServerStatus.online.value
+                    srv.last_seen = now
+                    srv.agent_status = "running"
+                    
+                except Exception as e:
+                    print(f"Agent metrics collection error for {srv.host}: {e}")
+                    srv.agent_status = "stopped"
+            
+            db.commit()
+            
+            # Cleanup old metrics (keep 7 days)
+            from datetime import timedelta
+            cutoff = datetime.utcnow() - timedelta(days=7)
+            db.query(MetricHistory).filter(MetricHistory.timestamp < cutoff).delete()
+            db.commit()
+            
+            # Clean up old raw metrics that are older than 1 hour (rate calculation only needs recent)
+            raw_cutoff = datetime.utcnow() - timedelta(hours=1)
+            for raw_m in ["net_rx_raw", "net_tx_raw", "disk_read_raw", "disk_write_raw"]:
+                db.query(MetricHistory).filter(
+                    MetricHistory.metric == raw_m,
+                    MetricHistory.timestamp < raw_cutoff,
+                ).delete()
+            db.commit()
+            
+    except Exception as e:
+        print(f"Agent metrics collection error: {e}")
+
+
+async def background_agent_collector():
+    """Periodically collect metrics from all running agents."""
+    while True:
+        await asyncio.to_thread(_collect_agent_metrics)
+        await asyncio.sleep(30)
+
+
+@app.get("/api/v2/servers/{server_id}/agent-metrics")
+def get_agent_metrics_api(server_id: str):
+    """Get real-time metrics from a running OpsAgent."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+    
+    if srv.is_local:
+        return {"error": "本机使用Prometheus采集，请使用 /monitor 端点"}
+    
+    if srv.agent_status != "running":
+        return {"error": "Agent未运行", "agent_status": srv.agent_status}
+    
+    data = fetch_agent_metrics(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    if not data:
+        # Update status
+        with get_db() as db:
+            s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+            s.agent_status = "stopped"
+            db.commit()
+        return {"error": "Agent连接失败", "agent_status": "stopped"}
+    
+    # Calculate rate metrics from cumulative Agent values
+    _cur_net_rx2 = data.get("net_rx_bytes", 0) or 0
+    _cur_net_tx2 = data.get("net_tx_bytes", 0) or 0
+    _cur_disk_read2 = data.get("disk_read_bytes", 0) or 0
+    _cur_disk_write2 = data.get("disk_write_bytes", 0) or 0
+    _net_rx_rate2 = 0.0
+    _net_tx_rate2 = 0.0
+    _disk_read_rate2 = 0.0
+    _disk_write_rate2 = 0.0
+    from sqlalchemy import func as _sa_func2
+    with get_db() as _db2:
+        for _mn2, _cv2 in [("net_rx_raw", _cur_net_rx2), ("net_tx_raw", _cur_net_tx2), ("disk_read_raw", _cur_disk_read2), ("disk_write_raw", _cur_disk_write2)]:
+            _last2 = _db2.query(MetricHistory).filter(
+                MetricHistory.server_id == uuid.UUID(server_id),
+                MetricHistory.metric == _mn2,
+            ).order_by(MetricHistory.timestamp.desc()).first()
+            if _last2 and _last2.value:
+                _elapsed2 = (datetime.utcnow() - _last2.timestamp).total_seconds()
+                if _elapsed2 > 0:
+                    _rv2 = max(0, (_cv2 - _last2.value) / _elapsed2)
+                else:
+                    _rv2 = 0
+            else:
+                _rv2 = 0
+            if _mn2 == "net_rx_raw": _net_rx_rate2 = _rv2
+            elif _mn2 == "net_tx_raw": _net_tx_rate2 = _rv2
+            elif _mn2 == "disk_read_raw": _disk_read_rate2 = _rv2
+            elif _mn2 == "disk_write_raw": _disk_write_rate2 = _rv2
+
+    # Normalize metrics to match Prometheus format
+    normalized = {
+        "cpu": data.get("cpu_percent", 0),
+        "cpu_count": data.get("cpu_count", 0),
+        "memory": data.get("memory_percent", 0),
+        "memory_total": data.get("memory_total", 0),
+        "memory_used": data.get("memory_used", 0),
+        "memory_avail": data.get("memory_available", 0),
+        "disk": data.get("disk_percent", 0),
+        "disk_total": data.get("disk_total", 0),
+        "disk_used": data.get("disk_used", 0),
+        "disk_avail": data.get("disk_avail", 0),
+        "disk_read": _disk_read_rate2,
+        "disk_write": _disk_write_rate2,
+        "load1": data.get("load1", 0),
+        "load5": data.get("load5", 0),
+        "load15": data.get("load15", 0),
+        "net_rx": _net_rx_rate2,
+        "net_tx": _net_tx_rate2,
+        "uptime": data.get("uptime", 0),
+        "container_running": data.get("container_running", 0),
+        "container_stopped": data.get("container_stopped", 0),
+    }
+    return {
+        "server_id": server_id,
+        "timestamp": datetime.utcnow().isoformat(),
+        "metrics": normalized,
+        "containers": data.get("containers", []),
+    }
+
+
+@app.get("/api/v2/servers/{server_id}/agent-history")
+def get_agent_history_api(server_id: str, metric: str = "cpu", hours: int = 24):
+    """Get historical metrics for a remote server from Agent-collected data."""
+    from sqlalchemy import func as sa_func
+    
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            return {"metric": metric, "values": [], "note": "本机请使用 /history 端点"}
+        
+        from datetime import timedelta
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        records = db.query(MetricHistory).filter(
+            MetricHistory.server_id == srv.id,
+            MetricHistory.metric == metric,
+            MetricHistory.timestamp >= cutoff,
+        ).order_by(MetricHistory.timestamp).all()
+        
+        values = []
+        for r in records:
+            values.append([r.timestamp.timestamp(), r.value])
+        
+        return {"metric": metric, "values": values[-200:]}
 
 # === Health ===
 @app.get("/api/v2/health")

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Enum as SAEnum
+from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
@@ -37,6 +37,17 @@ class Server(Base):
     last_seen = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    enabled = Column(Boolean, default=True)
+    last_check_at = Column(DateTime, nullable=True)
+    last_online_at = Column(DateTime, nullable=True)
+    fail_count = Column(Integer, default=0)
+    last_error = Column(Text, nullable=True)
+    remark = Column(Text, nullable=True)
+    auth_type = Column(String(20), default="password")
+    agent_status = Column(String(20), default="not_deployed")
+    agent_port = Column(Integer, default=19100)
+    agent_token = Column(Text, nullable=True)
+    agent_version = Column(String(20), nullable=True)
     services = relationship("Service", back_populates="server", cascade="all, delete-orphan")
 
 class Service(Base):
@@ -61,3 +72,13 @@ class Service(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     server = relationship("Server", back_populates="services")
+
+class MetricHistory(Base):
+    """Historical metrics for remote servers (collected from Agent)."""
+    __tablename__ = "metric_history"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    metric = Column(String(20), nullable=False)
+    value = Column(Float, nullable=False)
+

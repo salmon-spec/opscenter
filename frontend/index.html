@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.3 运维工作台</title>
+<title>OpsCenter v3.6 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
@@ -181,6 +181,20 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .server-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
 .server-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
 .server-card h4{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.agent-tag{font-size:10px;padding:2px 6px;border-radius:6px;font-weight:500;margin-left:6px;white-space:nowrap}
+.agent-tag.running{background:rgba(34,197,94,.12);color:#22c55e}
+.agent-tag.not_deployed{background:rgba(139,148,158,.12);color:#8b949e}
+.agent-tag.deploying{background:rgba(245,158,11,.12);color:#f59e0b}
+.agent-tag.stopped{background:rgba(239,68,68,.12);color:#ef4444}
+.agent-tag.error{background:rgba(239,68,68,.12);color:#ef4444}
+.agent-tag.local{background:rgba(45,212,191,.12);color:var(--accent)}
+.btn-deploy-agent{font-size:11px;padding:3px 10px;border-radius:6px;border:1px solid var(--accent);color:var(--accent);background:transparent;cursor:pointer;transition:all .15s}
+.btn-deploy-agent:hover{background:var(--accent);color:#0d1117}
+.btn-deploy-agent:disabled{opacity:.5;cursor:not-allowed}
+.deploy-auto-row{display:flex;align-items:center;gap:8px;margin:10px 0;padding:10px 12px;border-radius:8px;background:rgba(45,212,191,.06);border:1px solid rgba(45,212,191,.2)}
+.deploy-auto-row label{font-size:13px;color:var(--text1);cursor:pointer;display:flex;align-items:center;gap:6px}
+.deploy-auto-row input[type=checkbox]{accent-color:var(--accent)}
+.deploy-info{font-size:11px;color:var(--text2);margin-top:2px}
 .server-card .s-host{font-size:12px;color:var(--text2);margin-bottom:8px}
 .svc-list{margin-top:8px;border-top:1px solid var(--border);padding-top:8px}
 .svc-item{display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px}
@@ -306,7 +320,7 @@ createApp({
     const showAddServerModal = ref(false);
     const newServer = reactive({
       name: '', host: '', ssh_port: 22, ssh_user: 'root',
-      auth_type: 'password', ssh_password: '', ssh_key: ''
+      auth_type: 'password', ssh_password: '', ssh_key: '', auto_deploy_agent: true
     });
     const sshTestResult = reactive({ testing: false, success: null, message: '' });
 
@@ -322,6 +336,33 @@ createApp({
     async function apiPut(url, body) { return fetch(url, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
     async function apiPatch(url) { return fetch(url, { method:'PATCH' }); }
     async function apiDelete(url) { return fetch(url, { method:'DELETE' }); }
+
+    // ========== Agent Management ==========
+    async function deployAgent(serverId) {
+      if (!confirm('确定要在此服务器上部署监控Agent？')) return;
+      try {
+        const r = await apiPost(`${API}/servers/${serverId}/deploy-agent`, {});
+        const data = await r.json();
+        if (data.success) {
+          alert('Agent部署成功！');
+        } else {
+          alert('Agent部署失败: ' + (data.message || '未知错误'));
+        }
+        await loadServers();
+      } catch(e) { alert('部署异常: ' + e.message); }
+    }
+
+    async function checkAgentStatus(serverId) {
+      try {
+        const data = await apiGet(`${API}/servers/${serverId}/agent-status`);
+        if (data.status === 'running') {
+          alert('Agent运行正常，端口: ' + (data.agent_port||19100));
+        } else {
+          alert('Agent状态: ' + (data.status||'未知') + (data.message ? ' - ' + data.message : ''));
+        }
+        await loadServers();
+      } catch(e) { alert('检查失败: ' + e.message); }
+    }
 
     // ========== Load groups.json via backend API ==========
     async function loadGroupConfig() {
@@ -674,9 +715,14 @@ createApp({
         }
         const r = await apiPost(`${API}/servers`, body);
         if (r.ok || r.status === 201) {
+          const respData = await r.json().catch(() => ({}));
+          // Show agent deploy result if applicable
+          if (respData.agent_deployed !== undefined) {
+            alert(respData.agent_deployed ? '服务器添加成功，Agent已自动部署' : '服务器添加成功，Agent部署失败: ' + (respData.agent_message || ''));
+          }
           showAddServerModal.value = false;
           // Reset form
-          Object.assign(newServer, { name: '', host: '', ssh_port: 22, ssh_user: 'root', auth_type: 'password', ssh_password: '', ssh_key: '' });
+          Object.assign(newServer, { name: '', host: '', ssh_port: 22, ssh_user: 'root', auth_type: 'password', ssh_password: '', ssh_key: '', auto_deploy_agent: true });
           Object.assign(sshTestResult, { testing: false, success: null, message: '' });
           await loadServers();
           await loadAllServerServices();
@@ -781,7 +827,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.5</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.6</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -989,6 +1035,9 @@ createApp({
             <span class="status-dot" :class="srv.status==='online'?'online':'offline'"></span>
             {{srv.name}}
             <span v-if="srv.is_local" style="font-size:10px;padding:2px 6px;border-radius:6px;background:rgba(45,212,191,.12);color:var(--accent);margin-left:6px;font-weight:500">本机</span>
+            <span v-if="srv.agent_status && !srv.is_local" class="agent-tag" :class="srv.agent_status">
+              {{srv.agent_status === 'running' ? 'Agent运行中' : srv.agent_status === 'not_deployed' ? '未部署Agent' : srv.agent_status === 'deploying' ? '部署中...' : srv.agent_status === 'stopped' ? 'Agent已停止' : 'Agent异常'}}
+            </span>
           </h4>
           <div class="s-host">{{srv.host}}:{{srv.ssh_port || 22}}</div>
           <div style="font-size:12px;color:var(--text2);margin:6px 0">
@@ -998,11 +1047,14 @@ createApp({
           <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
             <span v-if="srv.has_credentials" style="color:var(--green)">SSH凭证已配置</span>
             <span v-else style="color:var(--orange)">SSH凭证未配置</span>
+            <span v-if="srv.agent_status==='running'" style="margin-left:8px;color:var(--green)">Agent :{{srv.agent_port||19100}} v{{srv.agent_version||'1.0'}}</span>
             <span style="margin-left:8px" v-if="srv.last_seen">最后在线: {{new Date(srv.last_seen).toLocaleString('zh-CN')}}</span>
           </div>
           <div class="srv-btn-row">
             <button class="btn-sm primary" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
             <button class="btn-sm" @click="triggerScan(srv.id)">扫描</button>
+            <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
+            <button class="btn-sm" v-if="!srv.is_local && srv.agent_status==='running'" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">检查Agent</button>
             <button class="btn-sm danger" v-if="!srv.is_local" @click="deleteServer(srv.id)">删除</button>
           </div>
           <!-- Service list -->
@@ -1121,6 +1173,15 @@ createApp({
             style="width:100%;height:120px;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text1);font-size:12px;font-family:Consolas,monospace;resize:vertical"></textarea>
         </div>
 
+        <!-- Auto deploy Agent -->
+        <div class="deploy-auto-row">
+          <label>
+            <input type="checkbox" v-model="newServer.auto_deploy_agent" checked>
+            自动部署监控Agent
+          </label>
+          <div class="deploy-info">连接成功后自动部署轻量监控程序（端口19100）</div>
+        </div>
+
         <!-- Test result -->
         <div v-if="sshTestResult.message" style="margin:10px 0;padding:8px 12px;border-radius:8px;font-size:13px"
           :style="{
@@ -1135,7 +1196,7 @@ createApp({
           <button class="btn-sm" @click="testSsh" :disabled="sshTestResult.testing" style="margin-right:auto">
             {{ sshTestResult.testing ? '测试中...' : '测试连接' }}
           </button>
-          <button class="btn-sm" @click="showAddServerModal=false;Object.assign(sshTestResult,{testing:false,success:null,message:''})">取消</button>
+          <button class="btn-sm" @click="showAddServerModal=false;Object.assign(sshTestResult,{testing:false,success:null,message:''});newServer.auto_deploy_agent=true">取消</button>
           <button class="btn-sm primary" @click="addServer">保存</button>
         </div>
       </div>
