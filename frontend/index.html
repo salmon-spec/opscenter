@@ -171,11 +171,6 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .container-table td{padding:7px 12px;border-top:1px solid var(--border)}
 .running-dot{color:var(--green);font-weight:700}
 
-/* ===== Toolbox Page ===== */
-.terminal-box{background:#0c0c0c;border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-family:'Cascadia Code','Consolas',monospace;font-size:13px;color:var(--green);min-height:300px;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
-.terminal-input-row{display:flex;gap:8px;margin-top:10px}
-.terminal-input-row input{flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--green);font-family:monospace;font-size:13px}
-.terminal-input-row input:focus{outline:none;border-color:var(--accent)}
 
 /* ===== Resources Page ===== */
 .server-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
@@ -238,16 +233,7 @@ createApp({
     const newGroupId = ref('');
     const newGroupColor = ref('#64748b');
 
-    // ========== Terminal ==========
-    const termLines = ref(['$ Welcome to OpsCenter Terminal Simulator', '$ Type "help" for commands']);
-    const termInput = ref('');
-    const cmdTemplates = {
-      'Docker': ['docker ps','docker ps -a','docker logs --tail 50 <container>','docker stats --no-stream','docker compose -f /opt/cicd/docker-compose.yml ps','docker compose -f /opt/cicd/docker-compose.yml restart <service>'],
-      'System': ['df -h','free -h','top -bn1 | head -20','uptime','journalctl -u opscenter-backend -n 20 --no-pager','ss -tlnp'],
-      'Network': ['curl -s http://localhost/gitea/ -o /dev/null -w "%{http_code}"','netstat -tlnp 2>/dev/null || ss -tlnp','curl -s http://localhost:9091/api/v2/health','ufw status'],
-      'Security': ['fail2ban-client status','fail2ban-client status sshd','cat /etc/fail2ban/jail.local | head -30','ausearch -m avc -ts recent 2>/dev/null | tail -5','aide --check 2>/dev/null | tail -10']
-    };
-    const activeCmdGroup = ref('Docker');
+
 
     // ========== Clock ==========
     let clockTimer;
@@ -559,18 +545,7 @@ createApp({
       ];
     });
 
-    // ========== Terminal ==========
-    function execCmd() {
-      const cmd = termInput.value.trim();
-      if (!cmd) return;
-      termLines.value.push(`$ ${cmd}`);
-      if (cmd === 'help') { termLines.value.push('Available: help, clear, docker ps, df -h, free -h, uptime, ping <host>'); }
-      else if (cmd === 'clear') { termLines.value = []; }
-      else { termLines.value.push(`[simulated] ${cmd} -> OK`); }
-      termInput.value = '';
-    }
 
-    function insertCmd(cmd) { termInput.value = cmd; }
 
     // ========== Resource ==========
     async function triggerScan(sid) {
@@ -622,7 +597,7 @@ createApp({
       servers, currentServerId, monitorData, containers,
       selectedMetric, historyHours, historyData, chartBox, metricCards,
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
-      termLines, termInput, execCmd, insertCmd, cmdTemplates, activeCmdGroup,
+
       triggerScan,
     };
   },
@@ -643,9 +618,7 @@ createApp({
       <div class="nav-item" :class="{active:currentPage==='monitor'}" @click="currentPage='monitor'">
         <svg class="nav-icon"><use href="#fa-gauge"/></svg><span>监控中心</span>
       </div>
-      <div class="nav-item" :class="{active:currentPage==='tools'}" @click="currentPage='tools'">
-        <svg class="nav-icon"><use href="#fa-wrench"/></svg><span>工具箱</span>
-      </div>
+
       <div class="nav-item" :class="{active:currentPage==='resources'}" @click="currentPage='resources'">
         <svg class="nav-icon"><use href="#fa-layer-group"/></svg><span>资源管理</span>
       </div>
@@ -666,7 +639,7 @@ createApp({
         <button class="icon-btn" @click="collapsed=!collapsed" :title="collapsed?'展开':'折叠'">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v1.5H2zm0 4.25h12v1.5H2zm0 4.25h8v1.5H2z"/></svg>
         </button>
-        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':currentPage==='tools'?'工具箱':'资源管理'}}</h2>
+        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':'资源管理'}}</h2>
       </div>
       <div class="topbar-right">
         <div class="search-box" v-if="currentPage==='nav'">
@@ -824,22 +797,7 @@ createApp({
       </div>
     </div>
 
-    <!-- ===== TOOLS PAGE ===== -->
-    <div class="content" v-if="currentPage==='tools'">
-      <div class="terminal-box" ref="termBox"><div v-for="(l,i) in termLines" :key="i">{{l}}</div></div>
-      <div class="terminal-input-row">
-        <input v-model="termInput" @keyup.enter="execCmd" placeholder="输入命令...">
-        <button class="btn-sm primary" @click="execCmd">执行</button>
-      </div>
-      <div style="margin-top:16px">
-        <div style="display:flex;gap:6px;margin-bottom:10px">
-          <button v-for="(cmds,cat) in cmdTemplates" :key="cat" class="btn-sm" :class="{primary:activeCmdGroup===cat}" @click="activeCmdGroup=cat">{{cat}}</button>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">
-          <button v-for="cmd in cmdTemplates[activeCmdGroup]" :key="cmd" class="btn-sm" @click="insertCmd(cmd)">{{cmd}}</button>
-        </div>
-      </div>
-    </div>
+
 
     <!-- ===== RESOURCES PAGE ===== -->
     <div class="content" v-if="currentPage==='resources'">
