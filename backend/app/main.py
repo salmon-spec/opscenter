@@ -814,8 +814,8 @@ def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
     query = metric_queries.get(metric, metric_queries["cpu"])
     
     try:
-        from datetime import datetime as _dt
-        _now = _dt.utcnow().timestamp()
+        import time as _time_mod
+        _now = _time_mod.time()
         _start = _now - hours * 3600
         resp = req.get(f"{prom_url}/api/v1/query_range", params={
             "query": query,

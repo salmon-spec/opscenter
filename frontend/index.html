@@ -488,27 +488,27 @@ createApp({
       const title = metricLabels[selectedMetric.value] || selectedMetric.value;
       const color = colors[selectedMetric.value] || '#2dd4bf';
       const h = historyData.value;
-      const normalized = Array.isArray(h) ? h.map(p => {
-        if (Array.isArray(p)) return { ts: p[0] * 1000, v: parseFloat(p[1]) };
-        return { ts: p.timestamp || p.time || p.x, v: p.value ?? p.y ?? 0 };
+      const seriesData = Array.isArray(h) ? h.map(p => {
+        if (Array.isArray(p)) return [p[0] * 1000, parseFloat(p[1])];
+        const ts = p.timestamp || p.time || p.x;
+        return [ts, p.value ?? p.y ?? 0];
       }) : [];
-      const xData = normalized.map(p => {
-        const d = new Date(p.ts);
-        if (historyHours.value > 24) return (d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
-        return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
-      });
-      const yData = normalized.map(p => p.v);
       const isDarkVal = darkMode.value;
+      const axisLineColor = isDarkVal ? '#334155' : '#e2e8f0';
+      const splitLineColor = isDarkVal ? '#1e293b88' : '#f1f5f9';
+      const labelColor = isDarkVal ? '#94a3b8' : '#64748b';
       chartInstance.setOption({
         backgroundColor:'transparent',
-        textStyle:{color:isDarkVal?'#94a3b8':'#64748b'},
-        grid:{left:55,right:15,top:20,bottom:30},
+        textStyle:{color:labelColor},
+        grid:{left:60,right:15,top:20,bottom:32},
         tooltip:{trigger:'axis',backgroundColor:isDarkVal?'#1e293b':'#fff',borderColor:isDarkVal?'#334155':'#e2e8f0',textStyle:{color:isDarkVal?'#e2e8f0':'#1e293b',fontSize:11},
-          formatter:function(params){const p=params[0];return p.name+'<br/><b>'+title+'</b>: '+parseFloat(p.value).toFixed(2);}
+          formatter:function(params){const p=params[0];if(!p)return '';const d=new Date(p.value[0]);const ts=d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')+':'+d.getSeconds().toString().padStart(2,'0');return ts+'<br/><b>'+title+'</b>: '+parseFloat(p.value[1]).toFixed(2);}
         },
-        xAxis:{type:'category',data:xData,axisLine:{lineStyle:{color:isDarkVal?'#334155':'#e2e8f0'}},axisLabel:{fontSize:10},boundaryGap:false},
-        yAxis:{type:'value',axisLine:{show:false},splitLine:{lineStyle:{color:isDarkVal?'#1e293b':'#f1f5f9'}},axisLabel:{fontSize:10}},
-        series:[{type:'line',data:yData,smooth:true,symbol:'none',lineStyle:{width:2,color:color},
+        xAxis:{type:'time',axisLine:{lineStyle:{color:axisLineColor}},axisLabel:{fontSize:10,color:labelColor,
+          formatter:function(v){const d=new Date(v);if(historyHours.value>24)return (d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');}
+        },splitLine:{show:false},boundaryGap:false},
+        yAxis:{type:'value',axisLine:{show:false},splitLine:{lineStyle:{color:splitLineColor}},axisLabel:{fontSize:10,color:labelColor}},
+        series:[{type:'line',data:seriesData,smooth:true,symbol:'none',lineStyle:{width:2,color:color},
           areaStyle:{color:new echartsLib.graphic.LinearGradient(0,0,0,1,[{offset:0,color:color+'40'},{offset:1,color:color+'05'}])}
         }]
       }, true);
