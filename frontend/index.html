@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.2 运维工作台</title>
+<title>OpsCenter v3.3 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
@@ -232,6 +232,14 @@ createApp({
     const newGroupName = ref('');
     const newGroupId = ref('');
     const newGroupColor = ref('#64748b');
+
+    // ========== Add Server Modal ==========
+    const showAddServerModal = ref(false);
+    const newServer = reactive({
+      name: '', host: '', ssh_port: 22, ssh_user: 'root',
+      auth_type: 'password', ssh_password: '', ssh_key: ''
+    });
+    const sshTestResult = reactive({ testing: false, success: null, message: '' });
 
 
 
@@ -547,6 +555,66 @@ createApp({
 
 
 
+    // ========== Add Server ==========
+    async function addServer() {
+      if (!newServer.name || !newServer.host) { alert('请填写服务器名称和主机地址'); return; }
+      try {
+        const body = {
+          name: newServer.name,
+          host: newServer.host,
+          ssh_port: newServer.ssh_port,
+          ssh_user: newServer.ssh_user,
+          is_local: false,
+        };
+        if (newServer.auth_type === 'password') {
+          body.ssh_password = newServer.ssh_password;
+        } else {
+          body.ssh_key = newServer.ssh_key;
+        }
+        const r = await apiPost(`${API}/servers`, body);
+        if (r.ok || r.status === 201) {
+          showAddServerModal.value = false;
+          // Reset form
+          Object.assign(newServer, { name: '', host: '', ssh_port: 22, ssh_user: 'root', auth_type: 'password', ssh_password: '', ssh_key: '' });
+          Object.assign(sshTestResult, { testing: false, success: null, message: '' });
+          await loadServers();
+        } else {
+          const data = await r.json().catch(() => ({}));
+          alert('添加失败: ' + (data.detail || r.statusText));
+        }
+      } catch(e) { alert('添加失败: ' + e.message); }
+    }
+
+    async function testSsh() {
+      if (!newServer.host) { alert('请填写主机地址'); return; }
+      Object.assign(sshTestResult, { testing: true, success: null, message: '' });
+      try {
+        const body = {
+          host: newServer.host,
+          port: newServer.ssh_port,
+          username: newServer.ssh_user,
+        };
+        if (newServer.auth_type === 'password') {
+          body.password = newServer.ssh_password;
+        } else {
+          body.ssh_key = newServer.ssh_key;
+        }
+        const r = await apiPost(`${API}/test-ssh`, body);
+        const data = await r.json();
+        Object.assign(sshTestResult, { testing: false, success: data.success, message: data.message });
+      } catch(e) {
+        Object.assign(sshTestResult, { testing: false, success: false, message: '请求失败: ' + e.message });
+      }
+    }
+
+    async function deleteServer(sid) {
+      if (!confirm('确定删除此服务器？关联的服务也会被删除。')) return;
+      try {
+        await apiDelete(`${API}/servers/${sid}`);
+        await loadServers();
+      } catch(e) { alert('删除失败: ' + (e.message || '未知错误')); }
+    }
+
     // ========== Resource ==========
     async function triggerScan(sid) {
       try { await apiPost(`${API}/servers/${sid}/scan`); await loadMonitor(); } catch(e) { alert('扫描失败'); }
@@ -599,6 +667,8 @@ createApp({
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
 
       triggerScan,
+      showAddServerModal, newServer, sshTestResult,
+      addServer, testSsh, deleteServer,
     };
   },
 
@@ -608,7 +678,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.2</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.3</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -801,13 +871,38 @@ createApp({
 
     <!-- ===== RESOURCES PAGE ===== -->
     <div class="content" v-if="currentPage==='resources'">
+      <!-- Header with add button -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div style="display:flex;gap:12px;align-items:baseline">
+          <span style="font-size:14px;font-weight:600;color:var(--text1)">{{servers.length}} 台服务器</span>
+          <span style="font-size:12px;color:var(--text2)">{{servers.filter(s=>s.status==='online').length}} 在线</span>
+        </div>
+        <button class="btn-sm primary" @click="showAddServerModal=true" style="font-size:13px;padding:6px 16px">
+          + 添加服务器
+        </button>
+      </div>
+
       <div class="server-grid">
         <div class="server-card" v-for="srv in servers" :key="srv.id">
-          <h4><span class="status-dot" :class="srv.status==='online'?'online':'offline'"></span>{{srv.name}}</h4>
-          <div class="s-host">{{srv.host}} · {{srv.status}}</div>
+          <h4>
+            <span class="status-dot" :class="srv.status==='online'?'online':'offline'"></span>
+            {{srv.name}}
+            <span v-if="srv.is_local" style="font-size:10px;padding:2px 6px;border-radius:6px;background:rgba(45,212,191,.12);color:var(--accent);margin-left:6px;font-weight:500">本机</span>
+          </h4>
+          <div class="s-host">{{srv.host}}:{{srv.ssh_port || 22}}</div>
+          <div style="font-size:12px;color:var(--text2);margin:6px 0">
+            <span style="margin-right:12px">用户: {{srv.ssh_user || '-'}}</span>
+            <span>服务: {{srv.service_count || 0}}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
+            <span v-if="srv.has_credentials" style="color:var(--green)">SSH凭证已配置</span>
+            <span v-else style="color:var(--orange)">SSH凭证未配置</span>
+            <span style="margin-left:8px" v-if="srv.last_seen">最后在线: {{new Date(srv.last_seen).toLocaleString('zh-CN')}}</span>
+          </div>
           <div class="srv-btn-row">
-            <button class="btn-sm" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
+            <button class="btn-sm primary" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
             <button class="btn-sm" @click="triggerScan(srv.id)">扫描</button>
+            <button class="btn-sm danger" v-if="!srv.is_local" @click="deleteServer(srv.id)">删除</button>
           </div>
         </div>
       </div>
@@ -834,6 +929,72 @@ createApp({
         </div>
         <div class="modal-footer">
           <button class="btn-sm" @click="showGroupModal=false">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Add Server Modal ===== -->
+    <div class="modal-overlay" v-if="showAddServerModal" @click.self="showAddServerModal=false">
+      <div class="modal" style="min-width:520px">
+        <h3>添加服务器</h3>
+
+        <div class="modal-row">
+          <label>服务器名称</label>
+          <input v-model="newServer.name" placeholder="例如: 生产环境Web" style="flex:1">
+        </div>
+        <div class="modal-row">
+          <label>主机地址</label>
+          <input v-model="newServer.host" placeholder="IP 或域名" style="flex:1">
+        </div>
+        <div class="modal-row">
+          <label>SSH端口</label>
+          <input v-model.number="newServer.ssh_port" type="number" placeholder="22" style="width:100px">
+        </div>
+        <div class="modal-row">
+          <label>SSH用户名</label>
+          <input v-model="newServer.ssh_user" placeholder="root" style="flex:1">
+        </div>
+
+        <!-- Auth type selection -->
+        <div style="margin:12px 0 8px;font-size:13px;color:var(--text2)">登录方式</div>
+        <div style="display:flex;gap:12px;margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--text1)">
+            <input type="radio" value="password" v-model="newServer.auth_type"> 密码登录
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--text1)">
+            <input type="radio" value="key" v-model="newServer.auth_type"> 密钥登录
+          </label>
+        </div>
+
+        <!-- Password field -->
+        <div class="modal-row" v-if="newServer.auth_type==='password'">
+          <label>密码</label>
+          <input v-model="newServer.ssh_password" type="password" placeholder="SSH密码" style="flex:1">
+        </div>
+
+        <!-- SSH Key field -->
+        <div v-if="newServer.auth_type==='key'" style="margin-bottom:10px">
+          <label style="font-size:13px;color:var(--text2);display:block;margin-bottom:6px">SSH私钥</label>
+          <textarea v-model="newServer.ssh_key" placeholder="粘贴私钥内容（以 -----BEGIN 开头）"
+            style="width:100%;height:120px;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text1);font-size:12px;font-family:Consolas,monospace;resize:vertical"></textarea>
+        </div>
+
+        <!-- Test result -->
+        <div v-if="sshTestResult.message" style="margin:10px 0;padding:8px 12px;border-radius:8px;font-size:13px"
+          :style="{
+            background: sshTestResult.success ? 'rgba(34,197,94,.1)' : 'rgba(239,68,68,.1)',
+            color: sshTestResult.success ? 'var(--green)' : 'var(--red)',
+            border: '1px solid ' + (sshTestResult.success ? 'rgba(34,197,94,.3)' : 'rgba(239,68,68,.3)')
+          }">
+          {{ sshTestResult.success ? '✓' : '✗' }} {{ sshTestResult.message }}
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-sm" @click="testSsh" :disabled="sshTestResult.testing" style="margin-right:auto">
+            {{ sshTestResult.testing ? '测试中...' : '测试连接' }}
+          </button>
+          <button class="btn-sm" @click="showAddServerModal=false;Object.assign(sshTestResult,{testing:false,success:null,message:''})">取消</button>
+          <button class="btn-sm primary" @click="addServer">保存</button>
         </div>
       </div>
     </div>

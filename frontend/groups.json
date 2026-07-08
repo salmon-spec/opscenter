@@ -15,25 +15,25 @@
       "icon": "chart"
     },
     {
-      "id": "ops_tool",
-      "name": "运维工具",
+      "id": "network",
+      "name": "网络与代理",
       "order": 30,
-      "color": "#8b5cf6",
-      "icon": "tool"
+      "color": "#64748b",
+      "icon": "globe"
     },
     {
-      "id": "data",
-      "name": "数据采集",
+      "id": "app",
+      "name": "应用服务",
       "order": 40,
       "color": "#f59e0b",
       "icon": "database"
     },
     {
-      "id": "network",
-      "name": "网络与代理",
+      "id": "ops",
+      "name": "运维管理",
       "order": 50,
-      "color": "#64748b",
-      "icon": "globe"
+      "color": "#8b5cf6",
+      "icon": "tool"
     },
     {
       "id": "auto_workflow",
@@ -51,16 +51,6 @@
     }
   ],
   "serviceGroupMap": {
-    "manual:Gitea": "cicd",
-    "manual:Jenkins": "cicd",
-    "manual:Harbor": "cicd",
-    "manual:Prometheus": "monitor",
-    "manual:Grafana": "monitor",
-    "manual:OpsCenter": "ops_tool",
-    "manual:IT-Tools": "ops_tool",
-    "manual:Stirling-PDF": "ops_tool",
-    "manual:1Panel": "ops_tool",
-    "manual:DataHub": "data",
-    "auto:ba8b865e-c1c0-4f56-9417-c9ee10a18e1b:d1738355-df3d-47f3-b260-b23ffbbfc798": "cicd"
+    "auto:ba8b865e-c1c0-4f56-9417-c9ee10a18e1b:ddc6ae2f-383e-4728-9a53-d015cc012c5b": "cicd"
   }
 }

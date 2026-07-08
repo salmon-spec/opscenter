@@ -50,6 +50,15 @@ class ServerUpdate(BaseModel):
     ssh_password: Optional[str] = None
     tags: Optional[List[str]] = None
 
+
+
+class SshTestRequest(BaseModel):
+    host: str
+    port: int = 22
+    username: str = "root"
+    password: Optional[str] = None
+    ssh_key: Optional[str] = None
+
 class ServiceCreate(BaseModel):
     name: str
     url: str
@@ -391,6 +400,23 @@ def test_server(server_id: str, password: Optional[str] = None):
             client.close()
             return {"status": "online", "message": "SSH connection successful"}
         return {"status": "offline", "message": "Cannot connect via SSH. Check credentials."}
+
+
+
+
+@app.post("/api/v2/test-ssh")
+def test_ssh_connection_api(data: SshTestRequest):
+    """Test SSH connection with provided credentials (before creating server)."""
+    from app.ssh_manager import test_ssh_connection
+    if not data.password and not data.ssh_key:
+        return {"success": False, "message": "请提供密码或SSH密钥"}
+    success, message = test_ssh_connection(
+        host=data.host, port=data.port,
+        username=data.username,
+        password=data.password,
+        ssh_key=data.ssh_key,
+    )
+    return {"success": success, "message": message}
 
 
 # === Service APIs ===
