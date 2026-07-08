@@ -107,7 +107,7 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .svc-url a{color:var(--accent);text-decoration:none}
 .svc-url a:hover{text-decoration:underline}
 .svc-footer{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.btn-sm{font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px}
+    .btn-sm{font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:none;color:var(--text2);cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px}
 .btn-sm:hover{color:var(--accent);border-color:var(--accent)}
 .btn-sm.primary{background:var(--accent);color:#0d1117;border-color:var(--accent);font-weight:500}
 .btn-sm.primary:hover{background:var(--accent2)}
@@ -182,6 +182,18 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .server-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
 .server-card h4{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .server-card .s-host{font-size:12px;color:var(--text2);margin-bottom:8px}
+.svc-list{margin-top:8px;border-top:1px solid var(--border);padding-top:8px}
+.svc-item{display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px}
+.svc-item.hidden-svc{opacity:.45}
+.svc-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text1)}
+.svc-cat{font-size:10px;color:var(--text2);background:rgba(100,116,139,.1);padding:1px 6px;border-radius:4px;white-space:nowrap}
+.svc-tag{font-size:10px;padding:1px 5px;border-radius:4px;cursor:pointer;border:none;font-weight:500}
+.svc-tag.vis{background:rgba(34,197,94,.1);color:var(--green)}
+.svc-tag.hid{background:rgba(239,68,68,.1);color:var(--red)}
+.svc-edit-btn{background:none;border:none;color:var(--text2);cursor:pointer;padding:2px;font-size:12px;border-radius:4px}
+.svc-edit-btn:hover{color:var(--accent);background:rgba(100,116,139,.1)}
+.svc-count{font-size:11px;color:var(--text2);margin-bottom:2px}
+
 .srv-btn-row{display:flex;gap:6px}
 
 /* ===== Responsive ===== */
@@ -237,6 +249,55 @@ createApp({
     const newGroupName = ref('');
     const newGroupId = ref('');
     const newGroupColor = ref('#64748b');
+
+    // ========== Resource: Service Management ==========
+    const serverServices = ref({});   // { serverId: [services] }
+    const showEditSvcModal = ref(false);
+    const editSvcForm = reactive({ id:'', name:'', description:'', hidden:false });
+
+    async function loadServerServices(sid) {
+      try {
+        const data = await apiGet(`${API}/services/all?server_id=${sid}`);
+        serverServices.value[sid] = data || [];
+      } catch(e) { console.warn('load services for server failed:', e.message); }
+    }
+    async function loadAllServerServices() {
+      for (const srv of servers.value) {
+        await loadServerServices(srv.id);
+      }
+    }
+    function getSvcCount(sid) {
+      const svcs = serverServices.value[sid] || [];
+      const visible = svcs.filter(s => !s.hidden).length;
+      const total = svcs.length;
+      return { visible, total, hidden: total - visible };
+    }
+    async function toggleSvcHidden(svc) {
+      try {
+        await apiPut(`${API}/services/${svc.id}`, { hidden: !svc.hidden });
+        svc.hidden = !svc.hidden;
+      } catch(e) { alert('操作失败: ' + e.message); }
+    }
+    function openEditSvc(svc) {
+      editSvcForm.id = svc.id;
+      editSvcForm.name = svc.name;
+      editSvcForm.description = svc.description || '';
+      editSvcForm.hidden = svc.hidden;
+      showEditSvcModal.value = true;
+    }
+    async function saveEditSvc() {
+      try {
+        await apiPut(`${API}/services/${editSvcForm.id}`, {
+          name: editSvcForm.name,
+          description: editSvcForm.description,
+          hidden: editSvcForm.hidden,
+        });
+        showEditSvcModal.value = false;
+        // Reload services for all servers to reflect changes
+        await loadAllServerServices();
+        await loadAutoServices();
+      } catch(e) { alert('保存失败: ' + e.message); }
+    }
 
     // ========== Add Server Modal ==========
     const showAddServerModal = ref(false);
@@ -589,6 +650,7 @@ createApp({
           Object.assign(newServer, { name: '', host: '', ssh_port: 22, ssh_user: 'root', auth_type: 'password', ssh_password: '', ssh_key: '' });
           Object.assign(sshTestResult, { testing: false, success: null, message: '' });
           await loadServers();
+          await loadAllServerServices();
         } else {
           const data = await r.json().catch(() => ({}));
           alert('添加失败: ' + (data.detail || r.statusText));
@@ -623,12 +685,13 @@ createApp({
       try {
         await apiDelete(`${API}/servers/${sid}`);
         await loadServers();
+        await loadAllServerServices();
       } catch(e) { alert('删除失败: ' + (e.message || '未知错误')); }
     }
 
     // ========== Resource ==========
     async function triggerScan(sid) {
-      try { await apiPost(`${API}/servers/${sid}/scan`); await loadMonitor(); } catch(e) { alert('扫描失败'); }
+      try { await apiPost(`${API}/servers/${sid}/scan`); await loadMonitor(); await loadServerServices(sid); await loadAutoServices(); } catch(e) { alert('扫描失败'); }
     }
 
     // ========== Init ==========
@@ -641,6 +704,7 @@ createApp({
       const onlineSrv = servers.value.find(s => s.status === 'online');
       if (onlineSrv) navServerId.value = onlineSrv.id;
       await loadMonitor();
+      await loadAllServerServices();
       await loadEcharts();
     });
     onUnmounted(() => { clearInterval(clockTimer); if (autoRefreshTimer) clearInterval(autoRefreshTimer); });
@@ -678,6 +742,8 @@ createApp({
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
 
       triggerScan,
+      serverServices, getSvcCount, toggleSvcHidden, openEditSvc,
+      showEditSvcModal, editSvcForm, saveEditSvc,
       showAddServerModal, newServer, sshTestResult,
       addServer, testSsh, deleteServer,
     };
@@ -689,7 +755,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.3</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.5</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -910,7 +976,7 @@ createApp({
           <div class="s-host">{{srv.host}}:{{srv.ssh_port || 22}}</div>
           <div style="font-size:12px;color:var(--text2);margin:6px 0">
             <span style="margin-right:12px">用户: {{srv.ssh_user || '-'}}</span>
-            <span>服务: {{srv.service_count || 0}}</span>
+            <span>服务: {{getSvcCount(srv.id).visible}} 可见{{getSvcCount(srv.id).hidden ? ' / ' + getSvcCount(srv.id).hidden + ' 隐藏' : ''}}</span>
           </div>
           <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
             <span v-if="srv.has_credentials" style="color:var(--green)">SSH凭证已配置</span>
@@ -922,6 +988,18 @@ createApp({
             <button class="btn-sm" @click="triggerScan(srv.id)">扫描</button>
             <button class="btn-sm danger" v-if="!srv.is_local" @click="deleteServer(srv.id)">删除</button>
           </div>
+          <!-- Service list -->
+          <div class="svc-list" v-if="(serverServices[srv.id]||[]).length">
+            <div class="svc-item" v-for="s in serverServices[srv.id]" :key="s.id" :class="{'hidden-svc': s.hidden}">
+              <span class="svc-name" :title="s.description || s.name">{{s.name}}</span>
+              <span class="svc-cat" v-if="s.category">{{s.category}}</span>
+              <button class="svc-tag" :class="s.hidden ? 'hid' : 'vis'" @click="toggleSvcHidden(s)" :title="s.hidden ? '点击显示' : '点击隐藏'">
+                {{s.hidden ? '已隐藏' : '可见'}}
+              </button>
+              <button class="svc-edit-btn" @click="openEditSvc(s)" title="编辑">&#9998;</button>
+            </div>
+          </div>
+          <div v-else style="font-size:11px;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">暂无服务数据，点击"扫描"发现服务</div>
         </div>
       </div>
     </div>
@@ -951,7 +1029,31 @@ createApp({
       </div>
     </div>
 
-    <!-- ===== Add Server Modal ===== -->
+    <!-- ===== Edit Service Modal ===== -->
+    <div class="modal-overlay" v-if="showEditSvcModal" @click.self="showEditSvcModal=false">
+      <div class="modal" style="min-width:420px">
+        <h3>编辑服务</h3>
+        <div class="modal-row">
+          <label>名称</label>
+          <input v-model="editSvcForm.name" style="flex:1">
+        </div>
+        <div class="modal-row">
+          <label>描述</label>
+          <input v-model="editSvcForm.description" placeholder="服务描述" style="flex:1">
+        </div>
+        <div style="margin:12px 0;display:flex;align-items:center;gap:8px">
+          <label style="font-size:13px;color:var(--text1);cursor:pointer;display:flex;align-items:center;gap:6px">
+            <input type="checkbox" v-model="editSvcForm.hidden"> 在服务导航中隐藏
+          </label>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-sm" @click="showEditSvcModal=false">取消</button>
+          <button class="btn-sm primary" @click="saveEditSvc">保存</button>
+        </div>
+      </div>
+    </div>
+
+        <!-- ===== Add Server Modal ===== -->
     <div class="modal-overlay" v-if="showAddServerModal" @click.self="showAddServerModal=false">
       <div class="modal" style="min-width:520px">
         <h3>添加服务器</h3>

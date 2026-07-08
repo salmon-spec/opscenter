@@ -76,6 +76,7 @@ class ServiceUpdate(BaseModel):
     description: Optional[str] = None
     health_path: Optional[str] = None
     pinned: Optional[bool] = None
+    hidden: Optional[bool] = None
 
 class PinToggle(BaseModel):
     pinned: bool
@@ -432,8 +433,8 @@ def list_services(server_id: Optional[str] = None, category: Optional[str] = Non
             q = q.filter(Service.pinned == pinned)
         if search:
             q = q.filter(Service.name.ilike(f"%{search}%"))
-        # Only show services that have a web-accessible URL
-        q = q.filter(Service.url != None, Service.url != '')
+        # Only show services that have a web-accessible URL and are not hidden
+        q = q.filter(Service.url != None, Service.url != '', Service.hidden != True)
         q = q.order_by(Service.sort_order, Service.category, Service.name)
         services = q.all()
         result = []
@@ -1049,8 +1050,8 @@ def list_services_with_status(server_id: Optional[str] = None):
         q = db.query(Service)
         if server_id:
             q = q.filter(Service.server_id == uuid.UUID(server_id))
-        # Only show services that have a web-accessible URL
-        q = q.filter(Service.url != None, Service.url != '')
+        # Only show services that have a web-accessible URL and are not hidden
+        q = q.filter(Service.url != None, Service.url != '', Service.hidden != True)
         q = q.order_by(Service.sort_order, Service.category, Service.name)
         services = q.all()
         
@@ -1076,5 +1077,39 @@ def list_services_with_status(server_id: Optional[str] = None):
                 "server_host": srv_info.get("host", ""),
                 "server_status": srv_info.get("status", "unknown"),
                 "server_is_local": srv_info.get("is_local", False),
+            })
+        return result
+
+
+@app.get("/api/v2/services/all")
+def list_all_services(server_id: Optional[str] = None):
+    """List all services including hidden ones. For admin/resource management only."""
+    with get_db() as db:
+        q = db.query(Service)
+        if server_id:
+            q = q.filter(Service.server_id == uuid.UUID(server_id))
+        q = q.order_by(Service.category, Service.name)
+        services = q.all()
+        server_ids = set(s.server_id for s in services)
+        servers_map = {}
+        for sid in server_ids:
+            srv = db.query(Server).filter(Server.id == sid).first()
+            if srv:
+                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local}
+        result = []
+        for s in services:
+            si = servers_map.get(str(s.server_id), {})
+            result.append({
+                "id": str(s.id), "server_id": str(s.server_id),
+                "name": s.name, "url": s.url, "category": s.category,
+                "icon": s.icon, "description": s.description,
+                "source": s.source, "status": s.status, "pinned": s.pinned,
+                "health_path": s.health_path, "container_name": s.container_name,
+                "image": s.image, "ports": s.ports,
+                "hidden": s.hidden or False,
+                "server_name": si.get("name", ""),
+                "server_host": si.get("host", ""),
+                "server_status": si.get("status", "unknown"),
+                "server_is_local": si.get("is_local", False),
             })
         return result
