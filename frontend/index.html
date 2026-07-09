@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.7 运维工作台</title>
+<title>OpsCenter v3.7.1 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
@@ -179,9 +179,22 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 
 /* ===== Resources Page ===== */
 .server-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
-.server-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
-.server-card h4{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.agent-tag{font-size:10px;padding:2px 6px;border-radius:6px;font-weight:500;margin-left:6px;white-space:nowrap}
+.server-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:0;overflow:hidden;transition:border-color .2s}
+.server-card:hover{border-color:rgba(45,212,191,.3)}
+.server-card .sc-header{padding:16px 20px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;background:linear-gradient(135deg,rgba(45,212,191,.04),transparent)}
+.server-card .sc-title{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+.server-card .sc-title h4{font-size:15px;font-weight:600;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.server-card .sc-body{padding:16px 20px 20px}
+.sc-info{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;margin-bottom:14px}
+.sc-info-item{display:flex;align-items:center;gap:6px;font-size:12px}
+.sc-info-label{color:var(--text2);white-space:nowrap;min-width:32px}
+.sc-info-val{color:var(--text1);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sc-badge{font-size:10px;padding:2px 7px;border-radius:6px;font-weight:500;white-space:nowrap}
+.sc-badge.online{background:rgba(34,197,94,.12);color:var(--green)}
+.sc-badge.offline{background:rgba(239,68,68,.12);color:var(--red)}
+.sc-badge.ok{background:rgba(34,197,94,.08);color:var(--green)}
+.sc-badge.warn{background:rgba(245,158,11,.08);color:var(--orange)}
+.agent-tag{font-size:10px;padding:2px 6px;border-radius:6px;font-weight:500;margin-left:4px;white-space:nowrap}
 .agent-tag.running{background:rgba(34,197,94,.12);color:#22c55e}
 .agent-tag.not_deployed{background:rgba(139,148,158,.12);color:#8b949e}
 .agent-tag.deploying{background:rgba(245,158,11,.12);color:#f59e0b}
@@ -195,33 +208,39 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .deploy-auto-row label{font-size:13px;color:var(--text1);cursor:pointer;display:flex;align-items:center;gap:6px}
 .deploy-auto-row input[type=checkbox]{accent-color:var(--accent)}
 .deploy-info{font-size:11px;color:var(--text2);margin-top:2px}
-.server-card .s-host{font-size:12px;color:var(--text2);margin-bottom:8px}
-.svc-list{margin-top:8px;border-top:1px solid var(--border);padding-top:8px}
-.svc-item{display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px}
-.svc-item.hidden-svc{opacity:.45}
-.svc-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text1)}
-.svc-cat{font-size:10px;color:var(--text2);background:rgba(100,116,139,.1);padding:1px 6px;border-radius:4px;white-space:nowrap}
+.srv-btn-row,.sc-btn-row{display:flex;gap:8px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);flex-wrap:wrap;align-items:center}
+/* Service list */
+.svc-list-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.svc-list-title{font-size:11px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.8px}
+.svc-list{margin-top:0}
+.svc-item{display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:12px;border-radius:8px;transition:background .12s;margin-bottom:1px}
+.svc-item:hover{background:rgba(45,212,191,.04)}
+.svc-item.hidden-svc{opacity:.4}
+.svc-item .svc-name{flex:0 0 auto;min-width:80px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text1);font-weight:500;font-size:13px}
+.svc-item .svc-cat{font-size:10px;color:var(--text2);background:rgba(100,116,139,.1);padding:1px 6px;border-radius:4px;white-space:nowrap;flex-shrink:0}
 .svc-tag{font-size:10px;padding:1px 5px;border-radius:4px;cursor:pointer;border:none;font-weight:500}
 .svc-tag.vis{background:rgba(34,197,94,.1);color:var(--green)}
 .svc-tag.hid{background:rgba(239,68,68,.1);color:var(--red)}
-.svc-edit-btn{background:none;border:none;color:var(--text2);cursor:pointer;padding:2px;font-size:12px;border-radius:4px}
+.svc-edit-btn{background:none;border:none;color:var(--text2);cursor:pointer;padding:2px 4px;font-size:12px;border-radius:4px;transition:all .15s}
 .svc-edit-btn:hover{color:var(--accent);background:rgba(100,116,139,.1)}
+.svc-move-select{font-size:10px;padding:2px 4px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text1);cursor:pointer;max-width:80px}
 .svc-count{font-size:11px;color:var(--text2);margin-bottom:2px}
-
-.srv-btn-row{display:flex;gap:6px}
 /* ===== Service Credentials ===== */
-.svc-creds{margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.svc-cred{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:6px;background:var(--bg);border:1px solid var(--border)}
-.svc-cred .cred-label{color:var(--text2);margin-right:2px}
-.svc-cred .cred-val{color:var(--text1);font-family:Consolas,monospace;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.svc-cred .cred-copy{background:none;border:none;color:var(--text2);cursor:pointer;padding:1px 3px;font-size:10px;border-radius:3px}
+.svc-creds{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:1;min-width:0}
+.svc-cred{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:3px 8px;border-radius:6px;background:rgba(45,212,191,.05);border:1px solid rgba(45,212,191,.15);transition:border-color .15s}
+.svc-cred:hover{border-color:rgba(45,212,191,.35)}
+.svc-cred .cred-icon{width:12px;height:12px;color:var(--accent);flex-shrink:0;vertical-align:middle}
+.svc-cred .cred-label{color:var(--text2);font-size:10px;margin-right:1px}
+.svc-cred .cred-val{color:var(--text1);font-family:Consolas,monospace;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.svc-cred .cred-copy{background:none;border:none;color:var(--text2);cursor:pointer;padding:0 2px;font-size:10px;border-radius:3px;transition:color .15s;line-height:1}
 .svc-cred .cred-copy:hover{color:var(--accent)}
-.svc-cred-empty{font-size:10px;color:var(--text2);opacity:.6;font-style:italic}
+.svc-cred-empty{font-size:10px;color:var(--text2);opacity:.4;font-style:italic;padding:2px 4px}
+.svc-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
 /* ===== Resource Server Tabs ===== */
 .res-server-tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
-.res-server-tab{display:flex;align-items:center;gap:8px;padding:10px 18px;border-radius:8px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;color:var(--text2);transition:all .15s;min-width:140px}
-.res-server-tab:hover{border-color:var(--accent);color:var(--text1)}
-.res-server-tab.active{background:rgba(45,212,191,.12);border-color:var(--accent);color:var(--accent);font-weight:500}
+.res-server-tab{display:flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;color:var(--text2);transition:all .15s;min-width:140px}
+.res-server-tab:hover{border-color:var(--accent);color:var(--text1);background:rgba(45,212,191,.04)}
+.res-server-tab.active{background:rgba(45,212,191,.1);border-color:var(--accent);color:var(--accent);font-weight:500;box-shadow:0 0 0 1px rgba(45,212,191,.15)}
 .res-server-tab .rst-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .res-server-tab .rst-dot.online{background:var(--green);box-shadow:0 0 4px var(--green)}
 .res-server-tab .rst-dot.offline{background:var(--red);box-shadow:0 0 4px var(--red)}
@@ -244,6 +263,8 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 <symbol id="fa-bolt" viewBox="0 0 448 512"><path fill="currentColor" d="M349.4 44.6c5.9-13.7 1.5-29.7-10.6-38.5s-28.6-8-39.9 1.8l-256 224c-10 8.8-13.6 22.9-8.9 35.3S50.7 288 64 288h111.5L98.6 467.4c-5.9 13.7-1.5 29.7 10.6 38.5s28.6 8 39.9-1.8l256-224c10-8.8 13.6-22.9 8.9-35.3S397.3 224 384 224H272.5L349.4 44.6z"/></symbol>
 <symbol id="fa-globe" viewBox="0 0 512 512"><path fill="currentColor" d="M352 256c0 22.2-1.2 43.6-3.3 64H163.3c-2.2-20.4-3.3-41.8-3.3-64s1.2-43.6 3.3-64h185.4c2.2 20.4 3.3 41.8 3.3 64zm28.8-64h123.1c5.3 20.5 8.1 41.9 8.1 64s-2.8 43.5-8.1 64H380.8c2.1-20.6 3.2-42 3.2-64s-1.1-43.4-3.2-64zm112.6-32H376.7c-10-63.9-29.8-117.4-55.3-151.6C378.3 32.4 448 101.8 480 184.4zM256 32c31.7 0 72.6 55.8 90.3 136H165.7C183.4 87.8 224.3 32 256 32zM132.6 8.4C107.1 42.6 87.3 96.1 77.3 160H20.6C52.6 77.4 122.3 8 132.6 8.4zM8.1 192h123.1c-2.1 20.6-3.2 42-3.2 64s1.1 43.4 3.2 64H8.1C2.8 299.5 0 278.1 0 256s2.8-43.5 8.1-64zM20.6 352h56.7c10 63.9 29.8 117.4 55.3 151.6C52.6 479.6 20.6 410.2 20.6 352zm151.2 0h168.5c-17.7 80.2-58.6 136-84.3 136s-66.5-55.8-84.2-136zm207.7 0h56.7c0 58.2-32 127.6-112.7 151.6 25.5-34.2 45.3-87.7 55.3-151.6h.7z"/></symbol>
 <symbol id="fa-box" viewBox="0 0 448 512"><path fill="currentColor" d="M50.7 58.5L0 96V416l50.7 37.5L224 448l173.3 5.5L448 416V96L397.3 58.5 224 64 50.7 58.5z"/></symbol>
+<symbol id="fa-user" viewBox="0 0 448 512"><path fill="currentColor" d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512H418.3c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304H178.3z"/></symbol>
+<symbol id="fa-key" viewBox="0 0 512 512"><path fill="currentColor" d="M336 352c97.2 0 176-78.8 176-176S433.2 0 336 0S160 78.8 160 176c0 18.7 2.9 36.8 8.3 53.7L7 391c-4.5 4.5-7 10.6-7 17v80c0 13.3 10.7 24 24 24h80c13.3 0 24-10.7 24-24v-40h40c13.3 0 24-10.7 24-24v-40h40c6.4 0 12.5-2.5 17-7l33.3-33.3c16.9 5.4 35 8.3 53.7 8.3zM376 96a40 40 0 1 1 0 80 40 40 0 1 1 0-80z"/></symbol>
 </svg>
 </head>
 <body>
@@ -1090,71 +1111,93 @@ createApp({
       <!-- Selected Server Detail -->
       <template v-for="srv in servers" :key="srv.id">
       <div class="server-card" v-if="resServerId===srv.id">
-          <h4 style="font-size:16px">
-            <span class="status-dot" :class="srv.status==='online'?'online':'offline'"></span>
-            {{srv.name}}
-            <span v-if="srv.is_local" style="font-size:10px;padding:2px 6px;border-radius:6px;background:rgba(45,212,191,.12);color:var(--accent);margin-left:6px;font-weight:500">本机</span>
-            <span v-if="srv.agent_status && !srv.is_local" class="agent-tag" :class="srv.agent_status">
-              {{srv.agent_status === 'running' ? 'Agent运行中' : srv.agent_status === 'not_deployed' ? '未部署Agent' : srv.agent_status === 'deploying' ? '部署中...' : srv.agent_status === 'stopped' ? 'Agent已停止' : 'Agent异常'}}
-            </span>
-          </h4>
-          <div class="s-host">{{srv.host}}:{{srv.ssh_port || 22}}</div>
-          <div style="font-size:12px;color:var(--text2);margin:6px 0">
-            <span style="margin-right:12px">用户: {{srv.ssh_user || '-'}}</span>
-            <span>服务: {{getSvcCount(srv.id).visible}} 可见{{getSvcCount(srv.id).hidden ? ' / ' + getSvcCount(srv.id).hidden + ' 隐藏' : ''}}</span>
+          <!-- Header -->
+          <div class="sc-header">
+            <div class="sc-title">
+              <span class="status-dot" :class="srv.status==='online'?'online':'offline'" style="width:10px;height:10px"></span>
+              <h4>{{srv.name}}</h4>
+              <span v-if="srv.is_local" class="sc-badge online">本机</span>
+              <span v-if="srv.agent_status && !srv.is_local" class="agent-tag" :class="srv.agent_status">
+                {{srv.agent_status === 'running' ? 'Agent运行中' : srv.agent_status === 'not_deployed' ? '未部署Agent' : srv.agent_status === 'deploying' ? '部署中...' : srv.agent_status === 'stopped' ? 'Agent已停止' : 'Agent异常'}}
+              </span>
+            </div>
+            <span class="sc-badge" :class="srv.status==='online'?'online':'offline'">{{srv.status==='online'?'在线':'离线'}}</span>
           </div>
-          <div style="font-size:11px;color:var(--text2);margin-bottom:10px">
-            <span v-if="srv.has_credentials" style="color:var(--green)">SSH凭证已配置</span>
-            <span v-else style="color:var(--orange)">SSH凭证未配置</span>
-            <span v-if="srv.agent_status==='running'" style="margin-left:8px;color:var(--green)">Agent :{{srv.agent_port||19100}} v{{srv.agent_version||'1.0'}}</span>
-            <span style="margin-left:8px" v-if="srv.last_seen">最后在线: {{new Date(srv.last_seen).toLocaleString('zh-CN')}}</span>
-          </div>
-          <div class="srv-btn-row">
-            <button class="btn-sm primary" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
-            <button class="btn-sm" @click="triggerScan(srv.id)">扫描</button>
-            <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
-            <button class="btn-sm" v-if="!srv.is_local && srv.agent_status==='running'" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">检查Agent</button>
-            <button class="btn-sm danger" v-if="!srv.is_local" @click="deleteServer(srv.id)">删除</button>
-          </div>
-          <!-- Service list -->
-          <div class="svc-list" v-if="(serverServices[srv.id]||[]).length">
-            <div class="svc-item" v-for="s in serverServices[srv.id]" :key="s.id" :class="{'hidden-svc': s.hidden}" style="flex-wrap:wrap;gap:4px 8px">
-              <div style="display:flex;align-items:center;gap:6px;min-width:0;flex:1">
-                <span class="svc-name" :title="s.description || s.name" style="min-width:80px">{{s.name}}</span>
-                <span class="svc-cat" v-if="s.category">{{s.category}}</span>
+          <!-- Body -->
+          <div class="sc-body">
+            <!-- Info grid -->
+            <div class="sc-info">
+              <div class="sc-info-item">
+                <span class="sc-info-label">主机</span>
+                <span class="sc-info-val" style="font-family:Consolas,monospace">{{srv.host}}:{{srv.ssh_port || 22}}</span>
               </div>
-              <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;flex-wrap:wrap">
-                <!-- Account/Password display -->
-                <template v-if="s.account || s.password">
-                  <span class="svc-cred" v-if="s.account">
-                    <span class="cred-label">账号</span>
-                    <span class="cred-val" :title="s.account">{{s.account}}</span>
-                    <button class="cred-copy" @click="copyText(s.account)" title="复制账号">复制</button>
-                  </span>
-                  <span class="svc-cred" v-if="s.password">
-                    <span class="cred-label">密码</span>
-                    <span class="cred-val">****</span>
-                    <button class="cred-copy" @click="copyText(s.password)" title="复制密码">复制</button>
-                  </span>
-                </template>
-                <template v-else>
-                  <span class="svc-cred-empty">未配置凭证</span>
-                </template>
+              <div class="sc-info-item">
+                <span class="sc-info-label">用户</span>
+                <span class="sc-info-val">{{srv.ssh_user || '-'}}</span>
               </div>
-              <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
-                <select class="svc-move-select" :value="groupConfig.serviceGroupMap['auto:'+s.server_id+':'+s.id] || ''" @change="moveServiceToGroup('auto:'+s.server_id+':'+s.id, $event.target.value)" style="font-size:10px;padding:2px 4px;max-width:90px">
-                  <option value="">分组</option>
-                  <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
-                  <option value="ungrouped">未分组</option>
-                </select>
-                <button class="svc-tag" :class="s.hidden ? 'hid' : 'vis'" @click="toggleSvcHidden(s)" :title="s.hidden ? '点击显示' : '点击隐藏'">
-                  {{s.hidden ? '已隐藏' : '可见'}}
-                </button>
-                <button class="svc-edit-btn" @click="openEditSvc(s)" title="编辑">&#9998;</button>
+              <div class="sc-info-item">
+                <span class="sc-info-label">凭证</span>
+                <span class="sc-badge" :class="srv.has_credentials?'ok':'warn'">{{srv.has_credentials?'已配置':'未配置'}}</span>
+              </div>
+              <div class="sc-info-item">
+                <span class="sc-info-label">服务</span>
+                <span class="sc-info-val">{{getSvcCount(srv.id).visible}} 可见<template v-if="getSvcCount(srv.id).hidden"> / {{getSvcCount(srv.id).hidden}} 隐藏</template></span>
               </div>
             </div>
+            <!-- Agent info -->
+            <div v-if="srv.agent_status==='running' || srv.last_seen" style="font-size:11px;color:var(--text2);margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap">
+              <span v-if="srv.agent_status==='running'" style="color:var(--green)">Agent :{{srv.agent_port||19100}} v{{srv.agent_version||'1.0'}}</span>
+              <span v-if="srv.last_seen">最后在线: {{new Date(srv.last_seen).toLocaleString('zh-CN')}}</span>
+            </div>
+            <!-- Action buttons -->
+            <div class="sc-btn-row">
+              <button class="btn-sm primary" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
+              <button class="btn-sm" @click="triggerScan(srv.id)">扫描</button>
+              <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
+              <button class="btn-sm" v-if="!srv.is_local && srv.agent_status==='running'" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">检查Agent</button>
+              <div style="flex:1"></div>
+              <button class="btn-sm danger" v-if="!srv.is_local" @click="deleteServer(srv.id)">删除</button>
+            </div>
+            <!-- Service list -->
+            <div class="svc-list" v-if="(serverServices[srv.id]||[]).length">
+              <div class="svc-list-header">
+                <span class="svc-list-title">服务列表</span>
+              </div>
+              <div class="svc-item" v-for="s in serverServices[srv.id]" :key="s.id" :class="{'hidden-svc': s.hidden}">
+                <span class="svc-name" :title="s.description || s.name">{{s.name}}</span>
+                <span class="svc-cat" v-if="s.category">{{s.category}}</span>
+                <div class="svc-creds">
+                  <template v-if="s.account || s.password">
+                    <span class="svc-cred" v-if="s.account">
+                      <svg class="cred-icon"><use href="#fa-user"/></svg>
+                      <span class="cred-val" :title="s.account">{{s.account}}</span>
+                      <button class="cred-copy" @click="copyText(s.account)" title="复制账号">复制</button>
+                    </span>
+                    <span class="svc-cred" v-if="s.password">
+                      <svg class="cred-icon"><use href="#fa-key"/></svg>
+                      <span class="cred-val">****</span>
+                      <button class="cred-copy" @click="copyText(s.password)" title="复制密码">复制</button>
+                    </span>
+                  </template>
+                  <template v-else>
+                    <span class="svc-cred-empty">未配置凭证</span>
+                  </template>
+                </div>
+                <div class="svc-actions">
+                  <select class="svc-move-select" :value="groupConfig.serviceGroupMap['auto:'+s.server_id+':'+s.id] || ''" @change="moveServiceToGroup('auto:'+s.server_id+':'+s.id, $event.target.value)">
+                    <option value="">分组</option>
+                    <option v-for="og in groupConfig.groups.filter(g=>g.id!=='ungrouped')" :key="og.id" :value="og.id">{{og.name}}</option>
+                    <option value="ungrouped">未分组</option>
+                  </select>
+                  <button class="svc-tag" :class="s.hidden ? 'hid' : 'vis'" @click="toggleSvcHidden(s)" :title="s.hidden ? '点击显示' : '点击隐藏'">
+                    {{s.hidden ? '已隐藏' : '可见'}}
+                  </button>
+                  <button class="svc-edit-btn" @click="openEditSvc(s)" title="编辑">&#9998;</button>
+                </div>
+              </div>
+            </div>
+            <div v-else style="font-size:12px;color:var(--text2);text-align:center;padding:20px 0">暂无服务数据，点击"扫描"发现服务</div>
           </div>
-          <div v-else style="font-size:11px;color:var(--text2);margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">暂无服务数据，点击"扫描"发现服务</div>
         </div>
       </template>
     </div>
