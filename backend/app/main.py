@@ -1,4 +1,5 @@
-import os, uuid, asyncio, re
+import os
+import calendar, uuid, asyncio, re
 from datetime import datetime
 from typing import Optional, List
 from contextlib import contextmanager
@@ -1249,7 +1250,7 @@ def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
                 MetricHistory.metric == metric,
                 MetricHistory.timestamp >= cutoff,
             ).order_by(MetricHistory.timestamp).all()
-            values = [[r.timestamp.timestamp(), r.value] for r in records]
+            values = [[calendar.timegm(r.timestamp.timetuple()), r.value] for r in records]
             if values:
                 return {"metric": metric, "values": values[-200:], "source": "agent"}
             return {"metric": metric, "values": [], "note": "Agent未部署或无历史数据"}
