@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.7.1 运维工作台</title>
+<title>OpsCenter v3.9.3 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
@@ -592,7 +592,18 @@ createApp({
     }
 
     // ========== Copy ==========
-    function copyText(text) { navigator.clipboard.writeText(text).catch(() => {}); }
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => { fallbackCopy(text); });
+      } else { fallbackCopy(text); }
+    }
+    function fallbackCopy(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position='fixed'; ta.style.left='-9999px';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch(e) {}
+      document.body.removeChild(ta);
+    }
     function openService(url) { if(url) window.open(url,'_blank'); }
 
     // ========== Monitor ==========
