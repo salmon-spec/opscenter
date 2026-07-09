@@ -3,9 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.9.3 运维工作台</title>
+<title>OpsCenter v3.10.0 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<link rel="stylesheet" href="/ops/assets/xterm/xterm.min.css">
+<script src="/ops/assets/xterm/xterm.min.js"></script>
+<script src="/ops/assets/xterm/xterm-addon-fit.min.js"></script>
+<script src="/ops/assets/xterm/xterm-addon-web-links.min.js"></script>
 <style>
 :root{--bg:#0d1117;--bg2:#161b22;--card:#1c2330;--card-hover:#243447;--border:#30363d;--text1:#e6edf3;--text2:#8b949e;--accent:#2dd4bf;--accent2:#0d9488;--green:#22c55e;--orange:#f59e0b;--red:#ef4444;--purple:#8b5cf6;--blue:#3b82f6;--radius:10px;--sidebar-w:220px}
 .light{--bg:#f0f2f5;--bg2:#fff;--card:#fff;--card-hover:#f5f5f5;--border:#e5e7eb;--text1:#1f2937;--text2:#6b7280}
@@ -254,6 +258,27 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .toast-msg{padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;opacity:0;transform:translateX(30px);transition:all .3s;pointer-events:auto;max-width:360px}
 .toast-msg.show{opacity:1;transform:translateX(0)}
 .toast-msg.info{background:rgba(45,212,191,.92)}.toast-msg.ok{background:rgba(34,197,94,.92)}.toast-msg.warn{background:rgba(245,158,11,.92)}.toast-msg.err{background:rgba(239,68,68,.92)}
+
+/* Terminal Page */
+.term-page{display:flex;flex-direction:column;height:calc(100vh - 60px);overflow:hidden}
+.term-tabs{display:flex;align-items:center;background:var(--bg2);border-bottom:1px solid var(--border);padding:0 8px;gap:2px;min-height:38px;flex-shrink:0}
+.term-tab{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px 6px 0 0;cursor:pointer;font-size:12px;color:var(--text2);background:transparent;border:1px solid transparent;border-bottom:none;transition:all .15s;max-width:160px}
+.term-tab:hover{background:var(--card);color:var(--text1)}
+.term-tab.active{background:var(--card);color:var(--accent);border-color:var(--border)}
+.term-tab .tab-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.term-tab .tab-close{font-size:14px;opacity:.5;margin-left:4px;flex-shrink:0}
+.term-tab .tab-close:hover{opacity:1;color:var(--red)}
+.term-tab .tab-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.term-tab .tab-dot.on{background:var(--green)}
+.term-tab .tab-dot.off{background:var(--red)}
+.term-tab-add{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:6px;cursor:pointer;color:var(--text2);font-size:18px;margin-left:4px}
+.term-tab-add:hover{background:var(--card);color:var(--text1)}
+.term-body{flex:1;position:relative;background:#000;overflow:hidden}
+.term-body .xterm{height:100%;padding:4px}
+.term-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text2);gap:16px}
+.term-empty svg{width:64px;height:64px;opacity:.3}
+.term-empty p{font-size:14px}
+.term-connecting{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85);color:var(--accent);font-size:14px;z-index:5}
 </style>
 <svg style="display:none" xmlns="http://www.w3.org/2000/svg">
 <symbol id="fa-server" viewBox="0 0 640 512"><path fill="currentColor" d="M480 96H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zm0 128H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zm0 128H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zM64 0C28.7 0 0 28.7 0 64v64c0 35.3 28.7 64 64 64h512c35.3 0 64-28.7 64-64V64c0-35.3-28.7-64-64-64H64zm0 256c-35.3 0-64 28.7-64 64v64c0 35.3 28.7 64 64 64h512c35.3 0 64-28.7 64-64v-64c0-35.3-28.7-64-64-64H64z"/></symbol>
@@ -269,6 +294,7 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 <symbol id="fa-box" viewBox="0 0 448 512"><path fill="currentColor" d="M50.7 58.5L0 96V416l50.7 37.5L224 448l173.3 5.5L448 416V96L397.3 58.5 224 64 50.7 58.5z"/></symbol>
 <symbol id="fa-user" viewBox="0 0 448 512"><path fill="currentColor" d="M224 256A128 128 0 1 0 224 0a128 128 0 1 0 0 256zm-45.7 48C79.8 304 0 383.8 0 482.3C0 498.7 13.3 512 29.7 512H418.3c16.4 0 29.7-13.3 29.7-29.7C448 383.8 368.2 304 269.7 304H178.3z"/></symbol>
 <symbol id="fa-key" viewBox="0 0 512 512"><path fill="currentColor" d="M336 352c97.2 0 176-78.8 176-176S433.2 0 336 0S160 78.8 160 176c0 18.7 2.9 36.8 8.3 53.7L7 391c-4.5 4.5-7 10.6-7 17v80c0 13.3 10.7 24 24 24h80c13.3 0 24-10.7 24-24v-40h40c13.3 0 24-10.7 24-24v-40h40c6.4 0 12.5-2.5 17-7l33.3-33.3c16.9 5.4 35 8.3 53.7 8.3zM376 96a40 40 0 1 1 0 80 40 40 0 1 1 0-80z"/></symbol>
+<symbol id="fa-terminal" viewBox="0 0 640 512"><path fill="currentColor" d="M257.981 272.971L63.638 467.314c-9.373 9.373-24.569 9.373-33.941 0L7.029 444.647c-9.357-9.357-9.375-24.522-.04-33.901L161.011 256 6.99 101.255c-9.335-9.379-9.317-24.544.04-33.901l22.667-22.667c9.373-9.373 24.569-9.373 33.941 0L257.981 239.03c9.373 9.372 9.373 24.568 0 33.941zM640 456v-32c0-13.255-10.745-24-24-24H312c-13.255 0-24 10.745-24 24v32c0 13.255 10.745 24 24 24h304c13.255 0 24-10.745 24-24z"/></symbol>
 </svg>
 </head>
 <body>
@@ -308,6 +334,12 @@ createApp({
 
     // ========== Resource: Server Tab ==========
     const scanningServerId = ref(null);
+
+    // ========== Terminal ==========
+    const termTabs = ref([]);
+    const termActiveId = ref('');
+    const termRefs = reactive({});
+    let termCounter = 0;
     const resServerId = ref('');   // selected server in resources page
 
     function switchResServer(sid) {
@@ -904,6 +936,174 @@ createApp({
     watch(darkMode, () => { if (chartInstance) { initChart(); renderChart(); } });
 
     // ========== Template data ==========
+      // ========== Terminal Methods ==========
+    async function termConnect(serverId) {
+      try {
+        const resp = await fetch(API + '/terminal/sessions', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({server_id: serverId, cols: 80, rows: 24})
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(()=>({}));
+          showToast(err.detail || '连接失败', 'err');
+          return;
+        }
+        const data = await resp.json();
+        termCounter++;
+        const tab = {
+          id: data.session_id,
+          name: data.server_name + ' (' + data.user + ')',
+          serverId: serverId,
+          connected: true,
+          term: null,
+          ws: null,
+          fitAddon: null,
+        };
+        termTabs.value.push(tab);
+        termActiveId.value = tab.id;
+        currentPage.value = 'terminal';
+        await nextTick();
+        // Initialize xterm after DOM renders
+        setTimeout(() => termInit(tab), 100);
+      } catch(e) {
+        showToast('终端连接失败: ' + e.message, 'err');
+      }
+    }
+
+    function termInit(tab) {
+      const container = termRefs[tab.id];
+      if (!container || tab.term) return;
+      const term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: 'Menlo, Monaco, Consolas, "Courier New", monospace',
+        theme: {background:'#0d1117',foreground:'#e6edf3',cursor:'#2dd4bf',selectionBackground:'rgba(45,212,191,.3)'},
+        scrollback: 5000,
+      });
+      const fitAddon = new FitAddon.FitAddon();
+      const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+      term.loadAddon(fitAddon);
+      term.loadAddon(webLinksAddon);
+      term.open(container);
+      try { fitAddon.fit(); } catch(e) {}
+      tab.term = term;
+      tab.fitAddon = fitAddon;
+
+      // Open WebSocket
+      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = wsProto + '//' + location.host + '/ops/ws/terminal/' + tab.id;
+      const ws = new WebSocket(wsUrl);
+      tab.ws = ws;
+
+      ws.onopen = () => {
+        tab.connected = true;
+        // Send initial resize
+        const dims = fitAddon.proposeDimensions();
+        if (dims) {
+          ws.send(JSON.stringify({type:'resize', cols:dims.cols, rows:dims.rows}));
+        }
+      };
+
+      ws.onmessage = (evt) => {
+        term.write(evt.data);
+      };
+
+      ws.onclose = () => {
+        tab.connected = false;
+        if (tab.term) {
+          tab.term.write('\r\n\x1b[31m--- 连接已断开 ---\x1b[0m\r\n');
+        }
+      };
+
+      ws.onerror = () => {
+        tab.connected = false;
+        showToast('WebSocket 连接错误', 'err');
+      };
+
+      // Send user input
+      term.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({type:'input', data}));
+        }
+      });
+
+      // Handle resize
+      term.onResize(({cols, rows}) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({type:'resize', cols, rows}));
+        }
+      });
+
+      // Window resize handler
+      const resizeHandler = () => {
+        if (tab.term && tab.fitAddon) {
+          try { tab.fitAddon.fit(); } catch(e) {}
+        }
+      };
+      window.addEventListener('resize', resizeHandler);
+      tab._resizeHandler = resizeHandler;
+    }
+
+    function termClose(tabId) {
+      const idx = termTabs.value.findIndex(t => t.id === tabId);
+      if (idx < 0) return;
+      const tab = termTabs.value[idx];
+      if (tab.ws) { try { tab.ws.close(); } catch(e) {} }
+      if (tab.term) { try { tab.term.dispose(); } catch(e) {} }
+      if (tab._resizeHandler) { window.removeEventListener('resize', tab._resizeHandler); }
+      termTabs.value.splice(idx, 1);
+      delete termRefs[tabId];
+      if (termActiveId.value === tabId) {
+        termActiveId.value = termTabs.value.length > 0 ? termTabs.value[termTabs.value.length-1].id : '';
+      }
+    }
+
+    function termQuickConnect() {
+      // If there are servers, connect to the first one
+      if (servers.value.length > 0) {
+        // Switch to resources page so user can click a server
+        // Or auto-connect to the selected/current server
+        const sid = currentServerId.value || (servers.value[0] && servers.value[0].id);
+        if (sid) termConnect(sid);
+      } else {
+        showToast('暂无可用服务器', 'warn');
+      }
+    }
+
+    // Auto-resize active terminal when switching tabs
+    watch(termActiveId, (newId) => {
+      if (newId) {
+        const tab = termTabs.value.find(t => t.id === newId);
+        if (tab && tab.fitAddon) {
+          setTimeout(() => { try { tab.fitAddon.fit(); } catch(e) {} }, 50);
+        }
+      }
+    });
+
+    // Refit terminals when switching back to terminal page
+    watch(currentPage, async (newPage) => {
+      if (newPage === 'terminal') {
+        await nextTick();
+        // Double rAF ensures browser has completed layout after v-show reveals DOM
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            termTabs.value.forEach(t => {
+              if (t.fitAddon) {
+                try { t.fitAddon.fit(); } catch(e) {}
+              }
+              // Force xterm to refresh its canvas
+              if (t.term) {
+                try { t.term.refresh(0, t.term.rows - 1); } catch(e) {}
+              }
+            });
+          });
+        });
+      }
+    });
+
+
+
     return {
       currentPage, darkMode, searchQuery, clock, collapsed,
       groupConfig, autoServices,
@@ -911,7 +1111,9 @@ createApp({
       navServerId, navServerTabs,
       showGroupModal, newGroupName, newGroupId, newGroupColor,
       addGroup, deleteGroup, moveServiceToGroup,
+
       copyText, iconMap, openService,
+      termTabs, termActiveId, termRefs, termConnect, termClose, termQuickConnect,
       servers, currentServerId, monitorData, containers, isCurrentServerOffline,
       selectedMetric, historyHours, historyData, chartBox, metricCards,
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
@@ -933,7 +1135,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.7</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.10.0</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -946,6 +1148,9 @@ createApp({
 
       <div class="nav-item" :class="{active:currentPage==='resources'}" @click="currentPage='resources'">
         <svg class="nav-icon"><use href="#fa-layer-group"/></svg><span>资源管理</span>
+      </div>
+      <div class="nav-item" :class="{active:currentPage==='terminal'}" @click="currentPage='terminal'">
+        <svg class="nav-icon"><use href="#fa-terminal"/></svg><span>终端</span>
       </div>
 
     </nav>
@@ -961,7 +1166,7 @@ createApp({
         <button class="icon-btn" @click="collapsed=!collapsed" :title="collapsed?'展开':'折叠'">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v1.5H2zm0 4.25h12v1.5H2zm0 4.25h8v1.5H2z"/></svg>
         </button>
-        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':'资源管理'}}</h2>
+        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':currentPage==='resources'?'资源管理':'终端'}}</h2>
       </div>
       <div class="topbar-right">
         <div class="search-box" v-if="currentPage==='nav'">
@@ -1120,6 +1325,25 @@ createApp({
 
 
     <!-- ===== RESOURCES PAGE ===== -->
+    <!-- ===== TERMINAL PAGE ===== -->
+    <div class="content" v-show="currentPage==='terminal'" style="padding:0">
+      <div class="term-page">
+        <div class="term-tabs">
+          <div class="term-tab" v-for="t in termTabs" :key="t.id" :class="{active:termActiveId===t.id}" @click="termActiveId=t.id">
+            <span class="tab-dot" :class="t.connected?'on':'off'"></span>
+            <span class="tab-name">{{t.name}}</span>
+            <span class="tab-close" @click.stop="termClose(t.id)">x</span>
+          </div>
+          <div class="term-tab-add" @click="termQuickConnect" title="新建终端">+</div>
+        </div>
+        <div class="term-body" v-for="t in termTabs" :key="t.id" v-show="termActiveId===t.id" :ref="el=>{if(el)termRefs[t.id]=el}"></div>
+        <div class="term-empty" v-if="termTabs.length===0">
+          <svg><use href="#fa-terminal"/></svg>
+          <p>点击服务器「终端」按钮或按 + 连接</p>
+        </div>
+      </div>
+    </div>
+
     <div class="content" v-if="currentPage==='resources'">
       <!-- Header with add button -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
@@ -1193,6 +1417,7 @@ createApp({
             <!-- Action buttons -->
             <div class="sc-btn-row">
               <button class="btn-sm primary" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
+              <button class="btn-sm" @click="termConnect(srv.id)" style="color:var(--accent)">终端</button>
               <button class="btn-sm" :disabled="scanningServerId===srv.id" @click="triggerScan(srv.id)">{{scanningServerId===srv.id ? "扫描中..." : "扫描"}}</button>
               <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
               <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status==='running'" @click="deployAgent(srv.id)">升级Agent</button>

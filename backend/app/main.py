@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 from contextlib import contextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
@@ -15,6 +15,12 @@ from app.models import Base, Server, Service, ServerStatus, ServiceStatus, Servi
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
+from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
+
+class TerminalCreateRequest(BaseModel):
+    server_id: str
+    cols: int = 80
+    rows: int = 24
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
@@ -1883,3 +1889,113 @@ def list_all_services(server_id: Optional[str] = None):
                 "server_is_local": si.get("is_local", False),
             })
         return result
+
+
+# === SSH Terminal Endpoints ===
+
+@app.post("/api/v2/terminal/sessions")
+async def api_create_terminal_session(req: TerminalCreateRequest):
+    """Create a new SSH terminal session"""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(req.server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        # Extract fields while session is active to avoid DetachedInstanceError
+        srv_id = str(srv.id)
+        srv_name = srv.name
+        srv_host = srv.host
+        srv_port = srv.ssh_port or 22
+        srv_user = srv.ssh_user or "root"
+        # ssh_key field stores either a real key or __password__<password>
+        srv_password = None
+        srv_key = None
+        if srv.ssh_key:
+            if srv.ssh_key.startswith("__password__"):
+                srv_password = srv.ssh_key[len("__password__"):]
+            else:
+                srv_key = srv.ssh_key
+    sid, err = create_session(
+        server_id=srv_id, server_name=srv_name,
+        host=srv_host, port=srv_port,
+        user=srv_user,
+        password=srv_password,
+        key_content=srv_key,
+    )
+    if not srv_password and not srv_key:
+        raise HTTPException(400, f"服务器 {srv_name} 未配置SSH密码或密钥，请先在资源管理中添加")
+    if err:
+        raise HTTPException(400, err)
+    session = get_session(sid)
+    if not session:
+        raise HTTPException(500, "Failed to create session")
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(None, lambda: session.connect(cols=req.cols, rows=req.rows))
+    if not ok:
+        remove_session(sid)
+        raise HTTPException(500, f"SSH connection to {srv_host} failed")
+    return {"session_id": sid, "server_name": srv_name, "server_host": srv_host, "user": srv_user}
+
+
+@app.websocket("/ws/terminal/{session_id}")
+async def ws_terminal(websocket: WebSocket, session_id: str):
+    """WebSocket proxy for SSH terminal"""
+    session = get_session(session_id)
+    if not session or not session.connected:
+        await websocket.close(code=4004, reason="Invalid or expired session")
+        return
+    await websocket.accept()
+    loop = asyncio.get_event_loop()
+
+    async def recv_from_ssh():
+        """Read from SSH and send to WebSocket"""
+        while session.is_alive:
+            try:
+                data = await loop.run_in_executor(None, session.recv, 4096)
+                if data:
+                    await websocket.send_text(data.decode("utf-8", errors="replace"))
+                else:
+                    await asyncio.sleep(0.05)
+            except Exception:
+                break
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+    async def send_to_ssh():
+        """Read from WebSocket and send to SSH"""
+        try:
+            while session.is_alive:
+                msg = await websocket.receive_text()
+                import json
+                try:
+                    obj = json.loads(msg)
+                    if obj.get("type") == "resize":
+                        session.resize(obj.get("cols", 80), obj.get("rows", 24))
+                    elif obj.get("type") == "input":
+                        session.send(obj.get("data", ""))
+                except json.JSONDecodeError:
+                    # Plain text - send directly
+                    session.send(msg)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            remove_session(session_id)
+
+    # Run both directions concurrently
+    recv_task = asyncio.create_task(recv_from_ssh())
+    send_task = asyncio.create_task(send_to_ssh())
+    done, pending = await asyncio.wait(
+        [recv_task, send_task], return_when=asyncio.FIRST_COMPLETED
+    )
+    for t in pending:
+        t.cancel()
+    remove_session(session_id)
+
+
+@app.get("/api/v2/terminal/stats")
+async def api_terminal_stats():
+    """Get active terminal session stats"""
+    return {"active_sessions": get_active_count()}
