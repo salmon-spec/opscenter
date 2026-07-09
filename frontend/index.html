@@ -818,7 +818,7 @@ createApp({
 
     // ========== Resource ==========
     async function triggerScan(sid) {
-      try { await apiPost(`${API}/servers/${sid}/scan`); await loadMonitor(); await loadServerServices(sid); await loadAutoServices(); } catch(e) { alert('扫描失败'); }
+      try { await apiPost(`${API}/servers/${sid}/scan-services`); await loadMonitor(); await loadServerServices(sid); await loadAutoServices(); } catch(e) { alert('扫描失败'); }
     }
 
     // ========== Init ==========

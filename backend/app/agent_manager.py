@@ -78,7 +78,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
                     "message": "Agent已在运行",
                     "agent_port": config.get("port", port),
                     "agent_token": config.get("token", ""),
-                    "agent_version": config.get("version", "1.0.0"),
+                    "agent_version": config.get("version", "2.0.0"),
                 }
             except Exception:
                 pass
@@ -116,7 +116,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
                    f"f.write('''{service_content}''')\"")
 
         # 5. Save agent config
-        config = {"port": port, "token": token, "version": "1.0.0"}
+        config = {"port": port, "token": token, "version": "2.0.0"}
         _ssh_exec(client, f"python3 -c \""
                    f"import json; "
                    f"open('{AGENT_DIR}/.agent_config', 'w').write(json.dumps({config}))\"")
@@ -146,7 +146,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             "message": "Agent部署成功",
             "agent_port": port,
             "agent_token": token,
-            "agent_version": "1.0.0",
+            "agent_version": "2.0.0",
         }
 
     except Exception as e:
@@ -175,10 +175,10 @@ def check_agent_status(server: Server, password: str = None) -> Dict:
                     "status": "running",
                     "agent_port": config.get("port", AGENT_DEFAULT_PORT),
                     "agent_token": config.get("token", ""),
-                    "agent_version": config.get("version", "1.0.0"),
+                    "agent_version": config.get("version", "2.0.0"),
                 }
             except Exception:
-                return {"status": "running", "agent_port": AGENT_DEFAULT_PORT, "agent_token": "", "agent_version": "1.0.0"}
+                return {"status": "running", "agent_port": AGENT_DEFAULT_PORT, "agent_token": "", "agent_version": "2.0.0"}
         elif out.strip() == "inactive":
             return {"status": "stopped", "message": "Agent已安装但未运行"}
         else:
@@ -231,3 +231,40 @@ def uninstall_agent(server: Server, password: str = None) -> Dict:
             client.close()
         except Exception:
             pass
+
+
+def fetch_agent_services(host: str, port: int = AGENT_DEFAULT_PORT, token: str = "") -> Optional[Dict]:
+    """Fetch discovered services from a running OpsAgent v2.0+ via HTTP.
+    
+    Returns dict with 'containers', 'ports', 'systemd_services' or None on failure.
+    """
+    import requests as req
+    try:
+        headers = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        resp = req.get(f"http://{host}:{port}/api/v1/services", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except Exception:
+        return None
+
+
+def trigger_agent_scan(host: str, port: int = AGENT_DEFAULT_PORT, token: str = "") -> Optional[Dict]:
+    """Trigger a fresh scan on a remote OpsAgent v2.0+ and return results.
+    
+    Returns dict with 'containers', 'ports', 'systemd_services' or None on failure.
+    """
+    import requests as req
+    try:
+        headers = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        resp = req.post(f"http://{host}:{port}/api/v1/scan", headers=headers, timeout=30)
+        if resp.status_code == 200:
+            return resp.json()
+        return None
+    except Exception:
+        return None
+
