@@ -175,8 +175,44 @@ async def background_health_check():
         await asyncio.sleep(60)
 
 
+
+async def _agent_health_check_loop():
+    """Background task: check Agent status on all remote servers every 5 minutes."""
+    import asyncio
+    await asyncio.sleep(30)  # Wait for startup to complete
+    while True:
+        try:
+            with get_db() as db:
+                remote_servers = db.query(Server).filter(Server.is_local == False).all()
+                for srv in remote_servers:
+                    try:
+                        if srv.agent_status in ("running", "error", "deploying"):
+                            result = check_agent_status(srv)
+                            new_status = result.get("status", "unknown")
+                            if new_status == "running":
+                                srv.agent_status = "running"
+                                if result.get("agent_port"):
+                                    srv.agent_port = result["agent_port"]
+                                if result.get("agent_token"):
+                                    srv.agent_token = result["agent_token"]
+                                if result.get("agent_version"):
+                                    srv.agent_version = result["agent_version"]
+                            elif new_status in ("stopped", "not_installed"):
+                                srv.agent_status = "stopped"
+                            else:
+                                srv.agent_status = "error"
+                    except Exception as e:
+                        print(f"[AgentHealthCheck] Error checking {srv.host}: {e}")
+                db.commit()
+        except Exception as e:
+            print(f"[AgentHealthCheck] Loop error: {e}")
+        await asyncio.sleep(300)  # 5 minutes
+
 @app.on_event("startup")
 async def startup():
+    # Start Agent health check background task
+    import asyncio
+    asyncio.create_task(_agent_health_check_loop())
     # Wait for DB and create tables
     import time
     for i in range(30):
@@ -341,9 +377,18 @@ def delete_server(server_id: str):
             raise HTTPException(404, "Server not found")
         if srv.is_local:
             raise HTTPException(400, "Cannot delete local server")
+        # Uninstall remote Agent before deleting
+        agent_info = ""
+        if srv.agent_status in ("running", "error") and not srv.is_local:
+            try:
+                from app.agent_manager import uninstall_agent
+                result = uninstall_agent(srv)
+                agent_info = f" Agent已卸载" if result.get("success") else f" Agent卸载失败: {result.get('message','')}"
+            except Exception as e:
+                agent_info = f" Agent卸载异常: {e}"
         db.delete(srv)
         db.commit()
-        return {"ok": True}
+        return {"ok": True, "message": f"服务器已删除{agent_info}"}
 
 @app.post("/api/v2/servers/{server_id}/scan")
 def scan_server(server_id: str, password: Optional[str] = None):
@@ -883,16 +928,21 @@ def scan_all():
     with get_db() as db:
         total_added = 0
         total_updated = 0
+        server_results = []
         # Local servers
         servers = db.query(Server).filter(Server.is_local == True).all()
         for srv in servers:
+            sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "docker_local", "added": 0, "updated": 0, "status": "ok"}
             if srv.docker_available:
                 discovered = discover_docker_services(srv, db, srv.host)
                 srv.last_seen = datetime.utcnow()
+                sr_detail["added"] = len(discovered)
                 total_added += len(discovered)
+            server_results.append(sr_detail)
         # Remote servers: try Agent first, then SSH fallback
         remote_servers = db.query(Server).filter(Server.is_local == False).all()
         for srv in remote_servers:
+            sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "", "added": 0, "updated": 0, "status": "ok"}
             try:
                 # Try Agent if running
                 if srv.agent_status == "running" and srv.agent_port:
@@ -904,11 +954,18 @@ def scan_all():
                         srv.docker_available = True
                         total_added += result["added"]
                         total_updated += result["updated"]
+                        sr_detail["source"] = "agent"
+                        sr_detail["added"] = result["added"]
+                        sr_detail["updated"] = result["updated"]
                         db.commit()
+                        server_results.append(sr_detail)
                         continue
                 # Agent not available, fallback to SSH
                 client = get_ssh_client(srv)
                 if not client:
+                    sr_detail["status"] = "skipped"
+                    sr_detail["source"] = "ssh_unavailable"
+                    server_results.append(sr_detail)
                     continue
                 try:
                     result = _sync_ssh_containers_to_db(srv, db, client)
@@ -917,6 +974,9 @@ def scan_all():
                     srv.docker_available = True
                     total_added += result["added"]
                     total_updated += result["updated"]
+                    sr_detail["source"] = "ssh"
+                    sr_detail["added"] = result["added"]
+                    sr_detail["updated"] = result["updated"]
                     db.commit()
                 finally:
                     try:
@@ -925,7 +985,11 @@ def scan_all():
                         pass
             except Exception as e:
                 print(f"Remote scan error for {srv.host}: {e}")
-        return {"discovered": total_added + total_updated, "added": total_added, "updated": total_updated, "message": f"Scan complete, {total_added} added, {total_updated} updated"}
+                sr_detail["status"] = "error"
+                sr_detail["source"] = sr_detail["source"] or "unknown"
+                sr_detail["error"] = str(e)
+            server_results.append(sr_detail)
+        return {"discovered": total_added + total_updated, "added": total_added, "updated": total_updated, "servers": server_results, "message": f"Scan complete, {total_added} added, {total_updated} updated"}
 
 
 # === Monitor (Prometheus proxy) ===
@@ -1284,6 +1348,28 @@ def deploy_agent_api(server_id: str):
         else:
             s.agent_status = "error"
         db.commit()
+    
+    # Auto-trigger first scan after successful deploy
+    scan_info = ""
+    if result.get("success"):
+        try:
+            scan_data = trigger_agent_scan(srv.host, result.get("agent_port", 19100), result.get("agent_token", ""))
+            if scan_data:
+                with get_db() as db2:
+                    s2 = db2.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+                    if s2:
+                        sr = _sync_agent_scan_to_db(s2, db2, scan_data)
+                        s2.status = ServerStatus.online.value
+                        s2.last_seen = datetime.utcnow()
+                        s2.docker_available = True
+                        db2.commit()
+                        scan_info = f" 发现{sr['added']}个服务"
+                        result["scan_added"] = sr["added"]
+                        result["scan_updated"] = sr["updated"]
+        except Exception as e:
+            scan_info = f" 自动扫描失败: {e}"
+        if scan_info:
+            result["message"] = (result.get("message", "") + scan_info).strip()
     
     return result
 

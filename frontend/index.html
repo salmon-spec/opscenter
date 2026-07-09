@@ -401,11 +401,12 @@ createApp({
         const r = await apiPost(`${API}/servers/${serverId}/deploy-agent`, {});
         const data = await r.json();
         if (data.success) {
-          showToast(data.message || 'Agent部署成功', 'ok');
+          const scanInfo = data.scan_added ? `，自动发现${data.scan_added}个服务` : '';
+          showToast((data.message || 'Agent部署成功') + scanInfo, 'ok', 5000);
         } else {
-          showToast('Agent部署失败: ' + (data.message || '未知错误'), 'err');
+          showToast('Agent部署失败: ' + (data.message || '未知错误'), 'err', 5000);
         }
-        await loadServers();
+        await loadServers(); await loadAllServerServices(); await loadAutoServices();
       } catch(e) { showToast('部署异常: ' + e.message, 'err'); }
     }
 
