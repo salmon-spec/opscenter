@@ -66,47 +66,52 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
         if code != 0:
             return {"success": False, "message": "目标服务器未安装Python3，无法部署Agent"}
 
-        # 2. Check if agent is already running
+        # 2. Check if agent is already running — if so, upgrade by reinstalling
         out, _, _ = _ssh_exec(client, f"systemctl is-active {AGENT_SERVICE}")
+        existing_config = {}
         if out.strip() == "active":
-            # Already running, check port
             out2, _, _ = _ssh_exec(client, f"cat {AGENT_DIR}/.agent_config")
             try:
-                config = json.loads(out2.strip())
-                return {
-                    "success": True,
-                    "message": "Agent已在运行",
-                    "agent_port": config.get("port", port),
-                    "agent_token": config.get("token", ""),
-                    "agent_version": config.get("version", "2.0.0"),
-                }
+                existing_config = json.loads(out2.strip())
+                old_version = existing_config.get("version", "1.0.0")
+                if old_version == "2.0.0":
+                    return {
+                        "success": True,
+                        "message": "Agent已是最新版本(v2.0.0)",
+                        "agent_port": existing_config.get("port", port),
+                        "agent_token": existing_config.get("token", ""),
+                        "agent_version": "2.0.0",
+                    }
             except Exception:
                 pass
+            # Old version detected — stop service, will reinstall below
+            _ssh_exec(client, f"systemctl stop {AGENT_SERVICE}")
+            import time; time.sleep(1)
 
         # 3. Create directory and upload agent script
-        token = _generate_token()
+        token = existing_config.get('token', '') or _generate_token()
         _ssh_exec(client, f"mkdir -p {AGENT_DIR}")
 
-        # Upload agent script via SFTP
+        # Upload agent script + scanner module via SFTP
         sftp = client.open_sftp()
-        # Read agent script from local file
-        local_agent_path = f"{AGENT_DIR}/{AGENT_SCRIPT}"
-        try:
-            # Write agent script content via SFTP
-            with sftp.file(f"{AGENT_DIR}/{AGENT_SCRIPT}", 'w') as f:
-                with open(f"agent/{AGENT_SCRIPT}", 'r') as local_f:
-                    f.write(local_f.read())
-        except FileNotFoundError:
-            # Fallback: read from /opt/opscenter/agent/
+        files_to_upload = [AGENT_SCRIPT, "scanner.py"]
+        upload_ok = False
+        for search_dir in ["agent/", "/opt/opscenter/agent/"]:
             try:
-                with sftp.file(f"{AGENT_DIR}/{AGENT_SCRIPT}", 'w') as f:
-                    with open(f"/opt/opscenter/agent/{AGENT_SCRIPT}", 'r') as local_f:
-                        f.write(local_f.read())
+                for fname in files_to_upload:
+                    local_path = f"{search_dir}{fname}"
+                    remote_path = f"{AGENT_DIR}/{fname}"
+                    with open(local_path, 'r') as local_f:
+                        content_to_write = local_f.read()
+                    with sftp.file(remote_path, 'w') as f:
+                        f.write(content_to_write)
+                upload_ok = True
+                break
             except FileNotFoundError:
-                sftp.close()
-                return {"success": False, "message": "Agent脚本文件未找到，请检查部署路径"}
-
+                continue
         sftp.close()
+        if not upload_ok:
+            return {"success": False, "message": "Agent脚本文件未找到，请检查部署路径"}
 
         # 4. Create systemd service
         service_content = _build_service_content(port, token)

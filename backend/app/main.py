@@ -881,83 +881,51 @@ def ssh_test(server_id: str, password: Optional[str] = None):
 @app.post("/api/v2/scan")
 def scan_all():
     with get_db() as db:
-        count = 0
+        total_added = 0
+        total_updated = 0
         # Local servers
         servers = db.query(Server).filter(Server.is_local == True).all()
         for srv in servers:
             if srv.docker_available:
                 discovered = discover_docker_services(srv, db, srv.host)
-                count += len(discovered)
-        # Remote servers with credentials
+                srv.last_seen = datetime.utcnow()
+                total_added += len(discovered)
+        # Remote servers: try Agent first, then SSH fallback
         remote_servers = db.query(Server).filter(Server.is_local == False).all()
         for srv in remote_servers:
-            if not srv.ssh_key and not hasattr(srv, '_password'):
-                continue
-            client = get_ssh_client(srv)
-            if not client:
-                continue
             try:
-                containers = discover_remote_docker_services(client, host=srv.host)
-                for c in containers:
-                    name = c.get('name', '')
-                    image = c.get('image', '')
-                    status_str = c.get('status', '')
-                    ports = c.get('ports', '')
-                    is_running = c.get('is_running', 'Up' in status_str)
-                    
-                    # Auto-classify
-                    short_image = image.split(':')[0].split('/')[-1] if image else ''
-                    from app.discovery import classify_image, get_icon, get_desc, get_url
-                    svc_name = name.replace('-', ' ').replace('_', ' ').title()
-                    svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
-                    svc_category = classify_image(short_image)
-                    svc_icon = get_icon(short_image)
-                    svc_desc = get_desc(short_image, name)
-                    
-                    if not svc_url:
+                # Try Agent if running
+                if srv.agent_status == "running" and srv.agent_port:
+                    scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+                    if scan_data:
+                        result = _sync_agent_scan_to_db(srv, db, scan_data)
+                        srv.status = ServerStatus.online.value
+                        srv.last_seen = datetime.utcnow()
+                        srv.docker_available = True
+                        total_added += result["added"]
+                        total_updated += result["updated"]
+                        db.commit()
                         continue
-                    
-                    # Upsert
-                    existing = db.query(Service).filter(
-                        Service.server_id == srv.id,
-                        Service.container_name == name,
-                    ).first()
-                    if existing:
-                        updated = False
-                        for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category), ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
-                            if val and getattr(existing, field) != val:
-                                setattr(existing, field, val)
-                                updated = True
-                        if updated:
-                            count += 1
-                    else:
-                        svc = Service(
-                            server_id=srv.id,
-                            name=svc_name,
-                            url=svc_url,
-                            category=svc_category,
-                            icon=svc_icon,
-                            description=svc_desc,
-                            source=ServiceSource.docker_auto.value,
-                            status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
-                            container_name=name,
-                            image=image,
-                            ports=ports,
-                        )
-                        db.add(svc)
-                        count += 1
-                # Update server status
-                srv.status = ServerStatus.online.value
-                srv.last_seen = datetime.utcnow()
-                db.commit()
+                # Agent not available, fallback to SSH
+                client = get_ssh_client(srv)
+                if not client:
+                    continue
+                try:
+                    result = _sync_ssh_containers_to_db(srv, db, client)
+                    srv.status = ServerStatus.online.value
+                    srv.last_seen = datetime.utcnow()
+                    srv.docker_available = True
+                    total_added += result["added"]
+                    total_updated += result["updated"]
+                    db.commit()
+                finally:
+                    try:
+                        client.close()
+                    except:
+                        pass
             except Exception as e:
                 print(f"Remote scan error for {srv.host}: {e}")
-            finally:
-                try:
-                    client.close()
-                except:
-                    pass
-        return {"discovered": count, "message": f"Scan complete, {count} services updated/added"}
+        return {"discovered": total_added + total_updated, "added": total_added, "updated": total_updated, "message": f"Scan complete, {total_added} added, {total_updated} updated"}
 
 
 # === Monitor (Prometheus proxy) ===
