@@ -818,7 +818,17 @@ createApp({
 
     // ========== Resource ==========
     async function triggerScan(sid) {
-      try { await apiPost(`${API}/servers/${sid}/scan-services`); await loadMonitor(); await loadServerServices(sid); await loadAutoServices(); } catch(e) { alert('扫描失败'); }
+      try {
+        const r = await apiPost(`${API}/servers/${sid}/scan-services`);
+        const data = await r.json().catch(() => ({}));
+        const src = {agent:'Agent',ssh:'SSH',docker_local:'本地Docker'}[data.source] || data.source || '';
+        if (data.discovered > 0) {
+          alert(`扫描完成（${src}）：新增 ${data.added||0} 个，更新 ${data.updated||0} 个`);
+        } else {
+          alert(`扫描完成（${src}）：服务无变化`);
+        }
+        await loadMonitor(); await loadServerServices(sid); await loadAutoServices(); await loadServers();
+      } catch(e) { alert('扫描失败：' + (e.message||'未知错误')); }
     }
 
     // ========== Init ==========
@@ -1147,7 +1157,7 @@ createApp({
             <!-- Agent info -->
             <div v-if="srv.agent_status==='running' || srv.last_seen" style="font-size:11px;color:var(--text2);margin-bottom:12px;display:flex;gap:12px;flex-wrap:wrap">
               <span v-if="srv.agent_status==='running'" style="color:var(--green)">Agent :{{srv.agent_port||19100}} v{{srv.agent_version||'1.0'}}</span>
-              <span v-if="srv.last_seen">最后在线: {{new Date(srv.last_seen).toLocaleString('zh-CN')}}</span>
+              <span v-if="srv.last_seen">最后在线: {{new Date(srv.last_seen+'Z').toLocaleString('zh-CN')}}</span>
             </div>
             <!-- Action buttons -->
             <div class="sc-btn-row">

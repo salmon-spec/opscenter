@@ -641,7 +641,9 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
         if srv.is_local:
             # Local server: use Docker discovery
             discovered = discover_docker_services(srv, db, srv.host)
-            return {"discovered": len(discovered), "source": "docker_local"}
+            srv.last_seen = datetime.utcnow()
+            db.commit()
+            return {"discovered": len(discovered), "source": "docker_local", "added": len(discovered), "updated": 0}
         
         # Remote server: try Agent first
         if srv.agent_status == "running" and srv.agent_port:
