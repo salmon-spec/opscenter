@@ -1,4 +1,4 @@
-import os, uuid, asyncio
+import os, uuid, asyncio, re
 from datetime import datetime
 from typing import Optional, List
 from contextlib import contextmanager
@@ -464,66 +464,110 @@ def get_agent_services(server_id: str):
     }
 
 
+def _extract_public_ports(container):
+    """Extract unique public host ports from Agent container data."""
+    ports_raw = container.get("ports", [])
+    port_summary = container.get("port_summary", "")
+    # Prefer port_summary (compact string like "0.0.0.0:3000->3000/tcp")
+    source = port_summary if port_summary else str(ports_raw)
+    matches = re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', source)
+    return list(dict.fromkeys(m[0] or m[1] for m in matches if m[0] or m[1]))
+
+
+def _build_svc_url_for_remote(name, host, container):
+    """Build service URL for remote server: get_url first, then port-based fallback.
+    
+    get_url returns relative paths like /gitea/ for CI/CD Nginx setup.
+    For remote servers without such Nginx, we need http://host:port instead.
+    """
+    from app.discovery import get_url
+    svc_url = get_url(name, host) or ''
+    
+    # If get_url returned a relative path, replace with host:port URL
+    if svc_url.startswith('/'):
+        public_ports = _extract_public_ports(container)
+        if public_ports:
+            # Skip SSH-like ports (22, 2222) for web URL
+            web_ports = [p for p in public_ports if p not in ('22', '2222')]
+            port = web_ports[0] if web_ports else (public_ports[0] if public_ports else None)
+            if port:
+                scheme = 'https' if port in ('443', '8443') else 'http'
+                svc_url = f"{scheme}://{host}:{port}"
+            else:
+                svc_url = ''
+        else:
+            svc_url = ''
+    elif not svc_url:
+        # get_url returned nothing, try port-based URL
+        public_ports = _extract_public_ports(container)
+        if public_ports:
+            web_ports = [p for p in public_ports if p not in ('22', '2222')]
+            port = web_ports[0] if web_ports else (public_ports[0] if public_ports else None)
+            if port:
+                scheme = 'https' if port in ('443', '8443') else 'http'
+                svc_url = f"{scheme}://{host}:{port}"
+    
+    return svc_url
+
+
 def _sync_agent_scan_to_db(srv, db, scan_data):
     """Sync Agent scan results (containers) into services table with source='agent'."""
-    from app.discovery import classify_image, get_icon, get_desc, get_url
+    from app.discovery import classify_image, get_icon, get_desc
     containers = scan_data.get("containers", [])
     synced = 0
     updated = 0
+    errors = 0
     for c in containers:
-        name = c.get("name", "")
-        image = c.get("image", "")
-        is_running = c.get("status") == "running" or "Up" in c.get("status", "")
-        ports_raw = c.get("ports", "")
-        
-        short_image = image.split(':')[0].split('/')[-1] if image else ''
-        svc_name = name.replace('-', ' ').replace('_', ' ').title()
-        svc_url = get_url(name, srv.host) or ''
-        
-        # Try to build URL from ports if get_url returns nothing
-        if not svc_url and ports_raw:
-            import re
-            port_matches = re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', str(ports_raw))
-            if port_matches:
-                first_port = port_matches[0][0] or port_matches[0][1]
-                svc_url = f"http://{srv.host}:{first_port}"
-        
-        svc_category = classify_image(short_image)
-        svc_icon = get_icon(short_image)
-        svc_desc = get_desc(short_image, name)
-        
-        if not svc_url:
-            continue
-        
-        existing = db.query(Service).filter(
-            Service.server_id == srv.id,
-            Service.container_name == name,
-        ).first()
-        if existing:
-            changed = False
-            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
-                               ("icon", svc_icon), ("description", svc_desc), ("image", image),
-                               ("ports", str(ports_raw)), ("source", ServiceSource.agent.value)]:
-                if val and getattr(existing, field) != val:
-                    setattr(existing, field, val)
-                    changed = True
-            existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
-            existing.last_scanned_at = datetime.utcnow()
-            if changed:
-                updated += 1
-        else:
-            svc = Service(
-                server_id=srv.id, name=svc_name, url=svc_url,
-                category=svc_category, icon=svc_icon, description=svc_desc,
-                source=ServiceSource.agent.value,
-                status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
-                container_name=name, image=image, ports=str(ports_raw),
-                last_scanned_at=datetime.utcnow(),
-            )
-            db.add(svc)
-            synced += 1
+        try:
+            name = c.get("name", "")
+            image = c.get("image", "")
+            is_running = c.get("status") == "running" or "Up" in c.get("status", "")
+            # Use port_summary (compact) instead of str(ports) (verbose dict list)
+            ports_display = c.get("port_summary", "") or ", ".join(_extract_public_ports(c))
+            
+            short_image = image.split(':')[0].split('/')[-1] if image else ''
+            svc_name = name.replace('-', ' ').replace('_', ' ').title()
+            svc_url = _build_svc_url_for_remote(name, srv.host, c)
+            
+            svc_category = classify_image(short_image)
+            svc_icon = get_icon(short_image)
+            svc_desc = get_desc(short_image, name)
+            
+            if not svc_url:
+                continue
+            
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == name,
+            ).first()
+            if existing:
+                changed = False
+                for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                                   ("icon", svc_icon), ("description", svc_desc), ("image", image),
+                                   ("ports", ports_display), ("source", ServiceSource.agent.value)]:
+                    if val and getattr(existing, field) != val:
+                        setattr(existing, field, val)
+                        changed = True
+                existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+                existing.last_scanned_at = datetime.utcnow()
+                if changed:
+                    updated += 1
+            else:
+                svc = Service(
+                    server_id=srv.id, name=svc_name, url=svc_url,
+                    category=svc_category, icon=svc_icon, description=svc_desc,
+                    source=ServiceSource.agent.value,
+                    status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                    container_name=name, image=image, ports=ports_display,
+                    last_scanned_at=datetime.utcnow(),
+                )
+                db.add(svc)
+                synced += 1
+        except Exception as e:
+            print(f"[WARN] _sync_agent_scan_to_db skip container {c.get('name','?')}: {e}")
+            errors += 1
     
-    return {"added": synced, "updated": updated}
+    return {"added": synced, "updated": updated, "errors": errors}
 
 
 def _sync_ssh_containers_to_db(srv, db, client):
@@ -532,48 +576,58 @@ def _sync_ssh_containers_to_db(srv, db, client):
     containers = discover_remote_docker_services(client, host=srv.host)
     synced = 0
     updated = 0
+    errors = 0
     for c in containers:
-        name = c.get('name', '')
-        image = c.get('image', '')
-        status_str = c.get('status', '')
-        ports = c.get('ports', '')
-        is_running = 'Up' in status_str
-        
-        short_image = image.split(':')[0].split('/')[-1] if image else ''
-        svc_name = name.replace('-', ' ').replace('_', ' ').title()
-        svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
-        svc_category = classify_image(short_image)
-        svc_icon = get_icon(short_image)
-        svc_desc = get_desc(short_image, name)
-        
-        if not svc_url:
-            continue
-        
-        existing = db.query(Service).filter(
-            Service.server_id == srv.id,
-            Service.container_name == name,
-        ).first()
-        if existing:
-            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
-                               ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
-                if val and getattr(existing, field) != val:
-                    setattr(existing, field, val)
-            existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
-            existing.last_scanned_at = datetime.utcnow()
-            updated += 1
-        else:
-            svc = Service(
-                server_id=srv.id, name=svc_name, url=svc_url,
-                category=svc_category, icon=svc_icon, description=svc_desc,
-                source=ServiceSource.docker_auto.value,
-                status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
-                container_name=name, image=image, ports=ports,
-                last_scanned_at=datetime.utcnow(),
-            )
-            db.add(svc)
-            synced += 1
+        try:
+            name = c.get('name', '')
+            image = c.get('image', '')
+            status_str = c.get('status', '')
+            ports = c.get('ports', '')
+            is_running = 'Up' in status_str
+            
+            short_image = image.split(':')[0].split('/')[-1] if image else ''
+            svc_name = name.replace('-', ' ').replace('_', ' ').title()
+            svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
+            # If get_url returns relative path, try auto_url port-based fallback
+            if svc_url.startswith('/') and c.get('auto_url', ''):
+                svc_url = c.get('auto_url', '')
+            elif svc_url.startswith('/'):
+                svc_url = ''  # No valid remote URL for relative path without Nginx
+            svc_category = classify_image(short_image)
+            svc_icon = get_icon(short_image)
+            svc_desc = get_desc(short_image, name)
+            
+            if not svc_url:
+                continue
+            
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == name,
+            ).first()
+            if existing:
+                for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                                   ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
+                    if val and getattr(existing, field) != val:
+                        setattr(existing, field, val)
+                existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+                existing.last_scanned_at = datetime.utcnow()
+                updated += 1
+            else:
+                svc = Service(
+                    server_id=srv.id, name=svc_name, url=svc_url,
+                    category=svc_category, icon=svc_icon, description=svc_desc,
+                    source=ServiceSource.docker_auto.value,
+                    status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                    container_name=name, image=image, ports=ports,
+                    last_scanned_at=datetime.utcnow(),
+                )
+                db.add(svc)
+                synced += 1
+        except Exception as e:
+            print(f"[WARN] _sync_ssh_containers_to_db skip container {c.get('name','?')}: {e}")
+            errors += 1
     
-    return {"added": synced, "updated": updated}
+    return {"added": synced, "updated": updated, "errors": errors}
 
 
 @app.post("/api/v2/servers/{server_id}/scan-services")

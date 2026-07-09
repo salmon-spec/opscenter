@@ -67,7 +67,7 @@ class Service(Base):
     container_id = Column(String(64), nullable=True)
     container_name = Column(String(100), nullable=True)
     image = Column(String(200), nullable=True)
-    ports = Column(String(200), nullable=True)
+    ports = Column(Text, nullable=True)
     sort_order = Column(Integer, default=0)
     hidden = Column(Boolean, default=False)
     account = Column(String(100), nullable=True)
