@@ -13,7 +13,7 @@ from sqlalchemy.pool import QueuePool
 from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
-from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent
+from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
@@ -289,7 +289,7 @@ def create_server(data: ServerCreate):
                         s.agent_status = "running"
                         s.agent_port = deploy_result.get("agent_port", 19100)
                         s.agent_token = deploy_result.get("agent_token", "")
-                        s.agent_version = deploy_result.get("agent_version", "1.0.0")
+                        s.agent_version = deploy_result.get("agent_version", "2.0.0")
                         db2.commit()
                 result["agent_deployed"] = True
                 result["agent_message"] = deploy_result.get("message", "")
@@ -356,56 +356,29 @@ def scan_server(server_id: str, password: Optional[str] = None):
             discovered = discover_docker_services(srv, db, srv.host)
             return {"discovered": len(discovered)}
         
-        # Remote server: need SSH credentials
+        # Remote server: try Agent first, then SSH fallback
+        # Try Agent if deployed and running
+        if srv.agent_status == "running" and srv.agent_port:
+            scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+            if scan_data:
+                result = _sync_agent_scan_to_db(srv, db, scan_data)
+                srv.status = ServerStatus.online.value
+                srv.last_seen = datetime.utcnow()
+                srv.docker_available = True
+                db.commit()
+                return {"discovered": result["added"] + result["updated"], "source": "agent"}
+        
+        # Agent not available, fallback to SSH
         client = get_ssh_client(srv, password=password)
         if not client:
-            raise HTTPException(400, "Cannot connect to server. Check SSH credentials.")
+            raise HTTPException(400, "Agent不可用且SSH连接失败，请检查凭证")
         try:
-            containers = discover_remote_docker_services(client, host=srv.host)
-            count = 0
-            from app.discovery import classify_image, get_icon, get_desc, get_url
-            for c in containers:
-                name = c.get('name', '')
-                image = c.get('image', '')
-                status_str = c.get('status', '')
-                ports = c.get('ports', '')
-                is_running = c.get('is_running', 'Up' in status_str)
-                
-                short_image = image.split(':')[0].split('/')[-1] if image else ''
-                svc_name = name.replace('-', ' ').replace('_', ' ').title()
-                svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
-                svc_category = classify_image(short_image)
-                svc_icon = get_icon(short_image)
-                svc_desc = get_desc(short_image, name)
-                
-                if not svc_url:
-                    continue
-                
-                existing = db.query(Service).filter(
-                    Service.server_id == srv.id,
-                    Service.container_name == name,
-                ).first()
-                if existing:
-                    for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category), ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
-                        if val and getattr(existing, field) != val:
-                            setattr(existing, field, val)
-                    existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
-                else:
-                    svc = Service(
-                        server_id=srv.id, name=svc_name, url=svc_url,
-                        category=svc_category, icon=svc_icon, description=svc_desc,
-                        source=ServiceSource.docker_auto.value,
-                        status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
-                        container_name=name, image=image, ports=ports,
-                    )
-                    db.add(svc)
-                count += 1
-            
+            result = _sync_ssh_containers_to_db(srv, db, client)
             srv.status = ServerStatus.online.value
             srv.last_seen = datetime.utcnow()
             srv.docker_available = True
             db.commit()
-            return {"discovered": count}
+            return {"discovered": result["added"] + result["updated"], "source": "ssh"}
         except Exception as e:
             raise HTTPException(500, f"Scan failed: {e}")
         finally:
@@ -455,6 +428,207 @@ def test_ssh_connection_api(data: SshTestRequest):
         ssh_key=data.ssh_key,
     )
     return {"success": success, "message": message}
+
+
+
+
+# === Agent Service Scan APIs ===
+
+@app.get("/api/v2/servers/{server_id}/agent/services")
+def get_agent_services(server_id: str):
+    """Preview Agent-discovered services without syncing to DB."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            raise HTTPException(400, "本机使用Docker发现，无需Agent扫描")
+        if srv.agent_status != "running":
+            raise HTTPException(400, f"Agent未运行 (status={srv.agent_status})")
+    
+    # Try Agent scan
+    data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    if not data:
+        # Fallback: try cached services
+        data = fetch_agent_services(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    if not data:
+        raise HTTPException(502, "Agent连接失败，请检查Agent是否正常运行")
+    
+    return {
+        "server_id": server_id,
+        "containers": data.get("containers", []),
+        "ports": data.get("ports", []),
+        "systemd_services": data.get("systemd_services", []),
+        "scan_time_ms": data.get("scan_time_ms", 0),
+        "source": "agent",
+    }
+
+
+def _sync_agent_scan_to_db(srv, db, scan_data):
+    """Sync Agent scan results (containers) into services table with source='agent'."""
+    from app.discovery import classify_image, get_icon, get_desc, get_url
+    containers = scan_data.get("containers", [])
+    synced = 0
+    updated = 0
+    for c in containers:
+        name = c.get("name", "")
+        image = c.get("image", "")
+        is_running = c.get("status") == "running" or "Up" in c.get("status", "")
+        ports_raw = c.get("ports", "")
+        
+        short_image = image.split(':')[0].split('/')[-1] if image else ''
+        svc_name = name.replace('-', ' ').replace('_', ' ').title()
+        svc_url = get_url(name, srv.host) or ''
+        
+        # Try to build URL from ports if get_url returns nothing
+        if not svc_url and ports_raw:
+            import re
+            port_matches = re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', str(ports_raw))
+            if port_matches:
+                first_port = port_matches[0][0] or port_matches[0][1]
+                svc_url = f"http://{srv.host}:{first_port}"
+        
+        svc_category = classify_image(short_image)
+        svc_icon = get_icon(short_image)
+        svc_desc = get_desc(short_image, name)
+        
+        if not svc_url:
+            continue
+        
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.container_name == name,
+        ).first()
+        if existing:
+            changed = False
+            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                               ("icon", svc_icon), ("description", svc_desc), ("image", image),
+                               ("ports", str(ports_raw)), ("source", ServiceSource.agent.value)]:
+                if val and getattr(existing, field) != val:
+                    setattr(existing, field, val)
+                    changed = True
+            existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+            existing.last_scanned_at = datetime.utcnow()
+            if changed:
+                updated += 1
+        else:
+            svc = Service(
+                server_id=srv.id, name=svc_name, url=svc_url,
+                category=svc_category, icon=svc_icon, description=svc_desc,
+                source=ServiceSource.agent.value,
+                status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                container_name=name, image=image, ports=str(ports_raw),
+                last_scanned_at=datetime.utcnow(),
+            )
+            db.add(svc)
+            synced += 1
+    
+    return {"added": synced, "updated": updated}
+
+
+def _sync_ssh_containers_to_db(srv, db, client):
+    """Fallback: SSH-based Docker container discovery, sync to DB."""
+    from app.discovery import classify_image, get_icon, get_desc, get_url
+    containers = discover_remote_docker_services(client, host=srv.host)
+    synced = 0
+    updated = 0
+    for c in containers:
+        name = c.get('name', '')
+        image = c.get('image', '')
+        status_str = c.get('status', '')
+        ports = c.get('ports', '')
+        is_running = 'Up' in status_str
+        
+        short_image = image.split(':')[0].split('/')[-1] if image else ''
+        svc_name = name.replace('-', ' ').replace('_', ' ').title()
+        svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
+        svc_category = classify_image(short_image)
+        svc_icon = get_icon(short_image)
+        svc_desc = get_desc(short_image, name)
+        
+        if not svc_url:
+            continue
+        
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.container_name == name,
+        ).first()
+        if existing:
+            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                               ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
+                if val and getattr(existing, field) != val:
+                    setattr(existing, field, val)
+            existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+            existing.last_scanned_at = datetime.utcnow()
+            updated += 1
+        else:
+            svc = Service(
+                server_id=srv.id, name=svc_name, url=svc_url,
+                category=svc_category, icon=svc_icon, description=svc_desc,
+                source=ServiceSource.docker_auto.value,
+                status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                container_name=name, image=image, ports=ports,
+                last_scanned_at=datetime.utcnow(),
+            )
+            db.add(svc)
+            synced += 1
+    
+    return {"added": synced, "updated": updated}
+
+
+@app.post("/api/v2/servers/{server_id}/scan-services")
+def scan_server_services(server_id: str, password: Optional[str] = None):
+    """Scan services on a server using Agent (preferred) or SSH fallback, and sync to DB."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        
+        if srv.is_local:
+            # Local server: use Docker discovery
+            discovered = discover_docker_services(srv, db, srv.host)
+            return {"discovered": len(discovered), "source": "docker_local"}
+        
+        # Remote server: try Agent first
+        if srv.agent_status == "running" and srv.agent_port:
+            scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+            if scan_data:
+                result = _sync_agent_scan_to_db(srv, db, scan_data)
+                srv.status = ServerStatus.online.value
+                srv.last_seen = datetime.utcnow()
+                srv.docker_available = True
+                db.commit()
+                return {
+                    "discovered": result["added"] + result["updated"],
+                    "added": result["added"],
+                    "updated": result["updated"],
+                    "source": "agent",
+                    "containers": len(scan_data.get("containers", [])),
+                }
+        
+        # Agent not available, fallback to SSH
+        client = get_ssh_client(srv, password=password)
+        if not client:
+            raise HTTPException(400, "Agent不可用且SSH连接失败，请检查凭证")
+        try:
+            result = _sync_ssh_containers_to_db(srv, db, client)
+            srv.status = ServerStatus.online.value
+            srv.last_seen = datetime.utcnow()
+            srv.docker_available = True
+            db.commit()
+            return {
+                "discovered": result["added"] + result["updated"],
+                "added": result["added"],
+                "updated": result["updated"],
+                "source": "ssh",
+            }
+        except Exception as e:
+            raise HTTPException(500, f"SSH扫描失败: {e}")
+        finally:
+            try:
+                client.close()
+            except:
+                pass
 
 
 # === Service APIs ===
@@ -1082,7 +1256,7 @@ def deploy_agent_api(server_id: str):
             s.agent_status = "running"
             s.agent_port = result.get("agent_port", 19100)
             s.agent_token = result.get("agent_token", "")
-            s.agent_version = result.get("agent_version", "1.0.0")
+            s.agent_version = result.get("agent_version", "2.0.0")
         else:
             s.agent_status = "error"
         db.commit()

@@ -21,6 +21,7 @@ class ServiceSource(str, enum.Enum):
     docker_auto = "docker_auto"
     nginx = "nginx"
     manual = "manual"
+    agent = "agent"
 
 class Server(Base):
     __tablename__ = "servers"
@@ -71,6 +72,7 @@ class Service(Base):
     hidden = Column(Boolean, default=False)
     account = Column(String(100), nullable=True)
     password = Column(String(200), nullable=True)
+    last_scanned_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     server = relationship("Server", back_populates="services")
