@@ -306,6 +306,7 @@ createApp({
     let historyCache = null;    // { key: { historyData } }  key = serverId:metric:hours
 
     // ========== Resource: Server Tab ==========
+    const scanningServerId = ref(null);
     const resServerId = ref('');   // selected server in resources page
 
     function switchResServer(sid) {
