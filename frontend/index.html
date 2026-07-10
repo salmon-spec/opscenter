@@ -275,8 +275,38 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .term-tab-add:hover{background:var(--card);color:var(--text1)}
 .term-body{flex:1;position:relative;background:#000;overflow:hidden}
 .term-body .xterm{height:100%;padding:4px}
+.term-picker{position:absolute;top:100%;left:0;margin-top:6px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:50;overflow:hidden}
+.term-picker-head{padding:8px 12px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);font-weight:600}
+.term-picker-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;transition:background .15s}
+.term-picker-item:hover{background:var(--card)}
+.term-picker-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.term-picker-dot.on{background:#4caf50}
+.term-picker-dot.off{background:#666}
+.term-picker-name{font-size:13px;color:var(--text1);white-space:nowrap}
+.term-picker-addr{font-size:11px;color:var(--text3);margin-left:auto;white-space:nowrap}
+
 .term-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--text2);gap:16px}
+.term-picker{position:absolute;top:100%;left:0;margin-top:6px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:50;overflow:hidden}
+.term-picker-head{padding:8px 12px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);font-weight:600}
+.term-picker-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;transition:background .15s}
+.term-picker-item:hover{background:var(--card)}
+.term-picker-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.term-picker-dot.on{background:#4caf50}
+.term-picker-dot.off{background:#666}
+.term-picker-name{font-size:13px;color:var(--text1);white-space:nowrap}
+.term-picker-addr{font-size:11px;color:var(--text3);margin-left:auto;white-space:nowrap}
+
 .term-empty svg{width:64px;height:64px;opacity:.3}
+.term-picker{position:absolute;top:100%;left:0;margin-top:6px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;min-width:220px;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:50;overflow:hidden}
+.term-picker-head{padding:8px 12px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);font-weight:600}
+.term-picker-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;transition:background .15s}
+.term-picker-item:hover{background:var(--card)}
+.term-picker-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.term-picker-dot.on{background:#4caf50}
+.term-picker-dot.off{background:#666}
+.term-picker-name{font-size:13px;color:var(--text1);white-space:nowrap}
+.term-picker-addr{font-size:11px;color:var(--text3);margin-left:auto;white-space:nowrap}
+
 .term-empty p{font-size:14px}
 .term-connecting{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85);color:var(--accent);font-size:14px;z-index:5}
 </style>
@@ -1059,15 +1089,25 @@ createApp({
       }
     }
 
+    const showTermPicker = ref(false);
     function termQuickConnect() {
-      // If there are servers, connect to the first one
-      if (servers.value.length > 0) {
-        // Switch to resources page so user can click a server
-        // Or auto-connect to the selected/current server
-        const sid = currentServerId.value || (servers.value[0] && servers.value[0].id);
-        if (sid) termConnect(sid);
-      } else {
+      if (servers.value.length === 0) {
         showToast('暂无可用服务器', 'warn');
+        return;
+      }
+      if (servers.value.length === 1) {
+        termConnect(servers.value[0].id);
+        return;
+      }
+      showTermPicker.value = !showTermPicker.value;
+    }
+    function termPickServer(srv) {
+      showTermPicker.value = false;
+      termConnect(srv.id);
+    }
+    function termPickOutside(e) {
+      if (showTermPicker.value && !e.target.closest('.term-picker-wrap')) {
+        showTermPicker.value = false;
       }
     }
 
@@ -1114,6 +1154,7 @@ createApp({
 
       copyText, iconMap, openService,
       termTabs, termActiveId, termRefs, termConnect, termClose, termQuickConnect,
+      showTermPicker, termPickServer, termPickOutside,
       servers, currentServerId, monitorData, containers, isCurrentServerOffline,
       selectedMetric, historyHours, historyData, chartBox, metricCards,
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
@@ -1327,14 +1368,24 @@ createApp({
     <!-- ===== RESOURCES PAGE ===== -->
     <!-- ===== TERMINAL PAGE ===== -->
     <div class="content" v-show="currentPage==='terminal'" style="padding:0">
-      <div class="term-page">
+      <div class="term-page" @click="termPickOutside">
         <div class="term-tabs">
           <div class="term-tab" v-for="t in termTabs" :key="t.id" :class="{active:termActiveId===t.id}" @click="termActiveId=t.id">
             <span class="tab-dot" :class="t.connected?'on':'off'"></span>
             <span class="tab-name">{{t.name}}</span>
             <span class="tab-close" @click.stop="termClose(t.id)">x</span>
           </div>
-          <div class="term-tab-add" @click="termQuickConnect" title="新建终端">+</div>
+          <div class="term-picker-wrap" style="position:relative">
+            <div class="term-tab-add" @click="termQuickConnect" title="新建终端">+</div>
+            <div class="term-picker" v-if="showTermPicker" @click.stop>
+              <div class="term-picker-head">选择服务器</div>
+              <div class="term-picker-item" v-for="srv in servers" :key="srv.id" @click="termPickServer(srv)">
+                <span class="term-picker-dot" :class="srv.status==='online'?'on':'off'"></span>
+                <span class="term-picker-name">{{srv.name}}</span>
+                <span class="term-picker-addr">{{srv.host}}:{{srv.port}}</span>
+              </div>
+            </div>
+          </div>
         </div>
         <div class="term-body" v-for="t in termTabs" :key="t.id" v-show="termActiveId===t.id" :ref="el=>{if(el)termRefs[t.id]=el}"></div>
         <div class="term-empty" v-if="termTabs.length===0">
