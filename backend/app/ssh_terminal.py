@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SSH Terminal module - manages SSH sessions via WebSocket"""
 
-import uuid, time, logging
+import uuid, time, logging, threading
 from typing import Optional
 import paramiko
 
@@ -10,6 +10,7 @@ logger = logging.getLogger("ssh_terminal")
 _sessions: dict = {}
 MAX_SESSIONS_PER_SERVER = 5
 SESSION_TIMEOUT = 3600
+RECONNECT_GRACE = 30  # seconds to wait for WebSocket reconnect after disconnect
 
 
 class SSHTerminalSession:
@@ -28,6 +29,8 @@ class SSHTerminalSession:
         self.connected = False
         self.created_at = time.time()
         self.last_activity = time.time()
+        self.pending_reconnect = False
+        self._reconnect_timer = None
 
     def connect(self, cols=80, rows=24):
         try:
@@ -92,6 +95,10 @@ class SSHTerminalSession:
         return b""
 
     def close(self):
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+            self._reconnect_timer = None
+        self.pending_reconnect = False
         try:
             if self.channel: self.channel.close()
         except Exception: pass
@@ -100,8 +107,32 @@ class SSHTerminalSession:
         except Exception: pass
         self.connected = False
 
+    def mark_pending_reconnect(self):
+        """Mark session as pending reconnect, start grace timer"""
+        self.pending_reconnect = True
+        self._reconnect_timer = threading.Timer(RECONNECT_GRACE, self._reconnect_timeout)
+        self._reconnect_timer.daemon = True
+        self._reconnect_timer.start()
+        logger.info(f"Session {self.session_id} pending reconnect, grace={RECONNECT_GRACE}s")
+
+    def cancel_pending_reconnect(self):
+        """Cancel reconnect timer, session resumed"""
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+            self._reconnect_timer = None
+        self.pending_reconnect = False
+        logger.info(f"Session {self.session_id} reconnected successfully")
+
+    def _reconnect_timeout(self):
+        """Grace period expired, destroy session"""
+        logger.info(f"Session {self.session_id} reconnect grace expired, destroying")
+        self.pending_reconnect = False
+        remove_session(self.session_id)
+
     @property
     def is_alive(self):
+        if self.pending_reconnect:
+            return True  # Keep alive during grace period
         if not self.connected or not self.channel:
             return False
         try:

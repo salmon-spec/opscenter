@@ -1938,9 +1938,19 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
 
 @app.websocket("/ws/terminal/{session_id}")
 async def ws_terminal(websocket: WebSocket, session_id: str):
-    """WebSocket proxy for SSH terminal"""
+    """WebSocket proxy for SSH terminal, supports reconnect within grace period"""
     session = get_session(session_id)
-    if not session or not session.connected:
+    if not session:
+        await websocket.close(code=4004, reason="Invalid or expired session")
+        return
+    # Support reconnect: if session is in pending_reconnect state, resume it
+    if session.pending_reconnect:
+        if not session.connected or not session.channel:
+            await websocket.close(code=4004, reason="SSH connection lost during grace")
+            remove_session(session_id)
+            return
+        session.cancel_pending_reconnect()
+    elif not session.connected:
         await websocket.close(code=4004, reason="Invalid or expired session")
         return
     await websocket.accept()
@@ -1965,7 +1975,7 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
     async def send_to_ssh():
         """Read from WebSocket and send to SSH"""
         try:
-            while session.is_alive:
+            while session.is_alive and not session.pending_reconnect:
                 msg = await websocket.receive_text()
                 import json
                 try:
@@ -1981,8 +1991,6 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
             pass
         except Exception:
             pass
-        finally:
-            remove_session(session_id)
 
     # Run both directions concurrently
     recv_task = asyncio.create_task(recv_from_ssh())
@@ -1992,7 +2000,26 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
     )
     for t in pending:
         t.cancel()
-    remove_session(session_id)
+    # On WebSocket disconnect: mark pending reconnect instead of destroy
+    if session.is_alive and session.connected:
+        session.mark_pending_reconnect()
+    else:
+        remove_session(session_id)
+
+
+@app.get("/api/v2/terminal/sessions/{session_id}/status")
+async def api_terminal_session_status(session_id: str):
+    """Check if a terminal session can be reconnected"""
+    session = get_session(session_id)
+    if not session:
+        return {"alive": False, "reconnectable": False}
+    if session.pending_reconnect:
+        return {"alive": True, "reconnectable": True, "server_name": session.server_name,
+                "server_host": session.host, "user": session.user, "server_id": session.server_id}
+    if session.is_alive:
+        return {"alive": True, "reconnectable": True, "server_name": session.server_name,
+                "server_host": session.host, "user": session.user, "server_id": session.server_id}
+    return {"alive": False, "reconnectable": False}
 
 
 @app.get("/api/v2/terminal/stats")

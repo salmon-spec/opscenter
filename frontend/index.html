@@ -338,7 +338,7 @@ const iconMap = {code:'#fa-code',chart:'#fa-chart',tool:'#fa-tool',database:'#fa
 
 createApp({
   setup() {
-    const currentPage = ref('nav');
+    const currentPage = ref(localStorage.getItem('ops_page') || 'nav');
     const darkMode = ref(true);
     const searchQuery = ref('');
     const clock = ref('');
@@ -930,6 +930,7 @@ createApp({
       loadEcharts();
       await loadGroupConfig();
       await Promise.all([loadAutoServices(), loadServers()]);
+      await termRestore();
       const onlineSrv = servers.value.find(s => s.status === 'online');
       if (onlineSrv) navServerId.value = onlineSrv.id;
       if (servers.value.length) {
@@ -964,9 +965,19 @@ createApp({
       }
     });
     watch(darkMode, () => { if (chartInstance) { initChart(); renderChart(); } });
+    // Persist current page to localStorage
+    watch(currentPage, (val) => { localStorage.setItem('ops_page', val); });
+    // Persist current page to localStorage
+    watch(currentPage, (val) => { localStorage.setItem('ops_page', val); });
 
     // ========== Template data ==========
       // ========== Terminal Methods ==========
+    function termSaveState() {
+      sessionStorage.setItem('ops_terms', JSON.stringify(
+        termTabs.value.map(t => ({id: t.id, name: t.name, serverId: t.serverId}))
+      ));
+      sessionStorage.setItem('ops_term_active', termActiveId.value);
+    }
     async function termConnect(serverId) {
       try {
         const resp = await fetch(API + '/terminal/sessions', {
@@ -993,11 +1004,74 @@ createApp({
         termTabs.value.push(tab);
         termActiveId.value = tab.id;
         currentPage.value = 'terminal';
+        termSaveState();
         await nextTick();
         // Initialize xterm after DOM renders
         setTimeout(() => termInit(tab), 100);
       } catch(e) {
         showToast('终端连接失败: ' + e.message, 'err');
+      }
+    }
+    async function termRestore() {
+      const saved = sessionStorage.getItem('ops_terms');
+      const savedActive = sessionStorage.getItem('ops_term_active');
+      if (!saved) return;
+      let tabs;
+      try { tabs = JSON.parse(saved); } catch(e) { return; }
+      if (!tabs || tabs.length === 0) return;
+      for (const t of tabs) {
+        try {
+          const resp = await fetch(API + '/terminal/sessions/' + t.id + '/status');
+          const status = await resp.json();
+          if (status.reconnectable) {
+            const tab = {
+              id: t.id,
+              name: t.name || (status.server_name + ' (' + status.user + ')'),
+              serverId: t.serverId || status.server_id,
+              connected: true,
+              term: null,
+              ws: null,
+              fitAddon: null,
+            };
+            termTabs.value.push(tab);
+          } else {
+            // Session expired, create new one
+            if (t.serverId) {
+              try {
+                const resp2 = await fetch(API + '/terminal/sessions', {
+                  method: 'POST',
+                  headers: {'Content-Type': 'application/json'},
+                  body: JSON.stringify({server_id: t.serverId, cols: 80, rows: 24})
+                });
+                if (resp2.ok) {
+                  const data = await resp2.json();
+                  const tab = {
+                    id: data.session_id,
+                    name: data.server_name + ' (' + data.user + ')',
+                    serverId: t.serverId,
+                    connected: true,
+                    term: null,
+                    ws: null,
+                    fitAddon: null,
+                  };
+                  termTabs.value.push(tab);
+                }
+              } catch(e) {}
+            }
+          }
+        } catch(e) {}
+      }
+      if (termTabs.value.length > 0) {
+        // Try to restore active tab, fallback to last
+        const isActiveAlive = termTabs.value.some(t => t.id === savedActive);
+        termActiveId.value = isActiveAlive ? savedActive : termTabs.value[termTabs.value.length-1].id;
+        // Don't override currentPage - let localStorage value decide which page to show
+        termSaveState();
+        await nextTick();
+        // Init xterm for each tab (reconnect WebSocket)
+        for (const tab of termTabs.value) {
+          setTimeout(() => termInit(tab), 100);
+        }
       }
     }
 
@@ -1087,6 +1161,7 @@ createApp({
       if (termActiveId.value === tabId) {
         termActiveId.value = termTabs.value.length > 0 ? termTabs.value[termTabs.value.length-1].id : '';
       }
+      termSaveState();
     }
 
     const showTermPicker = ref(false);
@@ -1104,6 +1179,7 @@ createApp({
     function termPickServer(srv) {
       showTermPicker.value = false;
       termConnect(srv.id);
+      termSaveState();
     }
     function termPickOutside(e) {
       if (showTermPicker.value && !e.target.closest('.term-picker-wrap')) {
@@ -1154,7 +1230,7 @@ createApp({
 
       copyText, iconMap, openService,
       termTabs, termActiveId, termRefs, termConnect, termClose, termQuickConnect,
-      showTermPicker, termPickServer, termPickOutside,
+      showTermPicker, termPickServer, termPickOutside, termSaveState, termRestore, termSaveState, termRestore,
       servers, currentServerId, monitorData, containers, isCurrentServerOffline,
       selectedMetric, historyHours, historyData, chartBox, metricCards,
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
