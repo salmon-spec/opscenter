@@ -94,6 +94,107 @@ class SSHTerminalSession:
                 return b""
         return b""
 
+    def get_sftp(self):
+        """Get or create SFTP client from existing SSH connection"""
+        if not self.client or not self.connected:
+            return None
+        try:
+            if not hasattr(self, '_sftp') or self._sftp is None:
+                self._sftp = self.client.open_sftp()
+            return self._sftp
+        except Exception as e:
+            logger.error(f"SFTP open failed: {e}")
+            return None
+
+    def sftp_list(self, path="."):
+        """List directory contents"""
+        sftp = self.get_sftp()
+        if not sftp:
+            return [], "SFTP not available"
+        try:
+            entries = []
+            for attr in sftp.listdir_attr(path):
+                entries.append({
+                    "name": attr.filename,
+                    "size": attr.st_size,
+                    "is_dir": attr.st_mode and (attr.st_mode & 0o040000) != 0,
+                    "mode": oct(attr.st_mode)[2:] if attr.st_mode else "0",
+                    "mtime": attr.st_mtime if attr.st_mtime else 0,
+                })
+            entries.sort(key=lambda x: (not x["is_dir"], x["name"]))
+            return entries, ""
+        except Exception as e:
+            return [], str(e)
+
+    def sftp_download(self, remote_path):
+        """Download file as bytes"""
+        sftp = self.get_sftp()
+        if not sftp:
+            return None, "SFTP not available"
+        try:
+            import io as _io
+            buf = _io.BytesIO()
+            sftp.getfo(remote_path, buf)
+            buf.seek(0)
+            return buf.read(), ""
+        except Exception as e:
+            return None, str(e)
+
+    def sftp_upload(self, remote_path, data):
+        """Upload bytes to remote path"""
+        sftp = self.get_sftp()
+        if not sftp:
+            return False, "SFTP not available"
+        try:
+            import io as _io
+            buf = _io.BytesIO(data)
+            sftp.putfo(buf, remote_path)
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    def sftp_mkdir(self, path):
+        """Create directory"""
+        sftp = self.get_sftp()
+        if not sftp:
+            return False, "SFTP not available"
+        try:
+            sftp.mkdir(path)
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    def sftp_remove(self, path):
+        """Remove file or directory"""
+        sftp = self.get_sftp()
+        if not sftp:
+            return False, "SFTP not available"
+        try:
+            import stat
+            attr = sftp.stat(path)
+            if stat.S_ISDIR(attr.st_mode):
+                # Recursively remove directory
+                for item in sftp.listdir(path):
+                    item_path = path.rstrip('/') + '/' + item
+                    self.sftp_remove(item_path)
+                sftp.rmdir(path)
+            else:
+                sftp.remove(path)
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    def sftp_rename(self, old_path, new_path):
+        """Rename file or directory"""
+        sftp = self.get_sftp()
+        if not sftp:
+            return False, "SFTP not available"
+        try:
+            sftp.rename(old_path, new_path)
+            return True, ""
+        except Exception as e:
+            return False, str(e)
+
     def close(self):
         if self._reconnect_timer:
             self._reconnect_timer.cancel()
@@ -105,6 +206,10 @@ class SSHTerminalSession:
         try:
             if self.client: self.client.close()
         except Exception: pass
+        try:
+            if hasattr(self, '_sftp') and self._sftp: self._sftp.close()
+        except Exception: pass
+        self._sftp = None
         self.connected = False
 
     def mark_pending_reconnect(self):

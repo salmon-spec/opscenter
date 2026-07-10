@@ -4,7 +4,8 @@ from datetime import datetime
 from typing import Optional, List
 from contextlib import contextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, UploadFile, File as FastAPIFile
+from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import create_engine, text
@@ -2005,6 +2006,96 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
         session.mark_pending_reconnect()
     else:
         remove_session(session_id)
+
+
+@app.get("/api/v2/terminal/sessions/{session_id}/files")
+async def api_sftp_list(session_id: str, path: str = "."):
+    """List directory contents via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    entries, err = session.sftp_list(path)
+    if err:
+        raise HTTPException(400, err)
+    return {"path": path, "entries": entries}
+
+
+@app.get("/api/v2/terminal/sessions/{session_id}/files/download")
+async def api_sftp_download(session_id: str, path: str):
+    """Download a file via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    data, err = session.sftp_download(path)
+    if err:
+        raise HTTPException(400, err)
+    import os
+    filename = os.path.basename(path)
+    return Response(content=data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.post("/api/v2/terminal/sessions/{session_id}/files/upload")
+async def api_sftp_upload(session_id: str, path: str = "", file: UploadFile = FastAPIFile(...)):
+    """Upload a file via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    content = await file.read()
+    remote_path = path.rstrip("/") + "/" + file.filename if path else file.filename
+    ok, err = session.sftp_upload(remote_path, content)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True, "path": remote_path, "size": len(content)}
+
+
+class SftpMkdirRequest(BaseModel):
+    path: str
+
+
+class SftpRenameRequest(BaseModel):
+    old_path: str
+    new_path: str
+
+
+class SftpDeleteRequest(BaseModel):
+    path: str
+
+
+@app.post("/api/v2/terminal/sessions/{session_id}/files/mkdir")
+async def api_sftp_mkdir(session_id: str, req: SftpMkdirRequest):
+    """Create directory via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    ok, err = session.sftp_mkdir(req.path)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
+
+
+@app.post("/api/v2/terminal/sessions/{session_id}/files/rename")
+async def api_sftp_rename(session_id: str, req: SftpRenameRequest):
+    """Rename file or directory via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    ok, err = session.sftp_rename(req.old_path, req.new_path)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
+
+
+@app.post("/api/v2/terminal/sessions/{session_id}/files/delete")
+async def api_sftp_delete(session_id: str, req: SftpDeleteRequest):
+    """Delete file or directory via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    ok, err = session.sftp_remove(req.path)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
 
 
 @app.get("/api/v2/terminal/sessions/{session_id}/status")
