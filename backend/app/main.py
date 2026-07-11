@@ -1310,7 +1310,7 @@ def agent_status_api(server_id: str):
             raise HTTPException(404, "Server not found")
     
     if srv.is_local:
-        return {"status": "local", "message": "本机使用Prometheus采集，无需Agent"}
+        return {"status": "running" if srv.agent_status == "running" else "not_deployed", "agent_port": srv.agent_port, "agent_version": srv.agent_version, "message": "Agent运行中" if srv.agent_status == "running" else "本机Agent未部署"}
     
     result = check_agent_status(srv)
     # Update DB
@@ -1480,7 +1480,7 @@ def get_agent_metrics_api(server_id: str):
             raise HTTPException(404, "Server not found")
     
     if srv.is_local:
-        return {"error": "本机使用Prometheus采集，请使用 /monitor 端点"}
+        return {"error": "本机Agent已内置运行，无需手动部署"}
     
     if srv.agent_status != "running":
         return {"error": "Agent未运行", "agent_status": srv.agent_status}
