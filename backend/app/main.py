@@ -1,4 +1,4 @@
-import os
+﻿import os
 import calendar, uuid, asyncio, re
 from datetime import datetime
 from typing import Optional, List
@@ -25,7 +25,7 @@ class TerminalCreateRequest(BaseModel):
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
-LOCAL_HOST = os.getenv("LOCAL_HOST", "39.99.139.131")
+LOCAL_HOST = os.getenv("LOCAL_HOST", "39.99.130.145")
 
 # === Database ===
 engine = create_engine(DB_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)

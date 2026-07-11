@@ -1,4 +1,4 @@
-{
+﻿{
   "version": "1.0",
   "updated": "2026-07-07",
   "groups": [
@@ -26,7 +26,7 @@
         },
         {
           "name": "Harbor",
-          "url": "https://39.99.139.131:8891/",
+          "url": "https://39.99.130.145:8891/",
           "desc": "Docker私有镜像仓库",
           "username": "admin",
           "password": "Harbor@2026",

@@ -1,4 +1,4 @@
-version: "3.8"
+﻿version: "3.8"
 
 services:
   ops-db:
@@ -34,7 +34,7 @@ services:
     environment:
       DATABASE_URL: postgresql://opscenter:OpsCenter2026@ops-db:5432/opscenter
       PROMETHEUS_URL: http://prometheus:9090
-      LOCAL_HOST: "39.99.157.36"
+      LOCAL_HOST: "39.99.130.145"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /opt/cicd/nginx/nginx.conf:/etc/nginx-source/nginx.conf:ro

@@ -1,4 +1,4 @@
-[Unit]
+﻿[Unit]
 Description=OpsCenter Backend API
 After=network.target docker.service
 Requires=docker.service
@@ -11,7 +11,7 @@ Restart=always
 RestartSec=5
 Environment=DATABASE_URL=postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter
 Environment=PROMETHEUS_URL=http://127.0.0.1:9090
-Environment=LOCAL_HOST=39.99.157.36
+Environment=LOCAL_HOST=39.99.130.145
 Environment=DOCKER_HOST=unix:///var/run/docker.sock
 
 [Install]
