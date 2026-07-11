@@ -1027,29 +1027,28 @@ def scan_all():
 @app.get("/api/v2/servers/{server_id}/monitor")
 @app.get("/api/v2/monitor/{server_id}")
 def get_monitor(server_id: str):
-    """Get real monitoring data for a server (local via Prometheus, remote via SSH)."""
-    import requests as req
+    """Get real monitoring data for a server via Agent (all servers)."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
     
-    # Remote server: try Agent first, then SSH fallback
-    if not srv.is_local:
-        # Try Agent if deployed
-        if srv.agent_status == "running" and srv.agent_port:
-            agent_data = fetch_agent_metrics("127.0.0.1" if srv.is_local else srv.host, srv.agent_port or 19100, srv.agent_token or "")
-            if agent_data:
-                containers = agent_data.get("containers", [])
-                # Calculate rate metrics from cumulative Agent values
-                _cur_net_rx = agent_data.get("net_rx_bytes", 0) or 0
-                _cur_net_tx = agent_data.get("net_tx_bytes", 0) or 0
-                _cur_disk_read = agent_data.get("disk_read_bytes", 0) or 0
-                _cur_disk_write = agent_data.get("disk_write_bytes", 0) or 0
-                _net_rx_rate = 0.0
-                _net_tx_rate = 0.0
-                _disk_read_rate = 0.0
-                _disk_write_rate = 0.0
+    # All servers: try Agent first
+    if srv.agent_status == "running" and srv.agent_port:
+        agent_host = "127.0.0.1" if srv.is_local else srv.host
+        agent_data = fetch_agent_metrics(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+        if agent_data:
+            containers = agent_data.get("containers", [])
+            # Calculate rate metrics from cumulative Agent values
+            _cur_net_rx = agent_data.get("net_rx_bytes", 0) or 0
+            _cur_net_tx = agent_data.get("net_tx_bytes", 0) or 0
+            _cur_disk_read = agent_data.get("disk_read_bytes", 0) or 0
+            _cur_disk_write = agent_data.get("disk_write_bytes", 0) or 0
+            _net_rx_rate = 0.0
+            _net_tx_rate = 0.0
+            _disk_read_rate = 0.0
+            _disk_write_rate = 0.0
+            with get_db() as db:
                 from sqlalchemy import func as _sa_func
                 for _mn, _cv in [("net_rx_raw", _cur_net_rx), ("net_tx_raw", _cur_net_tx), ("disk_read_raw", _cur_disk_read), ("disk_write_raw", _cur_disk_write)]:
                     _last = db.query(MetricHistory).filter(
@@ -1068,38 +1067,39 @@ def get_monitor(server_id: str):
                     elif _mn == "net_tx_raw": _net_tx_rate = _rv
                     elif _mn == "disk_read_raw": _disk_read_rate = _rv
                     elif _mn == "disk_write_raw": _disk_write_rate = _rv
-                
-                normalized = {
-                    "cpu": agent_data.get("cpu_percent", 0),
-                    "cpu_count": agent_data.get("cpu_count", 0),
-                    "memory": agent_data.get("memory_percent", 0),
-                    "memory_total": agent_data.get("memory_total", 0),
-                    "memory_used": agent_data.get("memory_used", 0),
-                    "memory_avail": agent_data.get("memory_available", 0),
-                    "disk": agent_data.get("disk_percent", 0),
-                    "disk_total": agent_data.get("disk_total", 0),
-                    "disk_used": agent_data.get("disk_used", 0),
-                    "disk_avail": agent_data.get("disk_avail", 0),
-                    "disk_read": _disk_read_rate,
-                    "disk_write": _disk_write_rate,
-                    "load1": agent_data.get("load1", 0),
-                    "load5": agent_data.get("load5", 0),
-                    "load15": agent_data.get("load15", 0),
-                    "net_rx": _net_rx_rate,
-                    "net_tx": _net_tx_rate,
-                    "uptime": agent_data.get("uptime", 0),
-                    "container_running": agent_data.get("container_running", 0),
-                    "container_stopped": agent_data.get("container_stopped", 0),
-                }
-                return {
-                    "server_id": server_id,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "metrics": normalized,
-                    "containers": containers,
-                    "source": "agent",
-                }
-            # Agent unreachable, fallback to SSH
-        
+            
+            normalized = {
+                "cpu": agent_data.get("cpu_percent", 0),
+                "cpu_count": agent_data.get("cpu_count", 0),
+                "memory": agent_data.get("memory_percent", 0),
+                "memory_total": agent_data.get("memory_total", 0),
+                "memory_used": agent_data.get("memory_used", 0),
+                "memory_avail": agent_data.get("memory_available", 0),
+                "disk": agent_data.get("disk_percent", 0),
+                "disk_total": agent_data.get("disk_total", 0),
+                "disk_used": agent_data.get("disk_used", 0),
+                "disk_avail": agent_data.get("disk_avail", 0),
+                "disk_read": _disk_read_rate,
+                "disk_write": _disk_write_rate,
+                "load1": agent_data.get("load1", 0),
+                "load5": agent_data.get("load5", 0),
+                "load15": agent_data.get("load15", 0),
+                "net_rx": _net_rx_rate,
+                "net_tx": _net_tx_rate,
+                "uptime": agent_data.get("uptime", 0),
+                "container_running": agent_data.get("container_running", 0),
+                "container_stopped": agent_data.get("container_stopped", 0),
+            }
+            return {
+                "server_id": server_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metrics": normalized,
+                "containers": containers,
+                "source": "agent",
+            }
+    
+    # Agent unreachable or not deployed: try SSH fallback for remote servers
+    if not srv.is_local:
         password = None
         if srv.ssh_key and srv.ssh_key.startswith("__password__"):
             password = srv.ssh_key[len("__password__"):]
@@ -1116,13 +1116,12 @@ def get_monitor(server_id: str):
                            "net_rx": 0, "net_tx": 0, "uptime": 0,
                            "container_running": 0, "container_stopped": 0},
                 "containers": [],
-                "error": "Cannot connect via SSH",
+                "error": "Agent不可达且SSH连接失败",
             }
         try:
             m = collect_remote_metrics(client)
             containers = get_remote_containers(client)
             client.close()
-            # Normalize remote metric keys to match local Prometheus format
             normalized = {
                 "cpu": m.get("cpu_percent", 0),
                 "cpu_count": m.get("cpu_count", 0),
@@ -1150,6 +1149,7 @@ def get_monitor(server_id: str):
                 "timestamp": datetime.utcnow().isoformat(),
                 "metrics": normalized,
                 "containers": containers,
+                "source": "ssh",
             }
         except Exception as e:
             try: client.close()
@@ -1162,102 +1162,20 @@ def get_monitor(server_id: str):
                 "error": str(e),
             }
     
-    # Local server: use Prometheus (parallel batch query)
-    prom_url = os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090")
-
-    queries = {
-        "cpu": '100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100',
-        "cpu_count": 'count(node_cpu_seconds_total{mode="idle"}) without (cpu, mode)',
-        "memory": '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100',
-        "memory_total": 'node_memory_MemTotal_bytes',
-        "memory_avail": 'node_memory_MemAvailable_bytes',
-        "memory_used": 'node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes',
-        "disk": '(1 - node_filesystem_avail_bytes{fstype!="tmpfs",mountpoint="/"} / node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"}) * 100',
-        "disk_total": 'node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"}',
-        "disk_avail": 'node_filesystem_avail_bytes{fstype!="tmpfs",mountpoint="/"}',
-        "disk_used": 'node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"} - node_filesystem_avail_bytes{fstype!="tmpfs",mountpoint="/"}',
-        "disk_read": 'rate(node_disk_read_bytes_total[5m])',
-        "disk_write": 'rate(node_disk_written_bytes_total[5m])',
-        "load1": 'node_load1',
-        "load5": 'node_load5',
-        "load15": 'node_load15',
-        "net_rx": 'rate(node_network_receive_bytes_total{device!="lo"}[5m])',
-        "net_tx": 'rate(node_network_transmit_bytes_total{device!="lo"}[5m])',
-        "swap_total": 'node_memory_SwapTotal_bytes',
-        "swap_used": 'node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes',
-        "uptime": 'time() - node_boot_time_seconds',
-        "containers": 'count(container_last_seen)',
-    }
-
-    def _query_one(item):
-        key, query = item
-        try:
-            resp = req.get(f"{prom_url}/api/v1/query", params={"query": query}, timeout=3)
-            data = resp.json()
-            if data.get("status") == "success" and data.get("data", {}).get("result"):
-                return key, float(data["data"]["result"][0]["value"][1])
-            return key, None
-        except Exception:
-            return key, None
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    result = {}
-    with ThreadPoolExecutor(max_workers=len(queries)) as pool:
-        futures = {pool.submit(_query_one, item): item[0] for item in queries.items()}
-        for f in as_completed(futures):
-            key, val = f.result()
-            result[key] = val
-    
-    # Get container list via subprocess (much faster than Docker SDK)
-    container_list = []
-    container_running = 0
-    container_stopped = 0
-    try:
-        import subprocess, json as _json
-        out = subprocess.check_output(
-            ['docker', 'ps', '-a', '--format', '{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}'],
-            timeout=5, stderr=subprocess.DEVNULL
-        ).decode('utf-8', errors='replace')
-        for line in out.strip().split('\n'):
-            if not line.strip():
-                continue
-            parts = line.split('|', 3)
-            name = parts[0].strip() if len(parts) > 0 else ''
-            image = parts[1].strip() if len(parts) > 1 else ''
-            status = parts[2].strip() if len(parts) > 2 else ''
-            ports_raw = parts[3].strip() if len(parts) > 3 else ''
-            # Simplify port display: extract host port only
-            import re as _re
-            host_ports = _re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', ports_raw)
-            port_strs = [m[0] or m[1] for m in host_ports]
-            # Also include 127.0.0.1 bound ports
-            local_ports = _re.findall(r'127\.0\.0\.1:(\d+)->', ports_raw)
-            port_strs.extend(local_ports)
-            ports_display = ', '.join(dict.fromkeys(port_strs)) if port_strs else '-'
-            is_running = 'Up' in status
-            if is_running:
-                container_running += 1
-            else:
-                container_stopped += 1
-            container_list.append({
-                "name": name,
-                "image": image if image else 'unknown',
-                "status": 'running' if is_running else 'exited',
-                "ports": ports_display,
-            })
-    except Exception as e:
-        print(f"[WARN] Container list via subprocess failed: {e}", flush=True)
-
-    result["container_running"] = container_running
-    result["container_stopped"] = container_stopped
-
+    # Local server without Agent: return empty with hint
     return {
         "server_id": server_id,
         "timestamp": datetime.utcnow().isoformat(),
-        "metrics": result,
-        "containers": container_list,
+        "metrics": {"cpu": 0, "memory": 0, "disk": 0, "cpu_count": 0,
+                   "memory_total": 0, "memory_used": 0, "memory_avail": 0,
+                   "disk_total": 0, "disk_used": 0, "disk_avail": 0,
+                   "disk_read": 0, "disk_write": 0,
+                   "load1": 0, "load5": 0, "load15": 0,
+                   "net_rx": 0, "net_tx": 0, "uptime": 0,
+                   "container_running": 0, "container_stopped": 0},
+        "containers": [],
+        "error": "本机Agent未部署，请部署Agent以启用监控",
     }
-
 
 # === Monitor History ===
 @app.get("/api/v2/servers/{server_id}/history")
@@ -1285,40 +1203,18 @@ def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
                 return {"metric": metric, "values": values[-200:], "source": "agent"}
             return {"metric": metric, "values": [], "note": "Agent未部署或无历史数据"}
 
-    prom_url = os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090")
-    
-    metric_queries = {
-        "cpu": '100 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100',
-        "memory": '(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100',
-        "disk": '(1 - node_filesystem_avail_bytes{fstype!="tmpfs",mountpoint="/"} / node_filesystem_size_bytes{fstype!="tmpfs",mountpoint="/"}) * 100',
-        "net_rx": 'rate(node_network_receive_bytes_total{device!="lo"}[5m])',
-        "net_tx": 'rate(node_network_transmit_bytes_total{device!="lo"}[5m])',
-        "load1": 'node_load1',
-        "load5": 'node_load5',
-        "load15": 'node_load15',
-        "disk_read": 'rate(node_disk_read_bytes_total[5m])',
-        "disk_write": 'rate(node_disk_written_bytes_total[5m])',
-    }
-    
-    query = metric_queries.get(metric, metric_queries["cpu"])
-    
-    try:
-        import time as _time_mod
-        _now = _time_mod.time()
-        _start = _now - hours * 3600
-        resp = req.get(f"{prom_url}/api/v1/query_range", params={
-            "query": query,
-            "start": str(_start),
-            "end": str(_now),
-            "step": f"{max(hours * 60 // 200, 1)}m",
-        }, timeout=10)
-        data = resp.json()
-        if data.get("status") == "success" and data.get("data", {}).get("result"):
-            values = data["data"]["result"][0].get("values", [])
-            return {"metric": metric, "values": [[v[0], float(v[1])] for v in values[-200:]]}
-        return {"metric": metric, "values": []}
-    except Exception as e:
-        return {"metric": metric, "values": [], "error": str(e)}
+    # Local server: use Agent-collected history (same as remote)
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    records = db.query(MetricHistory).filter(
+        MetricHistory.server_id == srv.id,
+        MetricHistory.metric == metric,
+        MetricHistory.timestamp >= cutoff,
+    ).order_by(MetricHistory.timestamp).all()
+    values = [[calendar.timegm(r.timestamp.timetuple()), r.value] for r in records]
+    if values:
+        return {"metric": metric, "values": values[-200:], "source": "agent"}
+    return {"metric": metric, "values": [], "note": "本机Agent未部署或无历史数据"}
 
 
 # === Categories ===
@@ -1358,7 +1254,7 @@ def deploy_agent_api(server_id: str):
         if not srv:
             raise HTTPException(404, "Server not found")
         if srv.is_local:
-            return {"success": False, "message": "本机无需部署Agent，使用Prometheus采集"}
+            return {"success": False, "message": "本机Agent已内置运行，无需手动部署"}
     
     # Mark as deploying
     with get_db() as db:

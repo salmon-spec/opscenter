@@ -478,6 +478,11 @@ createApp({
     });
     const sshTestResult = reactive({ testing: false, success: null, message: '' });
 
+    // ========== Edit Server Modal ==========
+    const showEditServerModal = ref(false);
+    const editServerForm = reactive({ id:'', name:'', host:'', ssh_port:22, ssh_user:'root', auth_type:'password', ssh_password:'', ssh_key:'' });
+    const editSshTestResult = reactive({ testing: false, success: null, message: '' });
+
 
 
     // ========== Clock ==========
@@ -952,6 +957,67 @@ createApp({
       } catch(e) { alert('删除失败: ' + (e.message || '未知错误')); }
     }
 
+    // ========== Edit Server ==========
+    function openEditServer(srv) {
+      const hasKey = srv.ssh_key && !srv.ssh_key.startsWith('__password__');
+      Object.assign(editServerForm, {
+        id: srv.id,
+        name: srv.name || '',
+        host: srv.host || '',
+        ssh_port: srv.ssh_port || 22,
+        ssh_user: srv.ssh_user || 'root',
+        auth_type: hasKey ? 'key' : 'password',
+        ssh_password: '',
+        ssh_key: '',
+      });
+      Object.assign(editSshTestResult, { testing: false, success: null, message: '' });
+      showEditServerModal.value = true;
+    }
+
+    async function saveEditServer() {
+      if (!editServerForm.name || !editServerForm.host) { alert('请填写服务器名称和主机地址'); return; }
+      try {
+        const body = {
+          name: editServerForm.name,
+          host: editServerForm.host,
+          ssh_port: editServerForm.ssh_port,
+          ssh_user: editServerForm.ssh_user,
+        };
+        if (editServerForm.auth_type === 'password' && editServerForm.ssh_password) {
+          body.ssh_password = editServerForm.ssh_password;
+        } else if (editServerForm.auth_type === 'key' && editServerForm.ssh_key) {
+          body.ssh_key = editServerForm.ssh_key;
+        }
+        await apiPut(`${API}/servers/${editServerForm.id}`, body);
+        showEditServerModal.value = false;
+        await loadServers();
+        await loadAllServerServices();
+        showToast('服务器信息已更新', 'ok');
+      } catch(e) { alert('保存失败: ' + e.message); }
+    }
+
+    async function testEditSsh() {
+      if (!editServerForm.host) { alert('请填写主机地址'); return; }
+      Object.assign(editSshTestResult, { testing: true, success: null, message: '' });
+      try {
+        const body = {
+          host: editServerForm.host,
+          port: editServerForm.ssh_port,
+          username: editServerForm.ssh_user,
+        };
+        if (editServerForm.auth_type === 'password') {
+          body.password = editServerForm.ssh_password;
+        } else {
+          body.ssh_key = editServerForm.ssh_key;
+        }
+        const r = await apiPost(`${API}/test-ssh`, body);
+        const data = await r.json();
+        Object.assign(editSshTestResult, { testing: false, success: data.success, message: data.message });
+      } catch(e) {
+        Object.assign(editSshTestResult, { testing: false, success: false, message: '请求失败: ' + e.message });
+      }
+    }
+
     // ========== Resource ==========
     function showToast(msg, type='info', duration=3500) {
       const el = document.createElement('div');
@@ -1411,6 +1477,8 @@ createApp({
       resServerId, switchResServer,
       showAddServerModal, newServer, sshTestResult,
       addServer, testSsh, deleteServer,
+      showEditServerModal, editServerForm, editSshTestResult,
+      openEditServer, saveEditServer, testEditSsh,
     };
   },
 
@@ -1420,7 +1488,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.10.0</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.12.0</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -1765,6 +1833,7 @@ createApp({
               <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
               <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status==='running'" @click="deployAgent(srv.id)">升级Agent</button>
               <button class="btn-sm" v-if="!srv.is_local && srv.agent_status==='running'" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">检查Agent</button>
+              <button class="btn-sm" @click="openEditServer(srv)" style="color:var(--accent2)">编辑</button>
               <div style="flex:1"></div>
               <button class="btn-sm danger" v-if="!srv.is_local" @click="deleteServer(srv.id)">删除</button>
             </div>
@@ -1884,7 +1953,73 @@ createApp({
       </div>
     </div>
 
-        <!-- ===== Add Server Modal ===== -->
+    <!-- ===== Edit Server Modal ===== -->
+    <div class="modal-overlay" v-if="showEditServerModal" @click.self="showEditServerModal=false">
+      <div class="modal" style="min-width:520px">
+        <h3>编辑服务器</h3>
+
+        <div class="modal-row">
+          <label>服务器名称</label>
+          <input v-model="editServerForm.name" placeholder="例如: 生产环境Web" style="flex:1">
+        </div>
+        <div class="modal-row">
+          <label>主机地址</label>
+          <input v-model="editServerForm.host" placeholder="IP 或域名" style="flex:1">
+        </div>
+        <div class="modal-row">
+          <label>SSH端口</label>
+          <input v-model.number="editServerForm.ssh_port" type="number" placeholder="22" style="width:100px">
+        </div>
+        <div class="modal-row">
+          <label>SSH用户名</label>
+          <input v-model="editServerForm.ssh_user" placeholder="root" style="flex:1">
+        </div>
+
+        <!-- Auth type selection -->
+        <div style="margin:12px 0 8px;font-size:13px;color:var(--text2)">登录方式</div>
+        <div style="display:flex;gap:12px;margin-bottom:12px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--text1)">
+            <input type="radio" value="password" v-model="editServerForm.auth_type"> 密码登录
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;color:var(--text1)">
+            <input type="radio" value="key" v-model="editServerForm.auth_type"> 密钥登录
+          </label>
+        </div>
+
+        <!-- Password field -->
+        <div class="modal-row" v-if="editServerForm.auth_type==='password'">
+          <label>新密码</label>
+          <input v-model="editServerForm.ssh_password" type="password" placeholder="留空则不修改密码" style="flex:1">
+        </div>
+
+        <!-- SSH Key field -->
+        <div v-if="editServerForm.auth_type==='key'" style="margin-bottom:10px">
+          <label style="font-size:13px;color:var(--text2);display:block;margin-bottom:6px">新SSH私钥</label>
+          <textarea v-model="editServerForm.ssh_key" placeholder="粘贴新私钥内容（留空则不修改）"
+            style="width:100%;height:120px;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text1);font-size:12px;font-family:Consolas,monospace;resize:vertical"></textarea>
+        </div>
+
+        <!-- Test result -->
+        <div v-if="editSshTestResult.message" style="margin:10px 0;padding:8px 12px;border-radius:8px;font-size:13px"
+          :style="{
+            background: editSshTestResult.success ? 'rgba(34,197,94,.1)' : 'rgba(239,68,68,.1)',
+            color: editSshTestResult.success ? 'var(--green)' : 'var(--red)',
+            border: '1px solid ' + (editSshTestResult.success ? 'rgba(34,197,94,.3)' : 'rgba(239,68,68,.3)')
+          }">
+          {{ editSshTestResult.success ? '✓' : '✗' }} {{ editSshTestResult.message }}
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-sm" @click="testEditSsh" :disabled="editSshTestResult.testing" style="margin-right:auto">
+            {{ editSshTestResult.testing ? '测试中...' : '测试连接' }}
+          </button>
+          <button class="btn-sm" @click="showEditServerModal=false">取消</button>
+          <button class="btn-sm primary" @click="saveEditServer">保存</button>
+        </div>
+      </div>
+    </div>
+
+            <!-- ===== Add Server Modal ===== -->
     <div class="modal-overlay" v-if="showAddServerModal" @click.self="showAddServerModal=false">
       <div class="modal" style="min-width:520px">
         <h3>添加服务器</h3>
