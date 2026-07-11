@@ -13,7 +13,8 @@ IMAGE_CATEGORIES = {
     "自动化工作流": ["n8n", "airflow", "temporal"],
     "运维管理": ["1panel", "portainer"],
     "前端应用": ["mall-admin-web", "mall-app-web"],
-    "应用服务": ["s-pdf", "frooodle", "it-tools", "corentinth", "mall-admin", "mall-search", "mall-portal", "mall-gateway", "mall-auth", "mall-monitor"]
+    "应用服务": ["s-pdf", "frooodle", "it-tools", "corentinth", "mall-admin", "mall-search", "mall-portal", "mall-gateway", "mall-auth", "mall-monitor"],
+    "安全与认证": ["2fauth", "vaultwarden"]
 }
 
 # Image -> icon mapping
@@ -34,7 +35,8 @@ IMAGE_ICONS = {
     "mall-portal": "fa-store", "mall-gateway": "fa-door-open",
     "mall-auth": "fa-key", "mall-monitor": "fa-heartbeat",
     "mall-admin-web": "fa-desktop", "mall-app-web": "fa-mobile-screen",
-    "mongo": "fa-leaf"
+    "mongo": "fa-leaf",
+    "2fauth": "fa-shield-halved", "vaultwarden": "fa-key"
 }
 
 # Image -> description mapping
@@ -53,7 +55,8 @@ IMAGE_DESCS = {
     "mall-admin": "后台管理服务", "mall-search": "商品搜索服务",
     "mall-portal": "会员门户服务", "mall-gateway": "API网关服务",
     "mall-auth": "认证授权服务", "mall-monitor": "服务监控",
-    "mall-admin-web": "管理后台前端", "mall-app-web": "商城顾客端前端"
+    "mall-admin-web": "管理后台前端", "mall-app-web": "商城顾客端前端",
+    "2fauth": "MFA双因素认证管理", "vaultwarden": "密码管理器"
 }
 
 # Container name -> URL mapping (based on nginx routes)
@@ -64,7 +67,9 @@ NAME_URLS = {
     "it-tools": "http://{host}:8443", "n8n": "/n8n/",
     "ai-frontend": "/datahub/", "ai-api": "/datahub/",
     "harbor-nginx": "https://{host}:8891",
-    "1panel-hermes-agent": "http://{host}:9999/ops123"
+    "1panel-hermes-agent": "http://{host}:9999/ops123",
+    "2fauth": "http://{host}:8000",
+    "vaultwarden": "http://{host}:8090"
 }
 
 def classify_image(image_name: str) -> str:

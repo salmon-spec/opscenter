@@ -518,13 +518,36 @@ def get_agent_services(server_id: str):
 
 
 def _extract_public_ports(container):
-    """Extract unique public host ports from Agent container data."""
+    """Extract unique public host ports from Agent container data.
+    
+    Supports two formats from Agent v2.0:
+    - Legacy: port_summary string like "0.0.0.0:3000->3000/tcp"
+    - Agent v2.0: ports as integer list like [8000] or dict list like [{"port": 8000, "bind": "0.0.0.0"}]
+    """
     ports_raw = container.get("ports", [])
     port_summary = container.get("port_summary", "")
-    # Prefer port_summary (compact string like "0.0.0.0:3000->3000/tcp")
-    source = port_summary if port_summary else str(ports_raw)
-    matches = re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', source)
-    return list(dict.fromkeys(m[0] or m[1] for m in matches if m[0] or m[1]))
+    
+    # Try port_summary first (Docker standard format)
+    if port_summary:
+        source = port_summary
+        matches = re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', source)
+        if matches:
+            return list(dict.fromkeys(m[0] or m[1] for m in matches if m[0] or m[1]))
+    
+    # Agent v2.0: ports is a list of integers or dicts
+    result = []
+    for p in ports_raw:
+        if isinstance(p, int):
+            # Integer port, include all (Agent only returns bound ports)
+            result.append(str(p))
+        elif isinstance(p, dict):
+            # Dict format: {"port": 8000, "bind": "0.0.0.0"}
+            bind = p.get("bind", "")
+            port = p.get("port")
+            if port and (bind == "0.0.0.0" or bind == "[::]" or bind.startswith("0.0.0.0") or bind.startswith("[::]")):
+                result.append(str(port))
+    
+    return list(dict.fromkeys(result))
 
 
 def _build_svc_url_for_remote(name, host, container):
