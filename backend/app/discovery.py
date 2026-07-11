@@ -100,7 +100,7 @@ def get_url(container_name: str, host: str) -> Optional[str]:
     return None
 
 
-def discover_docker_services(server: Server, db: Session, host: str = "39.99.130.145") -> List[Service]:
+def discover_docker_services(server: Server, db: Session, host: str = "39.98.123.190") -> List[Service]:
     """Discover services from Docker containers. Returns list of new/updated services."""
     try:
         client = docker.from_env() if server.is_local else None
@@ -220,7 +220,7 @@ def discover_docker_services(server: Server, db: Session, host: str = "39.99.130
         return []
 
 
-def parse_nginx_config(config_path: str = "/etc/nginx-source/nginx.conf", host: str = "39.99.130.145") -> List[Dict]:
+def parse_nginx_config(config_path: str = "/etc/nginx-source/nginx.conf", host: str = "39.98.123.190") -> List[Dict]:
     """Parse Nginx config to discover service routes."""
     if not os.path.exists(config_path):
         return []
