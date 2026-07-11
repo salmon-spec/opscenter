@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.10.0 运维工作台</title>
+<title>OpsCenter v3.12.1 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-<link rel="stylesheet" href="/ops/assets/xterm/xterm.min.css">
-<script src="/ops/assets/xterm/xterm.min.js"></script>
-<script src="/ops/assets/xterm/xterm-addon-fit.min.js"></script>
-<script src="/ops/assets/xterm/xterm-addon-web-links.min.js"></script>
+<link rel="stylesheet" href="/assets/xterm/xterm.min.css">
+<script src="/assets/xterm/xterm.min.js"></script>
+<script src="/assets/xterm/xterm-addon-fit.min.js"></script>
+<script src="/assets/xterm/xterm-addon-web-links.min.js"></script>
 <style>
 :root{--bg:#0d1117;--bg2:#161b22;--card:#1c2330;--card-hover:#243447;--border:#30363d;--text1:#e6edf3;--text2:#8b949e;--accent:#2dd4bf;--accent2:#0d9488;--green:#22c55e;--orange:#f59e0b;--red:#ef4444;--purple:#8b5cf6;--blue:#3b82f6;--radius:10px;--sidebar-w:220px}
 .light{--bg:#f0f2f5;--bg2:#fff;--card:#fff;--card-hover:#f5f5f5;--border:#e5e7eb;--text1:#1f2937;--text2:#6b7280}
@@ -363,7 +363,7 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 <script>
 const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
 
-const API = '/ops/api/v2';
+const API = '/api/v2';
 const iconMap = {code:'#fa-code',chart:'#fa-chart',tool:'#fa-tool',database:'#fa-database',globe:'#fa-globe',bolt:'#fa-bolt',box:'#fa-box',server:'#fa-server'};
 
 createApp({
@@ -420,7 +420,7 @@ createApp({
     // ========== Resource: Service Management ==========
     const serverServices = ref({});   // { serverId: [services] }
     const showEditSvcModal = ref(false);
-    const editSvcForm = reactive({ id:'', name:'', description:'', hidden:false, account:'', password:'' });
+    const editSvcForm = reactive({ id:'', name:'', url:'', description:'', hidden:false, account:'', password:'' });
 
     async function loadServerServices(sid) {
       try {
@@ -448,6 +448,7 @@ createApp({
     function openEditSvc(svc) {
       editSvcForm.id = svc.id;
       editSvcForm.name = svc.name;
+      editSvcForm.url = svc.url || '';
       editSvcForm.description = svc.description || '';
       editSvcForm.hidden = svc.hidden;
       editSvcForm.account = svc.account || '';
@@ -458,6 +459,7 @@ createApp({
       try {
         await apiPut(`${API}/services/${editSvcForm.id}`, {
           name: editSvcForm.name,
+          url: editSvcForm.url,
           description: editSvcForm.description,
           hidden: editSvcForm.hidden,
           account: editSvcForm.account,
@@ -1328,7 +1330,7 @@ createApp({
 
       // Open WebSocket
       const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = wsProto + '//' + location.host + '/ops/ws/terminal/' + tab.id;
+      const wsUrl = wsProto + '//' + location.host + '/ws/terminal/' + tab.id;
       const ws = new WebSocket(wsUrl);
       tab.ws = ws;
 
@@ -1488,7 +1490,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.12.0</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.12.1</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -1925,6 +1927,10 @@ createApp({
         <div class="modal-row">
           <label>名称</label>
           <input v-model="editSvcForm.name" style="flex:1">
+        </div>
+        <div class="modal-row">
+          <label>访问地址</label>
+          <input v-model="editSvcForm.url" placeholder="http://host:port/path" style="flex:1">
         </div>
         <div class="modal-row">
           <label>描述</label>
