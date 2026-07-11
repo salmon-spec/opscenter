@@ -191,6 +191,12 @@ def discover_docker_services(server: Server, db: Session, host: str = "39.98.123
                 )
                 db.add(svc)
                 discovered.append(svc)
+                # Auto-assign group
+                try:
+                    from app.main import _auto_assign_group
+                    _auto_assign_group(str(server.id), str(svc.id), svc.category or '')
+                except Exception:
+                    pass
         
         # Mark stale docker_auto services as down when their container is gone
         active_container_names = {ctr.name for ctr in containers}

@@ -48,9 +48,44 @@
       "order": 999,
       "color": "#475569",
       "icon": "box"
+    },
+    {
+      "id": "database",
+      "name": "数据存储",
+      "order": 40,
+      "color": "#a855f7",
+      "icon": "database"
+    },
+    {
+      "id": "middleware",
+      "name": "消息与注册",
+      "order": 50,
+      "color": "#f97316",
+      "icon": "cube"
+    },
+    {
+      "id": "security",
+      "name": "安全与认证",
+      "order": 90,
+      "color": "#ef4444",
+      "icon": "shield"
     }
   ],
   "serviceGroupMap": {
-    "auto:ba8b865e-c1c0-4f56-9417-c9ee10a18e1b:ddc6ae2f-383e-4728-9a53-d015cc012c5b": "cicd"
+    "auto:ba8b865e-c1c0-4f56-9417-c9ee10a18e1b:ddc6ae2f-383e-4728-9a53-d015cc012c5b": "cicd",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:70d75b75-eb64-4c90-8cc2-74c0ed662627": "security",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:11a3149e-5e9b-48cb-ba77-cd4269e57fb1": "cicd",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:0b63f6f4-f3d5-4672-8025-9b7cdb70ec37": "monitor",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:eceb5ffe-1a06-4b0d-8b20-9caab8190104": "monitor",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:e02edc43-08c3-4847-bb1c-64a5bb0dfbe5": "auto_workflow",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:e7adc149-23b2-4369-87aa-387c2eb46bdd": "app",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:cb1180e2-e5a9-4ead-b37c-5b5308a72a03": "ops",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:38ae14d0-ce3a-490e-847f-fb39b1ef69ee": "app",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:a09c6d03-9e35-4091-aff5-0d795f239de8": "security",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:31360f7b-219b-4678-b20a-bcc9070788bf": "network",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:e7305085-0f56-4195-a56d-f52cb18b852d": "network",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:0ee5f4b9-1b4e-4a7b-b397-3ad26f1ca2bf": "app",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:47399c8b-dffb-4321-8c4e-88c421e7d3ba": "cicd",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:f8879059-c81f-414f-8dd2-386902c19d03": "ungrouped"
   }
 }

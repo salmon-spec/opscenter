@@ -27,6 +27,41 @@ class TerminalCreateRequest(BaseModel):
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
 LOCAL_HOST = os.getenv("LOCAL_HOST", "39.98.123.190")
 
+# Category -> Group ID auto-mapping for service grouping
+CATEGORY_TO_GROUP = {
+    "代码与CI/CD": "cicd",
+    "CI/CD": "cicd",
+    "监控与日志": "monitor",
+    "监控": "monitor",
+    "网络与代理": "network",
+    "数据存储": "database",
+    "消息与注册": "middleware",
+    "自动化工作流": "auto_workflow",
+    "自动化": "auto_workflow",
+    "运维管理": "ops",
+    "运维面板": "ops",
+    "应用服务": "app",
+    "文档工具": "app",
+    "开发工具": "app",
+    "数据平台": "app",
+    "前端应用": "app",
+    "安全与认证": "security",
+}
+
+DEFAULT_GROUPS = [
+    {"id": "cicd", "name": "代码与CI/CD", "order": 10, "color": "#2dd4bf", "icon": "code"},
+    {"id": "monitor", "name": "监控与日志", "order": 20, "color": "#3b82f6", "icon": "chart"},
+    {"id": "network", "name": "网络与代理", "order": 30, "color": "#64748b", "icon": "globe"},
+    {"id": "database", "name": "数据存储", "order": 40, "color": "#a855f7", "icon": "database"},
+    {"id": "middleware", "name": "消息与注册", "order": 50, "color": "#f97316", "icon": "cube"},
+    {"id": "auto_workflow", "name": "自动化工作流", "order": 60, "color": "#ec4899", "icon": "bolt"},
+    {"id": "ops", "name": "运维管理", "order": 70, "color": "#8b5cf6", "icon": "tool"},
+    {"id": "app", "name": "应用服务", "order": 80, "color": "#f59e0b", "icon": "box"},
+    {"id": "security", "name": "安全与认证", "order": 90, "color": "#ef4444", "icon": "shield"},
+    {"id": "ungrouped", "name": "未分组", "order": 999, "color": "#475569", "icon": "inbox"},
+]
+
+
 # === Database ===
 engine = create_engine(DB_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)
 SessionLocal = sessionmaker(bind=engine)
@@ -216,6 +251,43 @@ async def _agent_health_check_loop():
             print(f"[AgentHealthCheck] Loop error: {e}")
         await asyncio.sleep(300)  # 5 minutes
 
+
+
+def _auto_assign_group(server_id: str, service_id: str, category: str):
+    """Auto-assign a service to a group based on its category."""
+    group_id = CATEGORY_TO_GROUP.get(category, "ungrouped")
+    config = _read_groups_json()
+    existing_ids = [g["id"] for g in config.get("groups", [])]
+    for dg in DEFAULT_GROUPS:
+        if dg["id"] not in existing_ids:
+            config.setdefault("groups", []).append(dg)
+    key = f"auto:{server_id}:{service_id}"
+    config.setdefault("serviceGroupMap", {})[key] = group_id
+    _write_groups_json(config)
+    return group_id
+
+
+def _auto_assign_all_groups():
+    """Auto-assign all services to groups based on their categories."""
+    with get_db() as db:
+        services = db.query(Service).all()
+    config = _read_groups_json()
+    existing_ids = [g["id"] for g in config.get("groups", [])]
+    for dg in DEFAULT_GROUPS:
+        if dg["id"] not in existing_ids:
+            config.setdefault("groups", []).append(dg)
+    changed = False
+    for svc in services:
+        key = f"auto:{svc.server_id}:{svc.id}"
+        group_id = CATEGORY_TO_GROUP.get(svc.category, "ungrouped")
+        if config.get("serviceGroupMap", {}).get(key) != group_id:
+            config.setdefault("serviceGroupMap", {})[key] = group_id
+            changed = True
+    if changed:
+        _write_groups_json(config)
+    return changed
+
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task
@@ -276,6 +348,8 @@ async def startup():
     asyncio.create_task(background_health_check())
     # Start background agent metrics collector
     asyncio.create_task(background_agent_collector())
+    # Auto-assign groups on startup
+    _auto_assign_all_groups()
 
 
 # === Server APIs ===
@@ -406,8 +480,24 @@ def scan_server(server_id: str, password: Optional[str] = None):
             raise HTTPException(404, "Server not found")
         
         if srv.is_local:
+            # Try Agent first, fallback to Docker discovery
+            if srv.agent_status == "running" and srv.agent_port:
+                scan_data = trigger_agent_scan("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
+                if scan_data:
+                    result = _sync_agent_scan_to_db(srv, db, scan_data)
+                    srv.last_seen = datetime.utcnow()
+                    db.commit()
+                    # Auto-assign groups for newly discovered services
+                    for svc in db.query(Service).filter(Service.server_id == srv.id).all():
+                        _auto_assign_group(str(srv.id), str(svc.id), svc.category or "")
+                    return {"discovered": result["added"] + result["updated"], "source": "agent"}
+            # Fallback: Docker SDK
             discovered = discover_docker_services(srv, db, srv.host)
-            return {"discovered": len(discovered)}
+            for d in discovered:
+                _auto_assign_group(str(srv.id), str(d.id), d.category or "")
+            srv.last_seen = datetime.utcnow()
+            db.commit()
+            return {"discovered": len(discovered), "source": "docker_local"}
         
         # Remote server: try Agent first, then SSH fallback
         # Try Agent if deployed and running
@@ -639,6 +729,7 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                 )
                 db.add(svc)
                 synced += 1
+                _auto_assign_group(str(srv.id), str(svc.id), svc_category)
         except Exception as e:
             print(f"[WARN] _sync_agent_scan_to_db skip container {c.get('name','?')}: {e}")
             errors += 1
@@ -699,6 +790,7 @@ def _sync_ssh_containers_to_db(srv, db, client):
                 )
                 db.add(svc)
                 synced += 1
+                _auto_assign_group(str(srv.id), str(svc.id), svc_category)
         except Exception as e:
             print(f"[WARN] _sync_ssh_containers_to_db skip container {c.get('name','?')}: {e}")
             errors += 1
@@ -715,11 +807,28 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
             raise HTTPException(404, "Server not found")
         
         if srv.is_local:
-            # Local server: use Docker discovery
+            # Local server: try Agent first, fallback to Docker discovery
+            if srv.agent_status == "running" and srv.agent_port:
+                scan_data = trigger_agent_scan("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
+                if scan_data:
+                    result = _sync_agent_scan_to_db(srv, db, scan_data)
+                    srv.last_seen = datetime.utcnow()
+                    db.commit()
+                    return {
+                        "discovered": result["added"] + result["updated"],
+                        "added": result["added"],
+                        "updated": result["updated"],
+                        "source": "agent",
+                        "containers": len(scan_data.get("containers", [])),
+                    }
+            # Fallback: Docker SDK
             discovered = discover_docker_services(srv, db, srv.host)
+            for d in discovered:
+                _auto_assign_group(str(srv.id), str(d.id), d.category or "")
             srv.last_seen = datetime.utcnow()
             db.commit()
-            return {"discovered": len(discovered), "source": "docker_local", "added": len(discovered), "updated": 0}
+            result_count = len(discovered)
+            return {"discovered": result_count, "source": "docker_local", "added": result_count, "updated": 0}
         
         # Remote server: try Agent first
         if srv.agent_status == "running" and srv.agent_port:
@@ -966,6 +1075,8 @@ def scan_all():
             sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "docker_local", "added": 0, "updated": 0, "status": "ok"}
             if srv.docker_available:
                 discovered = discover_docker_services(srv, db, srv.host)
+                for d in discovered:
+                    _auto_assign_group(str(srv.id), str(d.id), d.category or "")
                 srv.last_seen = datetime.utcnow()
                 sr_detail["added"] = len(discovered)
                 total_added += len(discovered)
