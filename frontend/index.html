@@ -412,6 +412,10 @@ createApp({
     const newGroupName = ref('');
     const newGroupId = ref('');
     const newGroupColor = ref('#64748b');
+    const editingGroup = ref(null);
+    const editGroupName = ref('');
+    const editGroupColor = ref('#64748b');
+    const editGroupOrder = ref(100);
 
     // ========== Resource: Service Management ==========
     const serverServices = ref({});   // { serverId: [services] }
@@ -671,8 +675,30 @@ createApp({
       if (!confirm(`确定删除分组？映射到此分组的服务将移至"未分组"`)) return;
       try {
         await apiDelete(`${API}/group-config/groups/${gid}`);
+        editingGroup.value = null;
         await loadGroupConfig();
       } catch(e) { alert('删除分组失败: ' + e.message); }
+    }
+
+    function startEditGroup(g) {
+      editingGroup.value = g.id;
+      editGroupName.value = g.name;
+      editGroupColor.value = g.color;
+      editGroupOrder.value = g.order;
+    }
+
+    function cancelEditGroup() { editingGroup.value = null; }
+
+    async function saveEditGroup(g) {
+      try {
+        await fetch(`${API}/group-config/groups/${g.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: g.id, name: editGroupName.value, order: editGroupOrder.value, color: editGroupColor.value, icon: g.icon || 'box' })
+        });
+        editingGroup.value = null;
+        await loadGroupConfig();
+      } catch(e) { alert('修改分组失败: ' + e.message); }
     }
 
     async function moveServiceToGroup(serviceKey, groupId) {
@@ -1366,7 +1392,7 @@ createApp({
       filteredGroups, stats, effectiveStatus,
       navServerId, navServerTabs,
       showGroupModal, newGroupName, newGroupId, newGroupColor,
-      addGroup, deleteGroup, moveServiceToGroup,
+      addGroup, deleteGroup, startEditGroup, cancelEditGroup, saveEditGroup, editingGroup, editGroupName, editGroupColor, editGroupOrder, moveServiceToGroup,
 
       copyText, iconMap, openService,
       termTabs, termActiveId, termRefs, termConnect, termClose, termQuickConnect,
@@ -1790,13 +1816,25 @@ createApp({
     <div class="modal-overlay" v-if="showGroupModal" @click.self="showGroupModal=false">
       <div class="modal">
         <h3>分组管理</h3>
-        <div v-for="g in groupConfig.groups" :key="g.id" class="group-list-item">
-          <span class="g-dot" :style="{background:g.color}"></span>
-          <span class="g-name">{{g.name}}</span>
-          <span class="g-order">排序: {{g.order}}</span>
-          <div class="g-btns">
-            <button class="btn-sm danger" @click="deleteGroup(g.id)" v-if="g.id!=='ungrouped'">删除</button>
-          </div>
+        <div v-for="g in groupConfig.groups" :key="g.id" class="group-list-item" style="flex-wrap:wrap">
+          <template v-if="editingGroup!==g.id">
+            <span class="g-dot" :style="{background:g.color}"></span>
+            <span class="g-name">{{g.name}}</span>
+            <span class="g-order">排序: {{g.order}}</span>
+            <div class="g-btns">
+              <button class="btn-sm" @click="startEditGroup(g)">编辑</button>
+              <button class="btn-sm danger" @click="deleteGroup(g.id)" v-if="g.id!=='ungrouped'">删除</button>
+            </div>
+          </template>
+          <template v-else>
+            <div style="width:100%;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input v-model="editGroupName" placeholder="分组名称" style="width:120px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+              <input type="color" v-model="editGroupColor" style="width:32px;height:28px;border:none;cursor:pointer">
+              <input type="number" v-model.number="editGroupOrder" placeholder="排序" style="width:70px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px">
+              <button class="btn-sm primary" @click="saveEditGroup(g)">保存</button>
+              <button class="btn-sm" @click="cancelEditGroup">取消</button>
+            </div>
+          </template>
         </div>
         <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
           <div style="font-size:13px;font-weight:500;margin-bottom:8px">新增分组</div>

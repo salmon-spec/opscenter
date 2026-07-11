@@ -201,6 +201,33 @@ def check_agent_status(server: Server, password: str = None) -> Dict:
             pass
 
 
+def _normalize_agent_metrics(data: dict) -> dict:
+    """Normalize Agent metric field names for compatibility.
+    
+    Agent v2.0 source uses canonical names but older deployed agents 
+    may use different names. This maps old names to canonical names.
+    """
+    field_map = {
+        "cpu_usage": "cpu_percent",
+        "memory_usage": "memory_percent",
+        "disk_usage": "disk_percent",
+        "disk_available": "disk_avail",
+        "load_1m": "load1",
+        "load_5m": "load5",
+        "load_15m": "load15",
+        "network_rx_bytes": "net_rx_bytes",
+        "network_tx_bytes": "net_tx_bytes",
+        "network_iface": "net_iface",
+        "uptime_seconds": "uptime",
+        "docker_containers": "container_running",
+    }
+    result = {}
+    for k, v in data.items():
+        canonical = field_map.get(k, k)
+        result[canonical] = v
+    return result
+
+
 def fetch_agent_metrics(host: str, port: int = AGENT_DEFAULT_PORT, token: str = "") -> Optional[Dict]:
     """Fetch metrics from a running OpsAgent via HTTP."""
     import requests as req
@@ -210,7 +237,8 @@ def fetch_agent_metrics(host: str, port: int = AGENT_DEFAULT_PORT, token: str = 
             headers["Authorization"] = f"Bearer {token}"
         resp = req.get(f"http://{host}:{port}/metrics", headers=headers, timeout=5)
         if resp.status_code == 200:
-            return resp.json()
+            data = resp.json()
+            return _normalize_agent_metrics(data)
         return None
     except Exception:
         return None

@@ -1038,7 +1038,7 @@ def get_monitor(server_id: str):
     if not srv.is_local:
         # Try Agent if deployed
         if srv.agent_status == "running" and srv.agent_port:
-            agent_data = fetch_agent_metrics(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+            agent_data = fetch_agent_metrics("127.0.0.1" if srv.is_local else srv.host, srv.agent_port or 19100, srv.agent_token or "")
             if agent_data:
                 containers = agent_data.get("containers", [])
                 # Calculate rate metrics from cumulative Agent values
@@ -1469,13 +1469,12 @@ def _collect_agent_metrics():
             Base.metadata.create_all(bind=engine)
             
             servers = db.query(Server).filter(
-                Server.is_local == False,
                 Server.agent_status == "running"
             ).all()
             
             for srv in servers:
                 try:
-                    data = fetch_agent_metrics(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+                    data = fetch_agent_metrics("127.0.0.1" if srv.is_local else srv.host, srv.agent_port or 19100, srv.agent_token or "")
                     if not data:
                         # Agent unreachable
                         srv.agent_status = "stopped"
@@ -1590,7 +1589,7 @@ def get_agent_metrics_api(server_id: str):
     if srv.agent_status != "running":
         return {"error": "Agent未运行", "agent_status": srv.agent_status}
     
-    data = fetch_agent_metrics(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    data = fetch_agent_metrics("127.0.0.1" if srv.is_local else srv.host, srv.agent_port or 19100, srv.agent_token or "")
     if not data:
         # Update status
         with get_db() as db:
@@ -1823,6 +1822,23 @@ def add_group(item: GroupItem):
     current["groups"].sort(key=lambda g: g.get("order", 100))
     _write_groups_json(current)
     return {"ok": True, "group": item.model_dump()}
+
+@app.put("/api/v2/group-config/groups/{group_id}")
+def update_group(group_id: str, item: GroupItem):
+    """Update a group's name, color, icon, or order."""
+    current = _read_groups_json()
+    found = False
+    for i, g in enumerate(current["groups"]):
+        if g["id"] == group_id:
+            current["groups"][i] = item.model_dump()
+            found = True
+            break
+    if not found:
+        raise HTTPException(404, f"Group '{group_id}' not found")
+    current["groups"].sort(key=lambda g: g.get("order", 100))
+    _write_groups_json(current)
+    return {"ok": True, "group": item.model_dump()}
+
 
 @app.delete("/api/v2/group-config/groups/{group_id}")
 def delete_group(group_id: str):
