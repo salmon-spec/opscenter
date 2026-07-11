@@ -228,12 +228,12 @@ def _run_health_check():
                         if not base:
                             srv = db.query(Server).filter(Server.id == svc.server_id).first()
                             host = srv.host if srv else LOCAL_HOST
-                            base = f"http://{host}"
+                            base = f"http://{srv.host}"
                         check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
                     elif check_url.startswith("/"):
                         srv = db.query(Server).filter(Server.id == svc.server_id).first()
                         host = srv.host if srv else LOCAL_HOST
-                        check_url = f"http://{host}{check_url}"
+                        check_url = f"http://{srv.host}{check_url}"
                     resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
                     svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
                 except Exception:
@@ -903,7 +903,7 @@ def _do_sync_ports_systemd(srv, db, scan_data):
         svc_desc = hint.get("desc", get_desc(process, process))
         
         if hint:
-            svc_url = hint["url_tpl"].format(host="127.0.0.1" if srv.is_local else srv.host)
+            svc_url = hint["url_tpl"].format(host=srv.host)
         else:
             host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.is_local else srv.host
             svc_url = f"http://{host}:{port_num}/"
@@ -1239,12 +1239,12 @@ def trigger_health_check():
                     if not base:
                         srv = db.query(Server).filter(Server.id == svc.server_id).first()
                         host = srv.host if srv else LOCAL_HOST
-                        base = f"http://{host}"
+                        base = f"http://{srv.host}"
                     check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
                 elif check_url.startswith("/"):
                     srv = db.query(Server).filter(Server.id == svc.server_id).first()
                     host = srv.host if srv else LOCAL_HOST
-                    check_url = f"http://{host}{check_url}"
+                    check_url = f"http://{srv.host}{check_url}"
                 resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
                 svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
             except Exception:

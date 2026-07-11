@@ -61,11 +61,11 @@ IMAGE_DESCS = {
 
 # Container name -> URL mapping (based on nginx routes)
 NAME_URLS = {
-    "nginx": "/", "gitea": "/gitea/", "jenkins": "/jenkins/",
-    "prometheus": "/prometheus/", "grafana": "/grafana/",
-"stirling-pdf": "/pdf/",
-    "it-tools": "http://{host}:8443", "n8n": "/n8n/",
-    "ai-frontend": "/datahub/", "ai-api": "/datahub/",
+    "nginx": "http://{host}/", "gitea": "http://{host}/gitea/", "jenkins": "http://{host}/jenkins/",
+    "prometheus": "http://{host}/prometheus/", "grafana": "http://{host}/grafana/",
+"stirling-pdf": "http://{host}/pdf/",
+    "it-tools": "http://{host}:8443", "n8n": "http://{host}/n8n/",
+    "ai-frontend": "http://{host}/datahub/", "ai-api": "http://{host}/datahub/",
     "harbor-nginx": "https://{host}:8891",
     "1panel-hermes-agent": "http://{host}:9999/ops123",
     "2fauth": "http://{host}:8000",
@@ -105,8 +105,10 @@ def get_url(container_name: str, host: str) -> Optional[str]:
     return None
 
 
-def discover_docker_services(server: Server, db: Session, host: str = "39.98.123.190") -> List[Service]:
+def discover_docker_services(server: Server, db: Session, host: str = None) -> List[Service]:
     """Discover services from Docker containers. Returns list of new/updated services."""
+    if host is None:
+        host = server.host
     try:
         client = docker.from_env() if server.is_local else None
         if not client:
@@ -231,11 +233,13 @@ def discover_docker_services(server: Server, db: Session, host: str = "39.98.123
         return []
 
 
-def parse_nginx_config(config_path: str = "/etc/nginx-source/nginx.conf", host: str = "39.98.123.190") -> List[Dict]:
+def parse_nginx_config(config_path: str = "/etc/nginx-source/nginx.conf", host: str = None) -> List[Dict]:
     """Parse Nginx config to discover service routes."""
     if not os.path.exists(config_path):
         return []
     
+    if host is None:
+        host = "127.0.0.1"
     try:
         with open(config_path, "r") as f:
             content = f.read()
@@ -250,7 +254,7 @@ def parse_nginx_config(config_path: str = "/etc/nginx-source/nginx.conf", host: 
             name = path.strip("/").replace("-", " ").replace("/", " ").title()
             routes.append({
                 "name": name,
-                "url": path,
+                "url": f"http://{host}{path}",
                 "source": "nginx",
             })
         return routes
