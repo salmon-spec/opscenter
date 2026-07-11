@@ -8,6 +8,13 @@
       "icon": "code"
     },
     {
+      "id": "security",
+      "name": "安全与认证",
+      "order": 15,
+      "color": "#ef4444",
+      "icon": "shield"
+    },
+    {
       "id": "monitor",
       "name": "监控与日志",
       "order": 20,
@@ -62,13 +69,6 @@
       "order": 50,
       "color": "#f97316",
       "icon": "cube"
-    },
-    {
-      "id": "security",
-      "name": "安全与认证",
-      "order": 90,
-      "color": "#ef4444",
-      "icon": "shield"
     }
   ],
   "serviceGroupMap": {
@@ -86,6 +86,19 @@
     "auto:934025b6-529b-40dd-ac54-c9cd3967406e:e7305085-0f56-4195-a56d-f52cb18b852d": "network",
     "auto:934025b6-529b-40dd-ac54-c9cd3967406e:0ee5f4b9-1b4e-4a7b-b397-3ad26f1ca2bf": "app",
     "auto:934025b6-529b-40dd-ac54-c9cd3967406e:47399c8b-dffb-4321-8c4e-88c421e7d3ba": "cicd",
-    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:f8879059-c81f-414f-8dd2-386902c19d03": "ungrouped"
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:f8879059-c81f-414f-8dd2-386902c19d03": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:None": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:59a90e69-7808-4343-a232-c2efab30426c": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:c2c04190-ba34-427c-b8ce-0ee6a89bfdfe": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:5d75e9da-4d05-421e-8a77-f26775a567ef": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:2450dea7-9df5-4158-8e28-9e8781a858cc": "network",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:dd318b37-78a6-42c0-b736-2be97a85cb78": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:f184d724-6674-4e9b-8d30-62a8934c38e4": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:c8e0b14e-fee3-4cab-98a9-292626f6bcd4": "ungrouped",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:None": "ungrouped",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:34eaacd4-72bf-4d1d-9723-2cbb77ca8588": "ops",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:07ea451a-1944-4b19-ba37-c700edef1949": "ops",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:ca3f3025-86ee-4a93-a0ac-ce5add8bb4b8": "ungrouped",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:b4da37ff-6387-43b0-af7b-2c22935d2413": "ungrouped"
   }
 }

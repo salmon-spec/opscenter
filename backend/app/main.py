@@ -62,6 +62,59 @@ DEFAULT_GROUPS = [
 ]
 
 
+# Systemd services to skip (OS-level, not user-facing)
+_SKIP_SYSTEMD_NAMES = {
+    "aliyun.service", "aegis.service", "atd.service", "auditd.service",
+    "chrony.service", "containerd.service", "cron.service", "dbus.service",
+    "docker.service", "fail2ban.service", "fwupd.service", "getty@tty1.service",
+    "hbrclient.service", "hbrclientupdater.service", "irqbalance.service",
+    "multipathd.service", "networkd-dispatcher.service", "packagekit.service",
+    "polkit.service", "rsyslog.service", "serial-getty@ttyS0.service",
+    "snapd.service", "ssh.service", "sshd.service", "systemd-*",
+    "systemd-journald.service", "systemd-logind.service", "systemd-networkd.service",
+    "systemd-resolved.service", "systemd-timesyncd.service", "systemd-udevd.service",
+    "tuned.service", "udisks2.service", "unattended-upgrades.service",
+    "user@0.service", "lvm2-monitor.service", "modprobe@.service",
+    "dm-event.service", "blk-availability.service", "apparmor.service",
+    "ufw.service", "accounts-daemon.service", "cronie.service",
+}
+
+# Port-based service name/URL hints for known services
+_PORT_SERVICE_HINTS = {
+    9100: {"name": "OpsCenter", "category": "运维管理", "icon": "tool",
+           "url_tpl": "http://{host}:9100/", "desc": "运维工作台"},
+    9091: {"name": "OpsCenter API", "category": "运维管理", "icon": "tool",
+           "url_tpl": "http://{host}:9091/docs", "desc": "运维工作台后端API"},
+    19100: {"name": "OpsAgent", "category": "运维管理", "icon": "eye",
+            "url_tpl": "http://{host}:19100/health", "desc": "监控Agent"},
+    8000: {"name": "2FAuth", "category": "安全与认证", "icon": "shield",
+           "url_tpl": "http://{host}:8000/", "desc": "MFA虚拟验证码"},
+    8080: {"name": "Jenkins", "category": "CI/CD", "icon": "hammer",
+           "url_tpl": "http://{host}:8080/", "desc": "CI/CD服务器"},
+    3000: {"name": "Gitea", "category": "代码与CI/CD", "icon": "code",
+           "url_tpl": "http://{host}:3000/", "desc": "代码仓库"},
+    3001: {"name": "Grafana", "category": "监控", "icon": "chart",
+           "url_tpl": "http://{host}:3001/", "desc": "监控仪表盘"},
+    9090: {"name": "Prometheus", "category": "监控", "icon": "chart",
+           "url_tpl": "http://{host}:9090/", "desc": "指标采集"},
+    8848: {"name": "Nacos", "category": "消息与注册", "icon": "cube",
+           "url_tpl": "http://{host}:8848/nacos/", "desc": "服务注册与配置中心"},
+    15672: {"name": "RabbitMQ", "category": "消息与注册", "icon": "cube",
+            "url_tpl": "http://{host}:15672/", "desc": "消息队列管理"},
+    5601: {"name": "Kibana", "category": "监控", "icon": "chart",
+           "url_tpl": "http://{host}:5601/", "desc": "ES可视化"},
+    8101: {"name": "Spring Boot Admin", "category": "监控", "icon": "chart",
+           "url_tpl": "http://{host}:8101/", "desc": "Spring Boot监控"},
+    9999: {"name": "1Panel", "category": "运维面板", "icon": "tool",
+           "url_tpl": "http://{host}:9999/", "desc": "Linux运维面板"},
+}
+
+# Ports to always skip (system/ephemeral)
+_SKIP_PORTS = {22, 25, 53, 68, 323, 5433, 9323}
+_SKIP_PROCESSES = {"hbrclient", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
+
+
+
 # === Database ===
 engine = create_engine(DB_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)
 SessionLocal = sessionmaker(bind=engine)
@@ -485,6 +538,7 @@ def scan_server(server_id: str, password: Optional[str] = None):
                 scan_data = trigger_agent_scan("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
                 if scan_data:
                     result = _sync_agent_scan_to_db(srv, db, scan_data)
+                    _sync_agent_ports_and_systemd(srv, db, scan_data)
                     srv.last_seen = datetime.utcnow()
                     db.commit()
                     # Auto-assign groups for newly discovered services
@@ -505,6 +559,7 @@ def scan_server(server_id: str, password: Optional[str] = None):
             scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
             if scan_data:
                 result = _sync_agent_scan_to_db(srv, db, scan_data)
+                _sync_agent_ports_and_systemd(srv, db, scan_data)
                 srv.status = ServerStatus.online.value
                 srv.last_seen = datetime.utcnow()
                 srv.docker_available = True
@@ -737,6 +792,207 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
     return {"added": synced, "updated": updated, "errors": errors}
 
 
+def _sync_agent_ports_and_systemd(srv, db, scan_data):
+    """Sync Agent ports and systemd_services into services table."""
+    try:
+        _do_sync_ports_systemd(srv, db, scan_data)
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] _sync_agent_ports_and_systemd failed: {e}")
+        traceback.print_exc()
+
+
+def _do_sync_ports_systemd(srv, db, scan_data):
+    """Impl: process ports and systemd_services from Agent scan."""
+    from app.discovery import classify_image, get_icon, get_desc
+    print(f"[DEBUG] _sync_agent_ports_and_systemd: containers={len(scan_data.get('containers',[]))} ports={len(scan_data.get('ports',[]))} systemd={len(scan_data.get('systemd_services',[]))}")
+    
+    containers = scan_data.get("containers", [])
+    ports = scan_data.get("ports", [])
+    systemd_services = scan_data.get("systemd_services", [])
+    
+    # Collect ports already covered by known containers
+    container_ports = set()
+    for c in containers:
+        for p in c.get("ports", []):
+            hp = p.get("host_port")
+            if hp:
+                container_ports.add(int(hp) if str(hp).isdigit() else 0)
+    
+    # Collect existing container_name entries to avoid duplicates
+    existing_container_names = set()
+    for svc in db.query(Service).filter(Service.server_id == srv.id,
+                                         Service.container_name.isnot(None)).all():
+        existing_container_names.add(svc.container_name)
+    
+    added = 0
+    updated = 0
+    
+    # --- Process systemd services (non-system, user-facing) ---
+    valid_systemd = []
+    for svc_info in systemd_services:
+        name = svc_info.get("name", "")
+        # Skip system-level services
+        if name in _SKIP_SYSTEMD_NAMES:
+            continue
+        if name.startswith("systemd-") or name.startswith("getty@") or name.startswith("serial-getty@"):
+            continue
+        if name.startswith("user@") or name.startswith("modprobe@"):
+            continue
+        desc = svc_info.get("description", "")
+        # Also skip if already tracked as a container
+        # Convert service name to possible container name (e.g. opscenter-backend -> opscenter-backend)
+        if name.replace(".service", "") in existing_container_names:
+            continue
+        status_str = svc_info.get("status", "unknown")
+        valid_systemd.append(svc_info)
+    
+    # --- Process listening ports ---
+    # Group ports by process to avoid duplicates
+    port_services = {}  # process -> list of port info
+    for p in ports:
+        port_num = p.get("port", 0)
+        proto = p.get("proto", "tcp")
+        bind_ip = p.get("bind_ip", "")
+        process = p.get("process", "unknown")
+        
+        # Only tcp, skip udp system ports
+        if proto != "tcp":
+            continue
+        # Skip system/ephemeral ports
+        if port_num in _SKIP_PORTS or port_num > 60000:
+            continue
+        # Skip ports already covered by containers
+        if port_num in container_ports:
+            continue
+        # Skip localhost-only ports from docker-proxy (those are container mappings)
+        if bind_ip.startswith("127.0.0.1") and process == "docker-proxy":
+            continue
+        
+        if process not in port_services:
+            port_services[process] = []
+        port_services[process].append(p)
+    
+    # --- Create/update service entries from port_services ---
+    # Build a map of container_name -> Service for dedup
+    existing_by_source = {}
+    for svc in db.query(Service).filter(Service.server_id == srv.id).all():
+        key = (svc.source, svc.container_name or svc.name)
+        existing_by_source[key] = svc
+    
+    for process, port_list in port_services.items():
+        # Pick the most interesting port (lowest public port)
+        public_ports = [p for p in port_list if p.get("bind_ip", "") == "0.0.0.0"]
+        if not public_ports:
+            # Use localhost ports only if they look like real services
+            local_ports = [p for p in port_list if p.get("bind_ip", "").startswith("127.0.0.1")]
+            if not local_ports:
+                continue
+            chosen = min(local_ports, key=lambda x: x.get("port", 99999))
+        else:
+            chosen = min(public_ports, key=lambda x: x.get("port", 99999))
+        
+        port_num = chosen.get("port", 0)
+        bind_ip = chosen.get("bind_ip", "0.0.0.0")
+        
+        # Use port hints if available
+        hint = _PORT_SERVICE_HINTS.get(port_num, {})
+        svc_name = hint.get("name", process.replace("-", " ").replace("_", " ").title())
+        svc_category = hint.get("category", classify_image(process))
+        svc_icon = hint.get("icon", get_icon(process))
+        svc_desc = hint.get("desc", get_desc(process, process))
+        
+        if hint:
+            svc_url = hint["url_tpl"].format(host="127.0.0.1" if srv.is_local else srv.host)
+        else:
+            host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.is_local else srv.host
+            svc_url = f"http://{host}:{port_num}/"
+        
+        # Skip if no meaningful URL
+        if not svc_url:
+            continue
+        
+        # Dedup key: source=agent, container_name=process name or port-based key
+        dedup_key = f"port:{process}:{port_num}"
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.container_name == dedup_key,
+        ).first()
+        
+        if existing:
+            changed = False
+            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                               ("icon", svc_icon), ("description", svc_desc),
+                               ("ports", str(port_num)), ("source", ServiceSource.agent.value)]:
+                if val and getattr(existing, field) != val:
+                    setattr(existing, field, val)
+                    changed = True
+            existing.status = ServiceStatus.up.value
+            existing.last_scanned_at = datetime.utcnow()
+            if changed:
+                updated += 1
+        else:
+            svc = Service(
+                server_id=srv.id, name=svc_name, url=svc_url,
+                category=svc_category, icon=svc_icon, description=svc_desc,
+                source=ServiceSource.agent.value,
+                status=ServiceStatus.up.value,
+                container_name=dedup_key, ports=str(port_num),
+                last_scanned_at=datetime.utcnow(),
+            )
+            db.add(svc)
+            added += 1
+            _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+    
+    # --- Process systemd services without ports ---
+    for svc_info in valid_systemd:
+        name = svc_info.get("name", "").replace(".service", "")
+        desc = svc_info.get("description", "")
+        status_str = svc_info.get("status", "unknown")
+        
+        # Skip if already covered by a port-based or container entry
+        # Check port-based dedup key
+        dedup_key = f"systemd:{name}"
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.container_name == dedup_key,
+        ).first()
+        if existing:
+            existing.status = ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value
+            existing.last_scanned_at = datetime.utcnow()
+            continue
+        # Also skip if a matching service already exists by name or keyword
+        name_lower = name.replace("-", " ").replace("_", " ").lower()
+        skip_keywords = ["nginx", "opsagent", "opscenter", "2fauth", "docker", "1panel"]
+        if any(kw in name_lower for kw in skip_keywords):
+            # Check if a service with similar name exists
+            similar = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.name.ilike(f"%{kw}%"),
+            ).first()
+            if similar:
+                continue
+        
+        # Create entry (no URL for systemd-only services)
+        svc_name = name.replace("-", " ").replace("_", " ").title()
+        svc_category = classify_image(name)
+        svc_icon = get_icon(name)
+        
+        svc = Service(
+            server_id=srv.id, name=svc_name, url=f"#systemd:{name}",
+            category=svc_category, icon=svc_icon, description=desc,
+            source=ServiceSource.agent.value,
+            status=ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value,
+            container_name=dedup_key,
+            last_scanned_at=datetime.utcnow(),
+        )
+        db.add(svc)
+        added += 1
+        _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+    
+    return {"added": added, "updated": updated}
+
+
 def _sync_ssh_containers_to_db(srv, db, client):
     """Fallback: SSH-based Docker container discovery, sync to DB."""
     from app.discovery import classify_image, get_icon, get_desc, get_url
@@ -812,12 +1068,13 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
                 scan_data = trigger_agent_scan("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
                 if scan_data:
                     result = _sync_agent_scan_to_db(srv, db, scan_data)
+                    port_result = _sync_agent_ports_and_systemd(srv, db, scan_data)
                     srv.last_seen = datetime.utcnow()
                     db.commit()
                     return {
-                        "discovered": result["added"] + result["updated"],
-                        "added": result["added"],
-                        "updated": result["updated"],
+                        "discovered": result["added"] + result["updated"] + port_result["added"] + port_result["updated"],
+                        "added": result["added"] + port_result["added"],
+                        "updated": result["updated"] + port_result["updated"],
                         "source": "agent",
                         "containers": len(scan_data.get("containers", [])),
                     }
@@ -835,14 +1092,15 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
             scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
             if scan_data:
                 result = _sync_agent_scan_to_db(srv, db, scan_data)
+                port_result = _sync_agent_ports_and_systemd(srv, db, scan_data)
                 srv.status = ServerStatus.online.value
                 srv.last_seen = datetime.utcnow()
                 srv.docker_available = True
                 db.commit()
                 return {
-                    "discovered": result["added"] + result["updated"],
-                    "added": result["added"],
-                    "updated": result["updated"],
+                    "discovered": result["added"] + result["updated"] + port_result["added"] + port_result["updated"],
+                    "added": result["added"] + port_result["added"],
+                    "updated": result["updated"] + port_result["updated"],
                     "source": "agent",
                     "containers": len(scan_data.get("containers", [])),
                 }
@@ -1091,6 +1349,7 @@ def scan_all():
                     scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
                     if scan_data:
                         result = _sync_agent_scan_to_db(srv, db, scan_data)
+                        _sync_agent_ports_and_systemd(srv, db, scan_data)
                         srv.status = ServerStatus.online.value
                         srv.last_seen = datetime.utcnow()
                         srv.docker_available = True
