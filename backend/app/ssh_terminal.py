@@ -40,7 +40,11 @@ class SSHTerminalSession:
                       "username": self.user, "timeout": 10}
             if self.key_content:
                 import io
-                kf = io.StringIO(self.key_content)
+                # Ensure key ends with newline (required by paramiko parser)
+                key_data = self.key_content
+                if not key_data.endswith("\n"):
+                    key_data += "\n"
+                kf = io.StringIO(key_data)
                 pkey = None
                 for cls in [paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey]:
                     try:

@@ -1927,7 +1927,8 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         # Extract fields while session is active to avoid DetachedInstanceError
         srv_id = str(srv.id)
         srv_name = srv.name
-        srv_host = srv.host
+        # Local server: use 127.0.0.1 instead of public IP (cannot loopback via public IP on cloud)
+        srv_host = "127.0.0.1" if srv.is_local else srv.host
         srv_port = srv.ssh_port or 22
         srv_user = srv.ssh_user or "root"
         # ssh_key field stores either a real key or __password__<password>
