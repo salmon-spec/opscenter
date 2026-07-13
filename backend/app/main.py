@@ -114,7 +114,6 @@ _SKIP_PORTS = {22, 25, 53, 68, 323, 5433, 9323}
 _SKIP_PROCESSES = {"hbrclient", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
 
 
-
 # === Database ===
 engine = create_engine(DB_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)
 SessionLocal = sessionmaker(bind=engine)
@@ -146,7 +145,6 @@ class ServerUpdate(BaseModel):
     ssh_key: Optional[str] = None
     ssh_password: Optional[str] = None
     tags: Optional[List[str]] = None
-
 
 
 class SshTestRequest(BaseModel):
@@ -182,7 +180,6 @@ class PinToggle(BaseModel):
 
 # === App ===
 app = FastAPI(title="OpsCenter API", version="2.0")
-
 
 
 # Category metadata for enhanced UI
@@ -271,7 +268,6 @@ async def background_health_check():
         await asyncio.sleep(60)
 
 
-
 async def _agent_health_check_loop():
     """Background task: check Agent status on all remote servers every 5 minutes."""
     import asyncio
@@ -279,20 +275,20 @@ async def _agent_health_check_loop():
     while True:
         try:
             with get_db() as db:
-            # Check local Agent status too
-            local_srv = db.query(Server).filter(Server.is_local == True).first()
-            if local_srv:
-                try:
-                    local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
-                    if local_data:
-                        local_srv.agent_status = "running"
-                        local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
-                        local_srv.last_seen = datetime.utcnow()
-                    else:
+                # Check local Agent status
+                local_srv = db.query(Server).filter(Server.is_local == True).first()
+                if local_srv:
+                    try:
+                        local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
+                        if local_data:
+                            local_srv.agent_status = "running"
+                            local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
+                            local_srv.last_seen = datetime.utcnow()
+                        else:
+                            local_srv.agent_status = "stopped"
+                    except Exception as e:
+                        print(f"[AgentHealthCheck] Local Agent error: {e}")
                         local_srv.agent_status = "stopped"
-                except Exception as e:
-                    print(f"[AgentHealthCheck] Local Agent error: {e}")
-                    local_srv.agent_status = "stopped"
 
                 remote_servers = db.query(Server).filter(Server.is_local == False).all()
                 for srv in remote_servers:
@@ -318,7 +314,6 @@ async def _agent_health_check_loop():
         except Exception as e:
             print(f"[AgentHealthCheck] Loop error: {e}")
         await asyncio.sleep(300)  # 5 minutes
-
 
 
 def _auto_assign_group(server_id: str, service_id: str, category: str):
@@ -402,19 +397,8 @@ async def startup():
                 print("[Startup] Local Agent not reachable")
         except Exception as e:
             print(f"[Startup] Local Agent check error: {e}")
-        # Auto-detect local Agent status on startup
-        try:
-            local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, local.agent_token or "")
-            if local_agent:
-                local.agent_status = "running"
-                local.agent_version = local_agent.get("agent_version", "2.1.0")
-                local.last_seen = datetime.utcnow()
-                print(f"[Startup] Local Agent detected: v{local.agent_version}")
-            else:
-                local.agent_status = "stopped"
-                print("[Startup] Local Agent not reachable")
-        except Exception as e:
-            print(f"[Startup] Local Agent check error: {e}")
+
+
         
         # Parse nginx config
         nginx_routes = parse_nginx_config(host=LOCAL_HOST)
@@ -652,8 +636,6 @@ def test_server(server_id: str, password: Optional[str] = None):
         return {"status": "offline", "message": "Cannot connect via SSH. Check credentials."}
 
 
-
-
 @app.post("/api/v2/test-ssh")
 def test_ssh_connection_api(data: SshTestRequest):
     """Test SSH connection with provided credentials (before creating server)."""
@@ -667,8 +649,6 @@ def test_ssh_connection_api(data: SshTestRequest):
         ssh_key=data.ssh_key,
     )
     return {"success": success, "message": message}
-
-
 
 
 # === Agent Service Scan APIs ===
@@ -1709,7 +1689,6 @@ def list_categories(server_id: Optional[str] = None):
             })
         result.sort(key=lambda x: x["order"])
         return result
-
 
 
 # === Agent Management APIs ===

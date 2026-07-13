@@ -71,7 +71,7 @@ NAME_URLS = {
     "ai-frontend": "http://{host}/datahub/", "ai-api": "http://{host}/datahub/",
     "harbor-nginx": "https://{host}:8891",
     "1panel-hermes-agent": "http://{host}:9999/ops123",
-    "2fauth": "http://{host}:8000",
+    "2fauth": "http://{host}",
     "vaultwarden": "http://{host}:8090",
     "hbbs": "http://{host}:21115",
     "hbbr": "http://{host}:21117"
