@@ -1,0 +1,111 @@
+{
+  "groups": [
+    {
+      "id": "cicd",
+      "name": "代码与CI/CD",
+      "order": 10,
+      "color": "#2dd4bf",
+      "icon": "code"
+    },
+    {
+      "id": "security",
+      "name": "安全与认证",
+      "order": 15,
+      "color": "#ef4444",
+      "icon": "shield"
+    },
+    {
+      "id": "monitor",
+      "name": "监控与日志",
+      "order": 20,
+      "color": "#3b82f6",
+      "icon": "chart"
+    },
+    {
+      "id": "network",
+      "name": "网络与代理",
+      "order": 30,
+      "color": "#64748b",
+      "icon": "globe"
+    },
+    {
+      "id": "app",
+      "name": "应用服务",
+      "order": 40,
+      "color": "#f59e0b",
+      "icon": "database"
+    },
+    {
+      "id": "ops",
+      "name": "运维管理",
+      "order": 50,
+      "color": "#8b5cf6",
+      "icon": "tool"
+    },
+    {
+      "id": "auto_workflow",
+      "name": "自动化工作流",
+      "order": 60,
+      "color": "#ec4899",
+      "icon": "bolt"
+    },
+    {
+      "id": "ungrouped",
+      "name": "未分组",
+      "order": 999,
+      "color": "#475569",
+      "icon": "box"
+    },
+    {
+      "id": "database",
+      "name": "数据存储",
+      "order": 40,
+      "color": "#a855f7",
+      "icon": "database"
+    },
+    {
+      "id": "middleware",
+      "name": "消息与注册",
+      "order": 50,
+      "color": "#f97316",
+      "icon": "cube"
+    }
+  ],
+  "serviceGroupMap": {
+    "auto:ba8b865e-c1c0-4f56-9417-c9ee10a18e1b:ddc6ae2f-383e-4728-9a53-d015cc012c5b": "cicd",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:70d75b75-eb64-4c90-8cc2-74c0ed662627": "security",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:11a3149e-5e9b-48cb-ba77-cd4269e57fb1": "cicd",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:0b63f6f4-f3d5-4672-8025-9b7cdb70ec37": "monitor",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:eceb5ffe-1a06-4b0d-8b20-9caab8190104": "monitor",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:e02edc43-08c3-4847-bb1c-64a5bb0dfbe5": "auto_workflow",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:e7adc149-23b2-4369-87aa-387c2eb46bdd": "app",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:cb1180e2-e5a9-4ead-b37c-5b5308a72a03": "ops",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:38ae14d0-ce3a-490e-847f-fb39b1ef69ee": "app",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:a09c6d03-9e35-4091-aff5-0d795f239de8": "security",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:31360f7b-219b-4678-b20a-bcc9070788bf": "network",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:e7305085-0f56-4195-a56d-f52cb18b852d": "network",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:0ee5f4b9-1b4e-4a7b-b397-3ad26f1ca2bf": "app",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:47399c8b-dffb-4321-8c4e-88c421e7d3ba": "cicd",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:f8879059-c81f-414f-8dd2-386902c19d03": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:None": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:59a90e69-7808-4343-a232-c2efab30426c": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:c2c04190-ba34-427c-b8ce-0ee6a89bfdfe": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:5d75e9da-4d05-421e-8a77-f26775a567ef": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:2450dea7-9df5-4158-8e28-9e8781a858cc": "network",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:dd318b37-78a6-42c0-b736-2be97a85cb78": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:f184d724-6674-4e9b-8d30-62a8934c38e4": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:c8e0b14e-fee3-4cab-98a9-292626f6bcd4": "ungrouped",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:None": "ungrouped",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:34eaacd4-72bf-4d1d-9723-2cbb77ca8588": "ops",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:07ea451a-1944-4b19-ba37-c700edef1949": "ops",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:ca3f3025-86ee-4a93-a0ac-ce5add8bb4b8": "ungrouped",
+    "auto:934025b6-529b-40dd-ac54-c9cd3967406e:b4da37ff-6387-43b0-af7b-2c22935d2413": "ungrouped",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:25d47219-5265-4234-9caf-aa92f3ecdd48": "network",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:1b735dad-0daf-4579-8187-2536bb67acff": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:7d240b39-56df-4326-90af-b9f13877755b": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:37fd005d-61f7-4e9a-aae8-b70ad6be663a": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:215f01c4-bbef-44c8-990a-fbc00d2f2dff": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:4fe52ff7-b453-453a-9d2e-42f4fd339585": "ops",
+    "auto:aadfc37a-f8b4-4833-bc77-756954434f43:37bc55f2-3aba-445f-9669-469003dc1ad6": "ops"
+  }
+}

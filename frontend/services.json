@@ -1,0 +1,120 @@
+﻿{
+  "version": "1.0",
+  "updated": "2026-07-07",
+  "groups": [
+    {
+      "group": "代码与CI/CD",
+      "icon": "code",
+      "services": [
+        {
+          "name": "Gitea",
+          "url": "/gitea/",
+          "desc": "Git代码仓库，支持Webhook触发CI/CD",
+          "username": "qiushui",
+          "password": "passok@123",
+          "authType": "manual",
+          "tags": ["Git", "代码仓库", "Webhook"]
+        },
+        {
+          "name": "Jenkins",
+          "url": "/jenkins/",
+          "desc": "CI/CD构建服务器，自动化流水线",
+          "username": "admin",
+          "password": "admin123",
+          "authType": "manual",
+          "tags": ["CI/CD", "构建", "部署"]
+        },
+        {
+          "name": "Harbor",
+          "url": "https://39.98.123.190:8891/",
+          "desc": "Docker私有镜像仓库",
+          "username": "admin",
+          "password": "Harbor@2026",
+          "authType": "manual",
+          "tags": ["Docker", "镜像仓库", "Registry"]
+        }
+      ]
+    },
+    {
+      "group": "监控与日志",
+      "icon": "chart",
+      "services": [
+        {
+          "name": "Prometheus",
+          "url": "/prometheus/",
+          "desc": "指标采集与告警，15天数据保留",
+          "username": "",
+          "password": "",
+          "authType": "none",
+          "tags": ["监控", "指标", "告警"]
+        },
+        {
+          "name": "Grafana",
+          "url": "/grafana/",
+          "desc": "监控仪表盘，Node Exporter + Loki数据源",
+          "username": "admin",
+          "password": "admin123",
+          "authType": "manual",
+          "tags": ["监控", "仪表盘", "可视化"]
+        }
+      ]
+    },
+    {
+      "group": "运维工具",
+      "icon": "tool",
+      "services": [
+        {
+          "name": "OpsCenter",
+          "url": "/ops/",
+          "desc": "运维工作台，服务导航与系统监控",
+          "username": "",
+          "password": "",
+          "authType": "none",
+          "tags": ["运维", "导航", "监控"]
+        },
+        {
+          "name": "IT-Tools",
+          "url": ":8443",
+          "desc": "开发者在线工具箱（100+工具）",
+          "username": "",
+          "password": "",
+          "authType": "none",
+          "tags": ["工具", "开发者", "在线"]
+        },
+        {
+          "name": "Stirling-PDF",
+          "url": "/pdf/",
+          "desc": "PDF工具箱（合并/拆分/压缩/转换/OCR）",
+          "username": "admin",
+          "password": "passok@123",
+          "authType": "manual",
+          "tags": ["PDF", "工具", "文档"]
+        },
+        {
+          "name": "1Panel",
+          "url": ":9999/ops123",
+          "desc": "Linux运维管理面板（容器/网站/数据库）",
+          "username": "admin",
+          "password": "Ops@2026",
+          "authType": "manual",
+          "tags": ["运维", "面板", "管理"]
+        }
+      ]
+    },
+    {
+      "group": "数据采集",
+      "icon": "database",
+      "services": [
+        {
+          "name": "DataHub",
+          "url": "/datahub/",
+          "desc": "智能数据平台，232个数据源采集与展示",
+          "username": "admin",
+          "password": "admin123",
+          "authType": "manual",
+          "tags": ["数据", "采集", "平台"]
+        }
+      ]
+    }
+  ]
+}

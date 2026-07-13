@@ -1,0 +1,2523 @@
+﻿import os
+import calendar, uuid, asyncio, re
+from datetime import datetime
+from typing import Optional, List
+from contextlib import contextmanager
+
+from fastapi import FastAPI, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, UploadFile, File as FastAPIFile
+from fastapi.responses import StreamingResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import QueuePool
+
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory
+from app.discovery import discover_docker_services, parse_nginx_config
+from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
+from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
+from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
+
+class TerminalCreateRequest(BaseModel):
+    server_id: str
+    cols: int = 80
+    rows: int = 24
+
+# === Config ===
+DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
+LOCAL_HOST = os.getenv("LOCAL_HOST", "ops.salmon.xin")
+
+# Category -> Group ID auto-mapping for service grouping
+CATEGORY_TO_GROUP = {
+    "代码与CI/CD": "cicd",
+    "CI/CD": "cicd",
+    "监控与日志": "monitor",
+    "监控": "monitor",
+    "网络与代理": "network",
+    "数据存储": "database",
+    "消息与注册": "middleware",
+    "自动化工作流": "auto_workflow",
+    "自动化": "auto_workflow",
+    "运维管理": "ops",
+    "运维面板": "ops",
+    "应用服务": "app",
+    "文档工具": "app",
+    "开发工具": "app",
+    "数据平台": "app",
+    "前端应用": "app",
+    "安全与认证": "security",
+}
+
+DEFAULT_GROUPS = [
+    {"id": "cicd", "name": "代码与CI/CD", "order": 10, "color": "#2dd4bf", "icon": "code"},
+    {"id": "monitor", "name": "监控与日志", "order": 20, "color": "#3b82f6", "icon": "chart"},
+    {"id": "network", "name": "网络与代理", "order": 30, "color": "#64748b", "icon": "globe"},
+    {"id": "database", "name": "数据存储", "order": 40, "color": "#a855f7", "icon": "database"},
+    {"id": "middleware", "name": "消息与注册", "order": 50, "color": "#f97316", "icon": "cube"},
+    {"id": "auto_workflow", "name": "自动化工作流", "order": 60, "color": "#ec4899", "icon": "bolt"},
+    {"id": "ops", "name": "运维管理", "order": 70, "color": "#8b5cf6", "icon": "tool"},
+    {"id": "app", "name": "应用服务", "order": 80, "color": "#f59e0b", "icon": "box"},
+    {"id": "security", "name": "安全与认证", "order": 90, "color": "#ef4444", "icon": "shield"},
+    {"id": "ungrouped", "name": "未分组", "order": 999, "color": "#475569", "icon": "inbox"},
+]
+
+
+# Systemd services to skip (OS-level, not user-facing)
+_SKIP_SYSTEMD_NAMES = {
+    "aliyun.service", "aegis.service", "atd.service", "auditd.service",
+    "chrony.service", "containerd.service", "cron.service", "dbus.service",
+    "docker.service", "fail2ban.service", "fwupd.service", "getty@tty1.service",
+    "hbrclient.service", "hbrclientupdater.service", "irqbalance.service",
+    "multipathd.service", "networkd-dispatcher.service", "packagekit.service",
+    "polkit.service", "rsyslog.service", "serial-getty@ttyS0.service",
+    "snapd.service", "ssh.service", "sshd.service", "systemd-*",
+    "systemd-journald.service", "systemd-logind.service", "systemd-networkd.service",
+    "systemd-resolved.service", "systemd-timesyncd.service", "systemd-udevd.service",
+    "tuned.service", "udisks2.service", "unattended-upgrades.service",
+    "user@0.service", "lvm2-monitor.service", "modprobe@.service",
+    "dm-event.service", "blk-availability.service", "apparmor.service",
+    "ufw.service", "accounts-daemon.service", "cronie.service",
+}
+
+# Port-based service name/URL hints for known services
+_PORT_SERVICE_HINTS = {
+    9100: {"name": "OpsCenter", "category": "运维管理", "icon": "tool",
+           "url_tpl": "http://{host}:9100/", "desc": "运维工作台"},
+    9091: {"name": "OpsCenter API", "category": "运维管理", "icon": "tool",
+           "url_tpl": "http://{host}:9091/docs", "desc": "运维工作台后端API"},
+    19100: {"name": "OpsAgent", "category": "运维管理", "icon": "eye",
+            "url_tpl": "http://{host}:19100/health", "desc": "监控Agent"},
+    8000: {"name": "2FAuth", "category": "安全与认证", "icon": "shield",
+           "url_tpl": "http://{host}:8000/", "desc": "MFA虚拟验证码"},
+    8080: {"name": "Jenkins", "category": "CI/CD", "icon": "hammer",
+           "url_tpl": "http://{host}:8080/", "desc": "CI/CD服务器"},
+    3000: {"name": "Gitea", "category": "代码与CI/CD", "icon": "code",
+           "url_tpl": "http://{host}:3000/", "desc": "代码仓库"},
+    3001: {"name": "Grafana", "category": "监控", "icon": "chart",
+           "url_tpl": "http://{host}:3001/", "desc": "监控仪表盘"},
+    9090: {"name": "Prometheus", "category": "监控", "icon": "chart",
+           "url_tpl": "http://{host}:9090/", "desc": "指标采集"},
+    8848: {"name": "Nacos", "category": "消息与注册", "icon": "cube",
+           "url_tpl": "http://{host}:8848/nacos/", "desc": "服务注册与配置中心"},
+    15672: {"name": "RabbitMQ", "category": "消息与注册", "icon": "cube",
+            "url_tpl": "http://{host}:15672/", "desc": "消息队列管理"},
+    5601: {"name": "Kibana", "category": "监控", "icon": "chart",
+           "url_tpl": "http://{host}:5601/", "desc": "ES可视化"},
+    8101: {"name": "Spring Boot Admin", "category": "监控", "icon": "chart",
+           "url_tpl": "http://{host}:8101/", "desc": "Spring Boot监控"},
+    9999: {"name": "1Panel", "category": "运维面板", "icon": "tool",
+           "url_tpl": "http://{host}:9999/", "desc": "Linux运维面板"},
+}
+
+# Ports to always skip (system/ephemeral)
+_SKIP_PORTS = {22, 25, 53, 68, 323, 5433, 9323}
+_SKIP_PROCESSES = {"hbrclient", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
+
+
+
+# === Database ===
+engine = create_engine(DB_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)
+SessionLocal = sessionmaker(bind=engine)
+
+@contextmanager
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# === Schemas ===
+class ServerCreate(BaseModel):
+    name: str
+    host: str
+    ssh_port: int = 22
+    ssh_user: str = "ops"
+    ssh_key: Optional[str] = None
+    ssh_password: Optional[str] = None
+    tags: List[str] = []
+    is_local: bool = False
+
+class ServerUpdate(BaseModel):
+    name: Optional[str] = None
+    host: Optional[str] = None
+    ssh_port: Optional[int] = None
+    ssh_user: Optional[str] = None
+    ssh_key: Optional[str] = None
+    ssh_password: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+
+class SshTestRequest(BaseModel):
+    host: str
+    port: int = 22
+    username: str = "root"
+    password: Optional[str] = None
+    ssh_key: Optional[str] = None
+
+class ServiceCreate(BaseModel):
+    name: str
+    url: str
+    category: str = "未分类"
+    icon: str = "fa-cube"
+    description: str = ""
+    health_path: Optional[str] = None
+    pinned: bool = False
+
+class ServiceUpdate(BaseModel):
+    name: Optional[str] = None
+    url: Optional[str] = None
+    category: Optional[str] = None
+    icon: Optional[str] = None
+    description: Optional[str] = None
+    health_path: Optional[str] = None
+    pinned: Optional[bool] = None
+    hidden: Optional[bool] = None
+    account: Optional[str] = None
+    password: Optional[str] = None
+
+class PinToggle(BaseModel):
+    pinned: bool
+
+# === App ===
+app = FastAPI(title="OpsCenter API", version="2.0")
+
+
+
+# Category metadata for enhanced UI
+CATEGORY_META = {
+    "代码与CI/CD": {"icon": "fa-code", "color": "#8b5cf6", "order": 1},
+    "应用服务": {"icon": "fa-cube", "color": "#3b82f6", "order": 2},
+    "监控与日志": {"icon": "fa-chart-area", "color": "#22c55e", "order": 3},
+    "网络与代理": {"icon": "fa-network-wired", "color": "#f59e0b", "order": 4},
+    "自动化工作流": {"icon": "fa-robot", "color": "#ec4899", "order": 5},
+    "数据存储": {"icon": "fa-database", "color": "#06b6d4", "order": 6},
+    "运维管理": {"icon": "fa-gauge-high", "color": "#f97316", "order": 7},
+    "安全": {"icon": "fa-shield-halved", "color": "#ef4444", "order": 8},
+    "未分类": {"icon": "fa-folder", "color": "#94a3b8", "order": 99},
+}
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# === Startup ===
+
+# === Background Health Check ===
+def _run_health_check():
+    """Synchronous health check - runs in thread to avoid blocking event loop."""
+    import requests as req
+    import socket
+    try:
+        with get_db() as db:
+            # --- Check service health ---
+            services = db.query(Service).all()
+            for svc in services:
+                if not svc.url:
+                    continue
+                try:
+                    check_url = svc.url
+                    # Use health_path for actual health check if available
+                    if svc.health_path:
+                        base = svc.url if svc.url.startswith("http") else ""
+                        if not base:
+                            srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                            host = srv.host if srv else LOCAL_HOST
+                            base = f"http://{srv.host}"
+                        check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
+                    elif check_url.startswith("/"):
+                        srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                        host = srv.host if srv else LOCAL_HOST
+                        check_url = f"http://{srv.host}{check_url}"
+                    resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
+                    svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
+                except Exception:
+                    svc.status = ServiceStatus.down.value
+            db.commit()
+
+            # --- Check server reachability ---
+            servers = db.query(Server).all()
+            for srv in servers:
+                if srv.is_local:
+                    srv.status = ServerStatus.online.value
+                    srv.last_seen = datetime.utcnow()
+                    continue
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(3)
+                    result = sock.connect_ex((srv.host, srv.ssh_port or 22))
+                    sock.close()
+                    if result == 0:
+                        srv.status = ServerStatus.online.value
+                        srv.last_seen = datetime.utcnow()
+                    else:
+                        srv.status = ServerStatus.offline.value
+                except Exception:
+                    srv.status = ServerStatus.offline.value
+            db.commit()
+    except Exception as e:
+        print(f"Health check error: {e}")
+
+
+async def background_health_check():
+    """Periodically check all services and servers health status."""
+    while True:
+        await asyncio.to_thread(_run_health_check)
+        await asyncio.sleep(60)
+
+
+
+async def _agent_health_check_loop():
+    """Background task: check Agent status on all remote servers every 5 minutes."""
+    import asyncio
+    await asyncio.sleep(30)  # Wait for startup to complete
+    while True:
+        try:
+            with get_db() as db:
+            # Check local Agent status too
+            local_srv = db.query(Server).filter(Server.is_local == True).first()
+            if local_srv:
+                try:
+                    local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
+                    if local_data:
+                        local_srv.agent_status = "running"
+                        local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
+                        local_srv.last_seen = datetime.utcnow()
+                    else:
+                        local_srv.agent_status = "stopped"
+                except Exception as e:
+                    print(f"[AgentHealthCheck] Local Agent error: {e}")
+                    local_srv.agent_status = "stopped"
+
+                remote_servers = db.query(Server).filter(Server.is_local == False).all()
+                for srv in remote_servers:
+                    try:
+                        if srv.agent_status in ("running", "error", "deploying"):
+                            result = check_agent_status(srv)
+                            new_status = result.get("status", "unknown")
+                            if new_status == "running":
+                                srv.agent_status = "running"
+                                if result.get("agent_port"):
+                                    srv.agent_port = result["agent_port"]
+                                if result.get("agent_token"):
+                                    srv.agent_token = result["agent_token"]
+                                if result.get("agent_version"):
+                                    srv.agent_version = result["agent_version"]
+                            elif new_status in ("stopped", "not_installed"):
+                                srv.agent_status = "stopped"
+                            else:
+                                srv.agent_status = "error"
+                    except Exception as e:
+                        print(f"[AgentHealthCheck] Error checking {srv.host}: {e}")
+                db.commit()
+        except Exception as e:
+            print(f"[AgentHealthCheck] Loop error: {e}")
+        await asyncio.sleep(300)  # 5 minutes
+
+
+
+def _auto_assign_group(server_id: str, service_id: str, category: str):
+    """Auto-assign a service to a group based on its category."""
+    group_id = CATEGORY_TO_GROUP.get(category, "ungrouped")
+    config = _read_groups_json()
+    existing_ids = [g["id"] for g in config.get("groups", [])]
+    for dg in DEFAULT_GROUPS:
+        if dg["id"] not in existing_ids:
+            config.setdefault("groups", []).append(dg)
+    key = f"auto:{server_id}:{service_id}"
+    config.setdefault("serviceGroupMap", {})[key] = group_id
+    _write_groups_json(config)
+    return group_id
+
+
+def _auto_assign_all_groups():
+    """Auto-assign all services to groups based on their categories."""
+    with get_db() as db:
+        services = db.query(Service).all()
+    config = _read_groups_json()
+    existing_ids = [g["id"] for g in config.get("groups", [])]
+    for dg in DEFAULT_GROUPS:
+        if dg["id"] not in existing_ids:
+            config.setdefault("groups", []).append(dg)
+    changed = False
+    for svc in services:
+        key = f"auto:{svc.server_id}:{svc.id}"
+        group_id = CATEGORY_TO_GROUP.get(svc.category, "ungrouped")
+        if config.get("serviceGroupMap", {}).get(key) != group_id:
+            config.setdefault("serviceGroupMap", {})[key] = group_id
+            changed = True
+    if changed:
+        _write_groups_json(config)
+    return changed
+
+
+@app.on_event("startup")
+async def startup():
+    # Start Agent health check background task
+    import asyncio
+    asyncio.create_task(_agent_health_check_loop())
+    # Wait for DB and create tables
+    import time
+    for i in range(30):
+        try:
+            Base.metadata.create_all(bind=engine)
+            break
+        except Exception:
+            time.sleep(2)
+    
+    # Auto-register local server and discover services
+    with get_db() as db:
+        local = db.query(Server).filter(Server.is_local == True).first()
+        if not local:
+            local = Server(
+                name="CI/CD 主机",
+                host=LOCAL_HOST,
+                ssh_port=22,
+                ssh_user="ops",
+                status=ServerStatus.online.value,
+                docker_available=True,
+                is_local=True,
+            )
+            db.add(local)
+            db.commit()
+            db.refresh(local)
+        
+        # Run initial discovery
+        discover_docker_services(local, db, LOCAL_HOST)
+        # Auto-detect local Agent status on startup
+        try:
+            local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, local.agent_token or "")
+            if local_agent:
+                local.agent_status = "running"
+                local.agent_version = local_agent.get("agent_version", "2.1.0")
+                local.last_seen = datetime.utcnow()
+                print(f"[Startup] Local Agent detected: v{local.agent_version}")
+            else:
+                local.agent_status = "stopped"
+                print("[Startup] Local Agent not reachable")
+        except Exception as e:
+            print(f"[Startup] Local Agent check error: {e}")
+        # Auto-detect local Agent status on startup
+        try:
+            local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, local.agent_token or "")
+            if local_agent:
+                local.agent_status = "running"
+                local.agent_version = local_agent.get("agent_version", "2.1.0")
+                local.last_seen = datetime.utcnow()
+                print(f"[Startup] Local Agent detected: v{local.agent_version}")
+            else:
+                local.agent_status = "stopped"
+                print("[Startup] Local Agent not reachable")
+        except Exception as e:
+            print(f"[Startup] Local Agent check error: {e}")
+        
+        # Parse nginx config
+        nginx_routes = parse_nginx_config(host=LOCAL_HOST)
+        for route in nginx_routes:
+            existing = db.query(Service).filter(
+                Service.server_id == local.id,
+                Service.url == route["url"],
+                Service.source != ServiceSource.docker_label.value,
+                Service.source != ServiceSource.docker_auto.value,
+            ).first()
+            if not existing:
+                svc = Service(
+                    server_id=local.id,
+                    name=route["name"],
+                    url=route["url"],
+                    source=ServiceSource.nginx.value,
+                    category="未分类",
+                    icon="fa-globe",
+                    status=ServiceStatus.unknown.value,
+                )
+                db.add(svc)
+        db.commit()
+
+    # Start background health check
+    asyncio.create_task(background_health_check())
+    # Start background agent metrics collector
+    asyncio.create_task(background_agent_collector())
+    # Auto-assign groups on startup
+    _auto_assign_all_groups()
+
+
+# === Server APIs ===
+@app.get("/api/v2/servers")
+def list_servers():
+    with get_db() as db:
+        servers = db.query(Server).all()
+        result = []
+        for s in servers:
+            svc_count = db.query(Service).filter(Service.server_id == s.id).count()
+            has_creds = bool(s.ssh_key and (s.ssh_key.startswith("__password__") or "BEGIN" in s.ssh_key))
+            result.append({
+                "id": str(s.id),
+                "name": s.name,
+                "host": s.host,
+                "ssh_port": s.ssh_port,
+                "ssh_user": s.ssh_user,
+                "tags": s.tags or [],
+                "status": s.status,
+                "docker_available": s.docker_available,
+                "is_local": s.is_local,
+                "last_seen": s.last_seen.isoformat() if s.last_seen else None,
+                "service_count": svc_count,
+                "has_credentials": has_creds,
+                "agent_status": s.agent_status or "not_deployed",
+                "agent_port": s.agent_port or 19100,
+                "agent_version": s.agent_version or "",
+            })
+        return result
+
+@app.post("/api/v2/servers", status_code=201)
+def create_server(data: ServerCreate):
+    with get_db() as db:
+        ssh_key_val = data.ssh_key
+        if data.ssh_password and not data.ssh_key:
+            ssh_key_val = f"__password__{data.ssh_password}"
+        srv = Server(
+            name=data.name, host=data.host, ssh_port=data.ssh_port,
+            ssh_user=data.ssh_user, ssh_key=ssh_key_val,
+            tags=data.tags, is_local=data.is_local,
+        )
+        db.add(srv)
+        db.commit()
+        db.refresh(srv)
+        result = {"id": str(srv.id), "name": srv.name, "host": srv.host}
+    
+    # Auto-deploy agent for remote servers with SSH credentials
+    if not data.is_local and (data.ssh_password or data.ssh_key):
+        try:
+            deploy_result = deploy_agent(srv, password=data.ssh_password)
+            if deploy_result.get("success"):
+                with get_db() as db2:
+                    s = db2.query(Server).filter(Server.id == srv.id).first()
+                    if s:
+                        s.agent_status = "running"
+                        s.agent_port = deploy_result.get("agent_port", 19100)
+                        s.agent_token = deploy_result.get("agent_token", "")
+                        s.agent_version = deploy_result.get("agent_version", "2.0.0")
+                        db2.commit()
+                result["agent_deployed"] = True
+                result["agent_message"] = deploy_result.get("message", "")
+            else:
+                with get_db() as db2:
+                    s = db2.query(Server).filter(Server.id == srv.id).first()
+                    if s:
+                        s.agent_status = "error"
+                        db2.commit()
+                result["agent_deployed"] = False
+                result["agent_message"] = deploy_result.get("message", "")
+        except Exception as e:
+            result["agent_deployed"] = False
+            result["agent_message"] = f"Agent部署异常: {str(e)}"
+    
+    return result
+
+@app.get("/api/v2/servers/{server_id}")
+def get_server(server_id: str):
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        return {
+            "id": str(srv.id), "name": srv.name, "host": srv.host,
+            "ssh_port": srv.ssh_port, "ssh_user": srv.ssh_user,
+            "tags": srv.tags or [], "status": srv.status,
+            "docker_available": srv.docker_available, "is_local": srv.is_local,
+            "last_seen": srv.last_seen.isoformat() if srv.last_seen else None,
+        }
+
+@app.put("/api/v2/servers/{server_id}")
+def update_server(server_id: str, data: ServerUpdate):
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        for field, val in data.model_dump(exclude_unset=True).items():
+            if val is not None:
+                setattr(srv, field, val)
+        db.commit()
+        return {"ok": True}
+
+@app.delete("/api/v2/servers/{server_id}")
+def delete_server(server_id: str):
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            raise HTTPException(400, "Cannot delete local server")
+        # Uninstall remote Agent before deleting
+        agent_info = ""
+        if srv.agent_status in ("running", "error") and not srv.is_local:
+            try:
+                from app.agent_manager import uninstall_agent
+                result = uninstall_agent(srv)
+                agent_info = f" Agent已卸载" if result.get("success") else f" Agent卸载失败: {result.get('message','')}"
+            except Exception as e:
+                agent_info = f" Agent卸载异常: {e}"
+        db.delete(srv)
+        db.commit()
+        return {"ok": True, "message": f"服务器已删除{agent_info}"}
+
+@app.post("/api/v2/servers/{server_id}/scan")
+def scan_server(server_id: str, password: Optional[str] = None):
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        
+        if srv.is_local:
+            # Try Agent first, fallback to Docker discovery
+            if srv.agent_status == "running" and srv.agent_port:
+                scan_data = trigger_agent_scan("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
+                if scan_data:
+                    result = _sync_agent_scan_to_db(srv, db, scan_data)
+                    _sync_agent_ports_and_systemd(srv, db, scan_data)
+                    srv.last_seen = datetime.utcnow()
+                    db.commit()
+                    # Auto-assign groups for newly discovered services
+                    for svc in db.query(Service).filter(Service.server_id == srv.id).all():
+                        _auto_assign_group(str(srv.id), str(svc.id), svc.category or "")
+                    return {"discovered": result["added"] + result["updated"], "source": "agent"}
+            # Fallback: Docker SDK
+            discovered = discover_docker_services(srv, db, srv.host)
+            for d in discovered:
+                _auto_assign_group(str(srv.id), str(d.id), d.category or "")
+            srv.last_seen = datetime.utcnow()
+            db.commit()
+            return {"discovered": len(discovered), "source": "docker_local"}
+        
+        # Remote server: try Agent first, then SSH fallback
+        # Try Agent if deployed and running
+        if srv.agent_status == "running" and srv.agent_port:
+            scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+            if scan_data:
+                result = _sync_agent_scan_to_db(srv, db, scan_data)
+                _sync_agent_ports_and_systemd(srv, db, scan_data)
+                srv.status = ServerStatus.online.value
+                srv.last_seen = datetime.utcnow()
+                srv.docker_available = True
+                db.commit()
+                return {"discovered": result["added"] + result["updated"], "source": "agent"}
+        
+        # Agent not available, fallback to SSH
+        client = get_ssh_client(srv, password=password)
+        if not client:
+            raise HTTPException(400, "Agent不可用且SSH连接失败，请检查凭证")
+        try:
+            result = _sync_ssh_containers_to_db(srv, db, client)
+            srv.status = ServerStatus.online.value
+            srv.last_seen = datetime.utcnow()
+            srv.docker_available = True
+            db.commit()
+            return {"discovered": result["added"] + result["updated"], "source": "ssh"}
+        except Exception as e:
+            raise HTTPException(500, f"Scan failed: {e}")
+        finally:
+            try:
+                client.close()
+            except:
+                pass
+
+@app.post("/api/v2/servers/{server_id}/test")
+def test_server(server_id: str, password: Optional[str] = None):
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            srv.status = ServerStatus.online.value
+            srv.last_seen = datetime.utcnow()
+            db.commit()
+            return {"status": "online", "message": "Local server is always accessible"}
+        
+        # Remote server: test SSH connection
+        client = get_ssh_client(srv, password=password)
+        if client:
+            srv.status = ServerStatus.online.value
+            srv.last_seen = datetime.utcnow()
+            # Store password if provided (for future auto-scans)
+            if password:
+                srv.ssh_key = f"__password__{password}"
+            db.commit()
+            client.close()
+            return {"status": "online", "message": "SSH connection successful"}
+        return {"status": "offline", "message": "Cannot connect via SSH. Check credentials."}
+
+
+
+
+@app.post("/api/v2/test-ssh")
+def test_ssh_connection_api(data: SshTestRequest):
+    """Test SSH connection with provided credentials (before creating server)."""
+    from app.ssh_manager import test_ssh_connection
+    if not data.password and not data.ssh_key:
+        return {"success": False, "message": "请提供密码或SSH密钥"}
+    success, message = test_ssh_connection(
+        host=data.host, port=data.port,
+        username=data.username,
+        password=data.password,
+        ssh_key=data.ssh_key,
+    )
+    return {"success": success, "message": message}
+
+
+
+
+# === Agent Service Scan APIs ===
+
+@app.get("/api/v2/servers/{server_id}/agent/services")
+def get_agent_services(server_id: str):
+    """Preview Agent-discovered services without syncing to DB."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            raise HTTPException(400, "本机使用Docker发现，无需Agent扫描")
+        if srv.agent_status != "running":
+            raise HTTPException(400, f"Agent未运行 (status={srv.agent_status})")
+    
+    # Try Agent scan
+    data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    if not data:
+        # Fallback: try cached services
+        data = fetch_agent_services(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    if not data:
+        raise HTTPException(502, "Agent连接失败，请检查Agent是否正常运行")
+    
+    return {
+        "server_id": server_id,
+        "containers": data.get("containers", []),
+        "ports": data.get("ports", []),
+        "systemd_services": data.get("systemd_services", []),
+        "scan_time_ms": data.get("scan_time_ms", 0),
+        "source": "agent",
+    }
+
+
+def _extract_public_ports(container):
+    """Extract unique public host ports from Agent container data.
+    
+    Supports two formats from Agent v2.0:
+    - Legacy: port_summary string like "0.0.0.0:3000->3000/tcp"
+    - Agent v2.0: ports as integer list like [8000] or dict list like [{"port": 8000, "bind": "0.0.0.0"}]
+    """
+    ports_raw = container.get("ports", [])
+    port_summary = container.get("port_summary", "")
+    
+    # Try port_summary first (Docker standard format)
+    if port_summary:
+        source = port_summary
+        matches = re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', source)
+        if matches:
+            return list(dict.fromkeys(m[0] or m[1] for m in matches if m[0] or m[1]))
+    
+    # Agent v2.0: ports is a list of integers or dicts
+    result = []
+    for p in ports_raw:
+        if isinstance(p, int):
+            # Integer port, include all (Agent only returns bound ports)
+            result.append(str(p))
+        elif isinstance(p, dict):
+            # Dict format: {"port": 8000, "bind": "0.0.0.0"}
+            bind = p.get("bind", "")
+            port = p.get("port")
+            if port and (bind == "0.0.0.0" or bind == "[::]" or bind.startswith("0.0.0.0") or bind.startswith("[::]")):
+                result.append(str(port))
+    
+    return list(dict.fromkeys(result))
+
+
+def _build_svc_url_for_remote(name, host, container):
+    """Build service URL for remote server: get_url first, then port-based fallback.
+    
+    get_url returns relative paths like /gitea/ for CI/CD Nginx setup.
+    For remote servers without such Nginx, we need http://host:port instead.
+    """
+    from app.discovery import get_url
+    svc_url = get_url(name, host) or ''
+    
+    # If get_url returned a relative path, replace with host:port URL
+    if svc_url.startswith('/'):
+        public_ports = _extract_public_ports(container)
+        if public_ports:
+            # Skip SSH-like ports (22, 2222) for web URL
+            web_ports = [p for p in public_ports if p not in ('22', '2222')]
+            port = web_ports[0] if web_ports else (public_ports[0] if public_ports else None)
+            if port:
+                scheme = 'https' if port in ('443', '8443') else 'http'
+                svc_url = f"{scheme}://{host}:{port}"
+            else:
+                svc_url = ''
+        else:
+            svc_url = ''
+    elif not svc_url:
+        # get_url returned nothing, try port-based URL
+        public_ports = _extract_public_ports(container)
+        if public_ports:
+            web_ports = [p for p in public_ports if p not in ('22', '2222')]
+            port = web_ports[0] if web_ports else (public_ports[0] if public_ports else None)
+            if port:
+                scheme = 'https' if port in ('443', '8443') else 'http'
+                svc_url = f"{scheme}://{host}:{port}"
+    
+    return svc_url
+
+
+def _sync_agent_scan_to_db(srv, db, scan_data):
+    """Sync Agent scan results (containers) into services table with source='agent'."""
+    from app.discovery import classify_image, get_icon, get_desc
+    containers = scan_data.get("containers", [])
+    synced = 0
+    updated = 0
+    errors = 0
+    for c in containers:
+        try:
+            name = c.get("name", "")
+            image = c.get("image", "")
+            is_running = c.get("status") == "running" or "Up" in c.get("status", "")
+            # Use port_summary (compact) instead of str(ports) (verbose dict list)
+            ports_display = c.get("port_summary", "") or ", ".join(_extract_public_ports(c))
+            
+            short_image = image.split(':')[0].split('/')[-1] if image else ''
+            svc_name = name.replace('-', ' ').replace('_', ' ').title()
+            svc_url = _build_svc_url_for_remote(name, srv.host, c)
+            
+            svc_category = classify_image(short_image)
+            svc_icon = get_icon(short_image)
+            svc_desc = get_desc(short_image, name)
+            
+            if not svc_url:
+                continue
+            
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == name,
+            ).first()
+            if existing:
+                changed = False
+                for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                                   ("icon", svc_icon), ("description", svc_desc), ("image", image),
+                                   ("ports", ports_display), ("source", ServiceSource.agent.value)]:
+                    if val and getattr(existing, field) != val:
+                        setattr(existing, field, val)
+                        changed = True
+                existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+                existing.last_scanned_at = datetime.utcnow()
+                if changed:
+                    updated += 1
+            else:
+                svc = Service(
+                    server_id=srv.id, name=svc_name, url=svc_url,
+                    category=svc_category, icon=svc_icon, description=svc_desc,
+                    source=ServiceSource.agent.value,
+                    status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                    container_name=name, image=image, ports=ports_display,
+                    last_scanned_at=datetime.utcnow(),
+                )
+                db.add(svc)
+                synced += 1
+                _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+        except Exception as e:
+            print(f"[WARN] _sync_agent_scan_to_db skip container {c.get('name','?')}: {e}")
+            errors += 1
+    
+    return {"added": synced, "updated": updated, "errors": errors}
+
+
+def _sync_agent_ports_and_systemd(srv, db, scan_data):
+    """Sync Agent ports and systemd_services into services table."""
+    try:
+        _do_sync_ports_systemd(srv, db, scan_data)
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] _sync_agent_ports_and_systemd failed: {e}")
+        traceback.print_exc()
+
+
+def _do_sync_ports_systemd(srv, db, scan_data):
+    """Impl: process ports and systemd_services from Agent scan."""
+    from app.discovery import classify_image, get_icon, get_desc
+    print(f"[DEBUG] _sync_agent_ports_and_systemd: containers={len(scan_data.get('containers',[]))} ports={len(scan_data.get('ports',[]))} systemd={len(scan_data.get('systemd_services',[]))}")
+    
+    containers = scan_data.get("containers", [])
+    ports = scan_data.get("ports", [])
+    systemd_services = scan_data.get("systemd_services", [])
+    
+    # Collect ports already covered by known containers
+    container_ports = set()
+    for c in containers:
+        for p in c.get("ports", []):
+            hp = p.get("host_port")
+            if hp:
+                container_ports.add(int(hp) if str(hp).isdigit() else 0)
+    
+    # Collect existing container_name entries to avoid duplicates
+    existing_container_names = set()
+    for svc in db.query(Service).filter(Service.server_id == srv.id,
+                                         Service.container_name.isnot(None)).all():
+        existing_container_names.add(svc.container_name)
+    
+    added = 0
+    updated = 0
+    
+    # --- Process systemd services (non-system, user-facing) ---
+    valid_systemd = []
+    for svc_info in systemd_services:
+        name = svc_info.get("name", "")
+        # Skip system-level services
+        if name in _SKIP_SYSTEMD_NAMES:
+            continue
+        if name.startswith("systemd-") or name.startswith("getty@") or name.startswith("serial-getty@"):
+            continue
+        if name.startswith("user@") or name.startswith("modprobe@"):
+            continue
+        desc = svc_info.get("description", "")
+        # Also skip if already tracked as a container
+        # Convert service name to possible container name (e.g. opscenter-backend -> opscenter-backend)
+        if name.replace(".service", "") in existing_container_names:
+            continue
+        status_str = svc_info.get("status", "unknown")
+        valid_systemd.append(svc_info)
+    
+    # --- Process listening ports ---
+    # Group ports by process to avoid duplicates
+    port_services = {}  # process -> list of port info
+    for p in ports:
+        port_num = p.get("port", 0)
+        proto = p.get("proto", "tcp")
+        bind_ip = p.get("bind_ip", "")
+        process = p.get("process", "unknown")
+        
+        # Only tcp, skip udp system ports
+        if proto != "tcp":
+            continue
+        # Skip system/ephemeral ports
+        if port_num in _SKIP_PORTS or port_num > 60000:
+            continue
+        # Skip ports already covered by containers
+        if port_num in container_ports:
+            continue
+        # Skip localhost-only ports from docker-proxy (those are container mappings)
+        if bind_ip.startswith("127.0.0.1") and process == "docker-proxy":
+            continue
+        
+        if process not in port_services:
+            port_services[process] = []
+        port_services[process].append(p)
+    
+    # --- Create/update service entries from port_services ---
+    # Build a map of container_name -> Service for dedup
+    existing_by_source = {}
+    for svc in db.query(Service).filter(Service.server_id == srv.id).all():
+        key = (svc.source, svc.container_name or svc.name)
+        existing_by_source[key] = svc
+    
+    for process, port_list in port_services.items():
+        # Pick the most interesting port (lowest public port)
+        public_ports = [p for p in port_list if p.get("bind_ip", "") == "0.0.0.0"]
+        if not public_ports:
+            # Use localhost ports only if they look like real services
+            local_ports = [p for p in port_list if p.get("bind_ip", "").startswith("127.0.0.1")]
+            if not local_ports:
+                continue
+            chosen = min(local_ports, key=lambda x: x.get("port", 99999))
+        else:
+            chosen = min(public_ports, key=lambda x: x.get("port", 99999))
+        
+        port_num = chosen.get("port", 0)
+        bind_ip = chosen.get("bind_ip", "0.0.0.0")
+        
+        # Use port hints if available
+        hint = _PORT_SERVICE_HINTS.get(port_num, {})
+        svc_name = hint.get("name", process.replace("-", " ").replace("_", " ").title())
+        svc_category = hint.get("category", classify_image(process))
+        svc_icon = hint.get("icon", get_icon(process))
+        svc_desc = hint.get("desc", get_desc(process, process))
+        
+        if hint:
+            svc_url = hint["url_tpl"].format(host=srv.host)
+        else:
+            host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.is_local else srv.host
+            svc_url = f"http://{host}:{port_num}/"
+        
+        # Skip if no meaningful URL
+        if not svc_url:
+            continue
+        
+        # Dedup key: source=agent, container_name=process name or port-based key
+        dedup_key = f"port:{process}:{port_num}"
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.container_name == dedup_key,
+        ).first()
+        
+        if existing:
+            changed = False
+            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                               ("icon", svc_icon), ("description", svc_desc),
+                               ("ports", str(port_num)), ("source", ServiceSource.agent.value)]:
+                if val and getattr(existing, field) != val:
+                    setattr(existing, field, val)
+                    changed = True
+            existing.status = ServiceStatus.up.value
+            existing.last_scanned_at = datetime.utcnow()
+            if changed:
+                updated += 1
+        else:
+            svc = Service(
+                server_id=srv.id, name=svc_name, url=svc_url,
+                category=svc_category, icon=svc_icon, description=svc_desc,
+                source=ServiceSource.agent.value,
+                status=ServiceStatus.up.value,
+                container_name=dedup_key, ports=str(port_num),
+                last_scanned_at=datetime.utcnow(),
+            )
+            db.add(svc)
+            added += 1
+            _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+    
+    # --- Process systemd services without ports ---
+    for svc_info in valid_systemd:
+        name = svc_info.get("name", "").replace(".service", "")
+        desc = svc_info.get("description", "")
+        status_str = svc_info.get("status", "unknown")
+        
+        # Skip if already covered by a port-based or container entry
+        # Check port-based dedup key
+        dedup_key = f"systemd:{name}"
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.container_name == dedup_key,
+        ).first()
+        if existing:
+            existing.status = ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value
+            existing.last_scanned_at = datetime.utcnow()
+            continue
+        # Also skip if a matching service already exists by name or keyword
+        name_lower = name.replace("-", " ").replace("_", " ").lower()
+        skip_keywords = ["nginx", "opsagent", "opscenter", "2fauth", "docker", "1panel"]
+        if any(kw in name_lower for kw in skip_keywords):
+            # Check if a service with similar name exists
+            similar = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.name.ilike(f"%{kw}%"),
+            ).first()
+            if similar:
+                continue
+        
+        # Create entry (no URL for systemd-only services)
+        svc_name = name.replace("-", " ").replace("_", " ").title()
+        svc_category = classify_image(name)
+        svc_icon = get_icon(name)
+        
+        svc = Service(
+            server_id=srv.id, name=svc_name, url=f"#systemd:{name}",
+            category=svc_category, icon=svc_icon, description=desc,
+            source=ServiceSource.agent.value,
+            status=ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value,
+            container_name=dedup_key,
+            last_scanned_at=datetime.utcnow(),
+        )
+        db.add(svc)
+        added += 1
+        _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+    
+    return {"added": added, "updated": updated}
+
+
+def _sync_ssh_containers_to_db(srv, db, client):
+    """Fallback: SSH-based Docker container discovery, sync to DB."""
+    from app.discovery import classify_image, get_icon, get_desc, get_url
+    containers = discover_remote_docker_services(client, host=srv.host)
+    synced = 0
+    updated = 0
+    errors = 0
+    for c in containers:
+        try:
+            name = c.get('name', '')
+            image = c.get('image', '')
+            status_str = c.get('status', '')
+            ports = c.get('ports', '')
+            is_running = 'Up' in status_str
+            
+            short_image = image.split(':')[0].split('/')[-1] if image else ''
+            svc_name = name.replace('-', ' ').replace('_', ' ').title()
+            svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
+            # If get_url returns relative path, try auto_url port-based fallback
+            if svc_url.startswith('/') and c.get('auto_url', ''):
+                svc_url = c.get('auto_url', '')
+            elif svc_url.startswith('/'):
+                svc_url = ''  # No valid remote URL for relative path without Nginx
+            svc_category = classify_image(short_image)
+            svc_icon = get_icon(short_image)
+            svc_desc = get_desc(short_image, name)
+            
+            if not svc_url:
+                continue
+            
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == name,
+            ).first()
+            if existing:
+                for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                                   ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
+                    if val and getattr(existing, field) != val:
+                        setattr(existing, field, val)
+                existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+                existing.last_scanned_at = datetime.utcnow()
+                updated += 1
+            else:
+                svc = Service(
+                    server_id=srv.id, name=svc_name, url=svc_url,
+                    category=svc_category, icon=svc_icon, description=svc_desc,
+                    source=ServiceSource.docker_auto.value,
+                    status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                    container_name=name, image=image, ports=ports,
+                    last_scanned_at=datetime.utcnow(),
+                )
+                db.add(svc)
+                synced += 1
+                _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+        except Exception as e:
+            print(f"[WARN] _sync_ssh_containers_to_db skip container {c.get('name','?')}: {e}")
+            errors += 1
+    
+    return {"added": synced, "updated": updated, "errors": errors}
+
+
+@app.post("/api/v2/servers/{server_id}/scan-services")
+def scan_server_services(server_id: str, password: Optional[str] = None):
+    """Scan services on a server using Agent (preferred) or SSH fallback, and sync to DB."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        
+        if srv.is_local:
+            # Local server: try Agent first, fallback to Docker discovery
+            if srv.agent_status == "running" and srv.agent_port:
+                scan_data = trigger_agent_scan("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
+                if scan_data:
+                    result = _sync_agent_scan_to_db(srv, db, scan_data)
+                    port_result = _sync_agent_ports_and_systemd(srv, db, scan_data)
+                    srv.last_seen = datetime.utcnow()
+                    db.commit()
+                    return {
+                        "discovered": result["added"] + result["updated"] + port_result["added"] + port_result["updated"],
+                        "added": result["added"] + port_result["added"],
+                        "updated": result["updated"] + port_result["updated"],
+                        "source": "agent",
+                        "containers": len(scan_data.get("containers", [])),
+                    }
+            # Fallback: Docker SDK
+            discovered = discover_docker_services(srv, db, srv.host)
+            for d in discovered:
+                _auto_assign_group(str(srv.id), str(d.id), d.category or "")
+            srv.last_seen = datetime.utcnow()
+            db.commit()
+            result_count = len(discovered)
+            return {"discovered": result_count, "source": "docker_local", "added": result_count, "updated": 0}
+        
+        # Remote server: try Agent first
+        if srv.agent_status == "running" and srv.agent_port:
+            scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+            if scan_data:
+                result = _sync_agent_scan_to_db(srv, db, scan_data)
+                port_result = _sync_agent_ports_and_systemd(srv, db, scan_data)
+                srv.status = ServerStatus.online.value
+                srv.last_seen = datetime.utcnow()
+                srv.docker_available = True
+                db.commit()
+                return {
+                    "discovered": result["added"] + result["updated"] + port_result["added"] + port_result["updated"],
+                    "added": result["added"] + port_result["added"],
+                    "updated": result["updated"] + port_result["updated"],
+                    "source": "agent",
+                    "containers": len(scan_data.get("containers", [])),
+                }
+        
+        # Agent not available, fallback to SSH
+        client = get_ssh_client(srv, password=password)
+        if not client:
+            raise HTTPException(400, "Agent不可用且SSH连接失败，请检查凭证")
+        try:
+            result = _sync_ssh_containers_to_db(srv, db, client)
+            srv.status = ServerStatus.online.value
+            srv.last_seen = datetime.utcnow()
+            srv.docker_available = True
+            db.commit()
+            return {
+                "discovered": result["added"] + result["updated"],
+                "added": result["added"],
+                "updated": result["updated"],
+                "source": "ssh",
+            }
+        except Exception as e:
+            raise HTTPException(500, f"SSH扫描失败: {e}")
+        finally:
+            try:
+                client.close()
+            except:
+                pass
+
+
+# === Service APIs ===
+@app.get("/api/v2/services")
+def list_services(server_id: Optional[str] = None, category: Optional[str] = None, pinned: Optional[bool] = None, search: Optional[str] = None):
+    with get_db() as db:
+        q = db.query(Service)
+        if server_id:
+            q = q.filter(Service.server_id == uuid.UUID(server_id))
+        if category:
+            q = q.filter(Service.category == category)
+        if pinned is not None:
+            q = q.filter(Service.pinned == pinned)
+        if search:
+            q = q.filter(Service.name.ilike(f"%{search}%"))
+        # Only show services that have a web-accessible URL and are not hidden
+        q = q.filter(Service.url != None, Service.url != '', Service.hidden != True)
+        q = q.order_by(Service.sort_order, Service.category, Service.name)
+        services = q.all()
+        result = []
+        for s in services:
+            result.append({
+                "id": str(s.id), "server_id": str(s.server_id),
+                "name": s.name, "url": s.url, "category": s.category,
+                "icon": s.icon, "description": s.description,
+                "source": s.source, "status": s.status, "pinned": s.pinned,
+                "health_path": s.health_path, "container_name": s.container_name,
+                "image": s.image, "ports": s.ports,
+                "account": s.account or "",
+                "password": s.password or "",
+            })
+        return result
+
+@app.post("/api/v2/services", status_code=201)
+def create_service(data: ServiceCreate, server_id: str = Query(...)):
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        svc = Service(
+            server_id=srv.id, name=data.name, url=data.url,
+            category=data.category, icon=data.icon, description=data.description,
+            health_path=data.health_path, pinned=data.pinned,
+            source=ServiceSource.manual.value, status=ServiceStatus.unknown.value,
+        )
+        db.add(svc)
+        db.commit()
+        db.refresh(svc)
+        return {"id": str(svc.id), "name": svc.name}
+
+@app.put("/api/v2/services/{service_id}")
+def update_service(service_id: str, data: ServiceUpdate):
+    with get_db() as db:
+        svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
+        if not svc:
+            raise HTTPException(404, "Service not found")
+        for field, val in data.model_dump(exclude_unset=True).items():
+            if val is not None:
+                setattr(svc, field, val)
+        # Handle account/password explicitly (allow empty string to clear)
+        if 'account' in data.model_dump(exclude_unset=True):
+            acct = data.model_dump(exclude_unset=True).get('account')
+            svc.account = acct if acct else ''
+        if 'password' in data.model_dump(exclude_unset=True):
+            pwd = data.model_dump(exclude_unset=True).get('password')
+            svc.password = pwd if pwd else ''
+        db.commit()
+        return {"ok": True}
+
+@app.delete("/api/v2/services/{service_id}")
+def delete_service(service_id: str):
+    with get_db() as db:
+        svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
+        if not svc:
+            raise HTTPException(404, "Service not found")
+        if svc.source == ServiceSource.docker_label.value:
+            raise HTTPException(400, "Cannot delete auto-discovered service (disable label instead)")
+        db.delete(svc)
+        db.commit()
+        return {"ok": True}
+
+@app.patch("/api/v2/services/{service_id}/pin")
+def toggle_pin(service_id: str):
+    """Toggle service pin status."""
+    with get_db() as db:
+        svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
+        if not svc:
+            raise HTTPException(404, "Service not found")
+        svc.pinned = not svc.pinned
+        db.commit()
+        return {"ok": True, "pinned": svc.pinned}
+
+
+# === Health Check Trigger ===
+@app.post("/api/v2/health-check")
+def trigger_health_check():
+    """Manually trigger health check for all services."""
+    import requests as req
+    checked = 0
+    with get_db() as db:
+        services = db.query(Service).all()
+        for svc in services:
+            if not svc.url:
+                continue
+            try:
+                check_url = svc.url
+                if svc.health_path:
+                    base = svc.url if svc.url.startswith("http") else ""
+                    if not base:
+                        srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                        host = srv.host if srv else LOCAL_HOST
+                        base = f"http://{srv.host}"
+                    check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
+                elif check_url.startswith("/"):
+                    srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                    host = srv.host if srv else LOCAL_HOST
+                    check_url = f"http://{srv.host}{check_url}"
+                resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
+                svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
+            except Exception:
+                svc.status = ServiceStatus.down.value
+            checked += 1
+        db.commit()
+    return {"checked": checked, "message": f"Health check completed for {checked} services"}
+
+
+@app.post("/api/v2/servers/{server_id}/ssh-test")
+def ssh_test(server_id: str, password: Optional[str] = None):
+    """Test SSH connection and auto-scan if successful."""
+    from app.discovery import classify_image, get_icon, get_desc, get_url
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            return {"success": True, "message": "Local server, no SSH needed"}
+        
+        client = get_ssh_client(srv, password=password)
+        if not client:
+            return {"success": False, "message": "SSH连接失败，请检查账号密码"}
+        
+        # Save credentials
+        if password:
+            srv.ssh_key = f"__password__{password}"
+        srv.status = ServerStatus.online.value
+        srv.last_seen = datetime.utcnow()
+        
+        # Auto-discover
+        containers = discover_remote_docker_services(client, host=srv.host)
+        count = 0
+        for c in containers:
+            name = c.get('name', '')
+            image = c.get('image', '')
+            status_str = c.get('status', '')
+            ports = c.get('ports', '')
+            is_running = c.get('is_running', 'Up' in status_str)
+            
+            short_image = image.split(':')[0].split('/')[-1] if image else ''
+            svc_name = name.replace('-', ' ').replace('_', ' ').title()
+            svc_url = c.get('auto_url', '') or get_url(name, srv.host) or ''
+            svc_category = classify_image(short_image)
+            svc_icon = get_icon(short_image)
+            svc_desc = get_desc(short_image, name)
+            
+            if not svc_url:
+                continue
+            
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == name,
+            ).first()
+            if existing:
+                for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category), ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
+                    if val and getattr(existing, field) != val:
+                        setattr(existing, field, val)
+                existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+            else:
+                svc = Service(
+                    server_id=srv.id, name=svc_name, url=svc_url,
+                    category=svc_category, icon=svc_icon, description=svc_desc,
+                    source=ServiceSource.docker_auto.value,
+                    status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                    container_name=name, image=image, ports=ports,
+                )
+                db.add(svc)
+            count += 1
+        
+        srv.docker_available = True
+        db.commit()
+        client.close()
+        return {"success": True, "message": f"SSH连接成功，发现 {count} 个服务", "discovered": count}
+
+# === Scan & Discovery ===
+@app.post("/api/v2/scan")
+def scan_all():
+    with get_db() as db:
+        total_added = 0
+        total_updated = 0
+        server_results = []
+        # Local servers
+        servers = db.query(Server).filter(Server.is_local == True).all()
+        for srv in servers:
+            sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "docker_local", "added": 0, "updated": 0, "status": "ok"}
+            if srv.docker_available:
+                discovered = discover_docker_services(srv, db, srv.host)
+                for d in discovered:
+                    _auto_assign_group(str(srv.id), str(d.id), d.category or "")
+                srv.last_seen = datetime.utcnow()
+                sr_detail["added"] = len(discovered)
+                total_added += len(discovered)
+            server_results.append(sr_detail)
+        # Remote servers: try Agent first, then SSH fallback
+            # Check local Agent status too
+            local_srv = db.query(Server).filter(Server.is_local == True).first()
+            if local_srv:
+                try:
+                    local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
+                    if local_data:
+                        local_srv.agent_status = "running"
+                        local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
+                        local_srv.last_seen = datetime.utcnow()
+                    else:
+                        local_srv.agent_status = "stopped"
+                except Exception as e:
+                    print(f"[AgentHealthCheck] Local Agent error: {e}")
+                    local_srv.agent_status = "stopped"
+
+        remote_servers = db.query(Server).filter(Server.is_local == False).all()
+        for srv in remote_servers:
+            sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "", "added": 0, "updated": 0, "status": "ok"}
+            try:
+                # Try Agent if running
+                if srv.agent_status == "running" and srv.agent_port:
+                    scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+                    if scan_data:
+                        result = _sync_agent_scan_to_db(srv, db, scan_data)
+                        _sync_agent_ports_and_systemd(srv, db, scan_data)
+                        srv.status = ServerStatus.online.value
+                        srv.last_seen = datetime.utcnow()
+                        srv.docker_available = True
+                        total_added += result["added"]
+                        total_updated += result["updated"]
+                        sr_detail["source"] = "agent"
+                        sr_detail["added"] = result["added"]
+                        sr_detail["updated"] = result["updated"]
+                        db.commit()
+                        server_results.append(sr_detail)
+                        continue
+                # Agent not available, fallback to SSH
+                client = get_ssh_client(srv)
+                if not client:
+                    sr_detail["status"] = "skipped"
+                    sr_detail["source"] = "ssh_unavailable"
+                    server_results.append(sr_detail)
+                    continue
+                try:
+                    result = _sync_ssh_containers_to_db(srv, db, client)
+                    srv.status = ServerStatus.online.value
+                    srv.last_seen = datetime.utcnow()
+                    srv.docker_available = True
+                    total_added += result["added"]
+                    total_updated += result["updated"]
+                    sr_detail["source"] = "ssh"
+                    sr_detail["added"] = result["added"]
+                    sr_detail["updated"] = result["updated"]
+                    db.commit()
+                finally:
+                    try:
+                        client.close()
+                    except:
+                        pass
+            except Exception as e:
+                print(f"Remote scan error for {srv.host}: {e}")
+                sr_detail["status"] = "error"
+                sr_detail["source"] = sr_detail["source"] or "unknown"
+                sr_detail["error"] = str(e)
+            server_results.append(sr_detail)
+        return {"discovered": total_added + total_updated, "added": total_added, "updated": total_updated, "servers": server_results, "message": f"Scan complete, {total_added} added, {total_updated} updated"}
+
+
+# === Monitor (Prometheus proxy) ===
+@app.get("/api/v2/servers/{server_id}/monitor")
+@app.get("/api/v2/monitor/{server_id}")
+def get_monitor(server_id: str):
+    """Get real monitoring data for a server via Agent (all servers)."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+    
+    # All servers: try Agent first
+    if srv.agent_status == "running" and srv.agent_port:
+        agent_host = "127.0.0.1" if srv.is_local else srv.host
+        agent_data = fetch_agent_metrics(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+        if agent_data:
+            containers = agent_data.get("containers", [])
+            # Calculate rate metrics from cumulative Agent values
+            _cur_net_rx = agent_data.get("net_rx_bytes", 0) or 0
+            _cur_net_tx = agent_data.get("net_tx_bytes", 0) or 0
+            _cur_disk_read = agent_data.get("disk_read_bytes", 0) or 0
+            _cur_disk_write = agent_data.get("disk_write_bytes", 0) or 0
+            _net_rx_rate = 0.0
+            _net_tx_rate = 0.0
+            _disk_read_rate = 0.0
+            _disk_write_rate = 0.0
+            with get_db() as db:
+                from sqlalchemy import func as _sa_func
+                for _mn, _cv in [("net_rx_raw", _cur_net_rx), ("net_tx_raw", _cur_net_tx), ("disk_read_raw", _cur_disk_read), ("disk_write_raw", _cur_disk_write)]:
+                    _last = db.query(MetricHistory).filter(
+                        MetricHistory.server_id == srv.id,
+                        MetricHistory.metric == _mn,
+                    ).order_by(MetricHistory.timestamp.desc()).first()
+                    if _last and _last.value:
+                        _elapsed = (datetime.utcnow() - _last.timestamp).total_seconds()
+                        if _elapsed > 0:
+                            _rv = max(0, (_cv - _last.value) / _elapsed)
+                        else:
+                            _rv = 0
+                    else:
+                        _rv = 0
+                    if _mn == "net_rx_raw": _net_rx_rate = _rv
+                    elif _mn == "net_tx_raw": _net_tx_rate = _rv
+                    elif _mn == "disk_read_raw": _disk_read_rate = _rv
+                    elif _mn == "disk_write_raw": _disk_write_rate = _rv
+            
+            normalized = {
+                "cpu": agent_data.get("cpu_percent", 0),
+                "cpu_count": agent_data.get("cpu_count", 0),
+                "memory": agent_data.get("memory_percent", 0),
+                "memory_total": agent_data.get("memory_total", 0),
+                "memory_used": agent_data.get("memory_used", 0),
+                "memory_avail": agent_data.get("memory_available", 0),
+                "disk": agent_data.get("disk_percent", 0),
+                "disk_total": agent_data.get("disk_total", 0),
+                "disk_used": agent_data.get("disk_used", 0),
+                "disk_avail": agent_data.get("disk_avail", 0),
+                "disk_read": _disk_read_rate,
+                "disk_write": _disk_write_rate,
+                "load1": agent_data.get("load1", 0),
+                "load5": agent_data.get("load5", 0),
+                "load15": agent_data.get("load15", 0),
+                "net_rx": _net_rx_rate,
+                "net_tx": _net_tx_rate,
+                "uptime": agent_data.get("uptime", 0),
+                "container_running": agent_data.get("container_running", 0),
+                "container_stopped": agent_data.get("container_stopped", 0),
+            }
+            return {
+                "server_id": server_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metrics": normalized,
+                "containers": containers,
+                "source": "agent",
+            }
+    
+    # Agent unreachable or not deployed: try SSH fallback for remote servers
+    if not srv.is_local:
+        password = None
+        if srv.ssh_key and srv.ssh_key.startswith("__password__"):
+            password = srv.ssh_key[len("__password__"):]
+        client = get_ssh_client(srv, password=password)
+        if not client:
+            return {
+                "server_id": server_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metrics": {"cpu": 0, "memory": 0, "disk": 0, "cpu_count": 0,
+                           "memory_total": 0, "memory_used": 0, "memory_avail": 0,
+                           "disk_total": 0, "disk_used": 0, "disk_avail": 0,
+                           "disk_read": 0, "disk_write": 0,
+                           "load1": 0, "load5": 0, "load15": 0,
+                           "net_rx": 0, "net_tx": 0, "uptime": 0,
+                           "container_running": 0, "container_stopped": 0},
+                "containers": [],
+                "error": "Agent不可达且SSH连接失败",
+            }
+        try:
+            m = collect_remote_metrics(client)
+            containers = get_remote_containers(client)
+            client.close()
+            normalized = {
+                "cpu": m.get("cpu_percent", 0),
+                "cpu_count": m.get("cpu_count", 0),
+                "memory": m.get("memory_percent", 0),
+                "memory_total": m.get("memory_total", 0),
+                "memory_used": m.get("memory_used", 0),
+                "memory_avail": m.get("memory_total", 0) - m.get("memory_used", 0),
+                "disk": m.get("disk_percent", 0),
+                "disk_total": m.get("disk_total", 0),
+                "disk_used": m.get("disk_used", 0),
+                "disk_avail": m.get("disk_avail", 0),
+                "disk_read": 0,
+                "disk_write": 0,
+                "load1": m.get("load1", 0),
+                "load5": m.get("load5", 0),
+                "load15": m.get("load15", 0),
+                "net_rx": m.get("net_rx_bytes", 0),
+                "net_tx": m.get("net_tx_bytes", 0),
+                "uptime": m.get("uptime", 0),
+                "container_running": len([c for c in containers if c.get("status") == "running"]),
+                "container_stopped": len([c for c in containers if c.get("status") != "running"]),
+            }
+            return {
+                "server_id": server_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metrics": normalized,
+                "containers": containers,
+                "source": "ssh",
+            }
+        except Exception as e:
+            try: client.close()
+            except: pass
+            return {
+                "server_id": server_id,
+                "timestamp": datetime.utcnow().isoformat(),
+                "metrics": {},
+                "containers": [],
+                "error": str(e),
+            }
+    
+    # Local server without Agent: return empty with hint
+    return {
+        "server_id": server_id,
+        "timestamp": datetime.utcnow().isoformat(),
+        "metrics": {"cpu": 0, "memory": 0, "disk": 0, "cpu_count": 0,
+                   "memory_total": 0, "memory_used": 0, "memory_avail": 0,
+                   "disk_total": 0, "disk_used": 0, "disk_avail": 0,
+                   "disk_read": 0, "disk_write": 0,
+                   "load1": 0, "load5": 0, "load15": 0,
+                   "net_rx": 0, "net_tx": 0, "uptime": 0,
+                   "container_running": 0, "container_stopped": 0},
+        "containers": [],
+        "error": "本机Agent未部署，请部署Agent以启用监控",
+    }
+
+
+def _downsample_history(values, hours):
+    """Smart downsampling: return aggregated data covering the full time range.
+    
+    For short ranges (<=1h): return raw data (no downsampling).
+    For longer ranges: average values within time buckets to cover the full range
+    while keeping the result count reasonable (~100-200 points).
+    """
+    if not values or hours <= 1:
+        return values
+    # Target: ~120 data points covering the full range
+    # bucket_size = total_seconds / target_points
+    total_span = values[-1][0] - values[0][0]
+    if total_span <= 0:
+        return values
+    bucket_size = total_span / 120
+    # Minimum bucket: 60 seconds (don't over-subdivide)
+    bucket_size = max(bucket_size, 60)
+    
+    result = []
+    bucket_start = values[0][0]
+    bucket_vals = []
+    
+    for ts, val in values:
+        if ts >= bucket_start + bucket_size:
+            if bucket_vals:
+                avg_ts = bucket_vals[len(bucket_vals)//2][0]  # midpoint timestamp
+                avg_val = sum(v for _, v in bucket_vals) / len(bucket_vals)
+                result.append([avg_ts, round(avg_val, 2)])
+            bucket_start = ts
+            bucket_vals = [(ts, val)]
+        else:
+            bucket_vals.append((ts, val))
+    
+    # Don't forget the last bucket
+    if bucket_vals:
+        avg_ts = bucket_vals[len(bucket_vals)//2][0]
+        avg_val = sum(v for _, v in bucket_vals) / len(bucket_vals)
+        result.append([avg_ts, round(avg_val, 2)])
+    
+    return result
+
+# === Monitor History ===
+@app.get("/api/v2/servers/{server_id}/history")
+@app.get("/api/v2/monitor/{server_id}/history")
+def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
+    """Get historical monitoring data from Prometheus (local server only)."""
+    import requests as req
+
+    # Remote servers have no Prometheus history data
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if not srv.is_local:
+            # Try Agent-collected history
+            from datetime import timedelta
+            cutoff = datetime.utcnow() - timedelta(hours=hours)
+            records = db.query(MetricHistory).filter(
+                MetricHistory.server_id == srv.id,
+                MetricHistory.metric == metric,
+                MetricHistory.timestamp >= cutoff,
+            ).order_by(MetricHistory.timestamp).all()
+            values = [[calendar.timegm(r.timestamp.timetuple()), r.value] for r in records]
+            if values:
+                return {"metric": metric, "values": _downsample_history(values, hours), "source": "agent"}
+            return {"metric": metric, "values": [], "note": "Agent未部署或无历史数据"}
+
+    # Local server: use Agent-collected history (same as remote)
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    records = db.query(MetricHistory).filter(
+        MetricHistory.server_id == srv.id,
+        MetricHistory.metric == metric,
+        MetricHistory.timestamp >= cutoff,
+    ).order_by(MetricHistory.timestamp).all()
+    values = [[calendar.timegm(r.timestamp.timetuple()), r.value] for r in records]
+    if values:
+        return {"metric": metric, "values": _downsample_history(values, hours), "source": "agent"}
+    return {"metric": metric, "values": [], "note": "本机Agent未部署或无历史数据"}
+
+
+# === Categories ===
+@app.get("/api/v2/categories")
+def list_categories(server_id: Optional[str] = None):
+    with get_db() as db:
+        q = db.query(Service.category).distinct()
+        if server_id:
+            q = q.filter(Service.server_id == uuid.UUID(server_id))
+        cats = [r[0] for r in q.all()]
+        result = []
+        for name in cats:
+            meta = CATEGORY_META.get(name, CATEGORY_META["未分类"])
+            q2 = db.query(Service).filter(Service.category == name)
+            if server_id:
+                q2 = q2.filter(Service.server_id == uuid.UUID(server_id))
+            svc_count = q2.count()
+            result.append({
+                "name": name,
+                "icon": meta["icon"],
+                "color": meta["color"],
+                "order": meta["order"],
+                "count": svc_count,
+            })
+        result.sort(key=lambda x: x["order"])
+        return result
+
+
+
+# === Agent Management APIs ===
+
+@app.post("/api/v2/servers/{server_id}/deploy-agent")
+def deploy_agent_api(server_id: str):
+    """Deploy or re-deploy OpsAgent on a remote server."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            return {"success": False, "message": "本机Agent已内置运行，无需手动部署"}
+    
+    # Mark as deploying
+    with get_db() as db:
+        s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        s.agent_status = "deploying"
+        db.commit()
+    
+    result = deploy_agent(srv)
+    
+    # Update status
+    with get_db() as db:
+        s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if result.get("success"):
+            s.agent_status = "running"
+            s.agent_port = result.get("agent_port", 19100)
+            s.agent_token = result.get("agent_token", "")
+            s.agent_version = result.get("agent_version", "2.0.0")
+        else:
+            s.agent_status = "error"
+        db.commit()
+    
+    # Auto-trigger first scan after successful deploy
+    scan_info = ""
+    if result.get("success"):
+        try:
+            scan_data = trigger_agent_scan(srv.host, result.get("agent_port", 19100), result.get("agent_token", ""))
+            if scan_data:
+                with get_db() as db2:
+                    s2 = db2.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+                    if s2:
+                        sr = _sync_agent_scan_to_db(s2, db2, scan_data)
+                        s2.status = ServerStatus.online.value
+                        s2.last_seen = datetime.utcnow()
+                        s2.docker_available = True
+                        db2.commit()
+                        scan_info = f" 发现{sr['added']}个服务"
+                        result["scan_added"] = sr["added"]
+                        result["scan_updated"] = sr["updated"]
+        except Exception as e:
+            scan_info = f" 自动扫描失败: {e}"
+        if scan_info:
+            result["message"] = (result.get("message", "") + scan_info).strip()
+    
+    return result
+
+
+@app.get("/api/v2/servers/{server_id}/agent-status")
+def agent_status_api(server_id: str):
+    """Check OpsAgent status on a remote server."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+    
+    if srv.is_local:
+        return {"status": "running" if srv.agent_status == "running" else "not_deployed", "agent_port": srv.agent_port, "agent_version": srv.agent_version, "message": "Agent运行中" if srv.agent_status == "running" else "本机Agent未部署"}
+    
+    result = check_agent_status(srv)
+    # Update DB
+    with get_db() as db:
+        s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if result.get("status") == "running":
+            s.agent_status = "running"
+            if result.get("agent_port"):
+                s.agent_port = result["agent_port"]
+            if result.get("agent_token"):
+                s.agent_token = result["agent_token"]
+            if result.get("agent_version"):
+                s.agent_version = result["agent_version"]
+        elif result.get("status") in ("stopped", "installed_stopped"):
+            s.agent_status = "stopped"
+        elif result.get("status") == "not_deployed":
+            s.agent_status = "not_deployed"
+        db.commit()
+    return result
+
+
+@app.delete("/api/v2/servers/{server_id}/agent")
+def uninstall_agent_api(server_id: str):
+    """Uninstall OpsAgent from a remote server."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            return {"success": False, "message": "本机无需卸载Agent"}
+    
+    result = uninstall_agent(srv)
+    if result.get("success"):
+        with get_db() as db:
+            s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+            s.agent_status = "not_deployed"
+            s.agent_port = 19100
+            s.agent_token = None
+            s.agent_version = None
+            db.commit()
+    return result
+
+
+# === Agent Metrics Collection ===
+
+def _collect_agent_metrics():
+    """Synchronous: collect metrics from all running agents and store history."""
+    import requests as req
+    try:
+        with get_db() as db:
+            # Create table if not exists
+            Base.metadata.create_all(bind=engine)
+            
+            servers = db.query(Server).filter(
+                Server.agent_status == "running"
+            ).all()
+            
+            for srv in servers:
+                try:
+                    data = fetch_agent_metrics("127.0.0.1" if srv.is_local else srv.host, srv.agent_port or 19100, srv.agent_token or "")
+                    if not data:
+                        # Agent unreachable
+                        srv.agent_status = "stopped"
+                        continue
+                    
+                    # Store historical metrics
+                    from sqlalchemy import func as sa_func
+                    now = datetime.utcnow()
+                    # Get current cumulative values from agent
+                    cur_net_rx = data.get("net_rx_bytes", 0) or 0
+                    cur_net_tx = data.get("net_tx_bytes", 0) or 0
+                    cur_disk_read = data.get("disk_read_bytes", 0) or 0
+                    cur_disk_write = data.get("disk_write_bytes", 0) or 0
+                    
+                    # Calculate rates from last raw values
+                    net_rx_rate = 0.0
+                    net_tx_rate = 0.0
+                    disk_read_rate = 0.0
+                    disk_write_rate = 0.0
+                    
+                    for metric_name, raw_val in [("net_rx_raw", cur_net_rx), ("net_tx_raw", cur_net_tx), ("disk_read_raw", cur_disk_read), ("disk_write_raw", cur_disk_write)]:
+                        last_rec = db.query(MetricHistory).filter(
+                            MetricHistory.server_id == srv.id,
+                            MetricHistory.metric == metric_name,
+                        ).order_by(MetricHistory.timestamp.desc()).first()
+                        if last_rec and last_rec.value:
+                            elapsed = (now - last_rec.timestamp).total_seconds()
+                            if elapsed > 0:
+                                rate_val = max(0, (raw_val - last_rec.value) / elapsed)
+                            else:
+                                rate_val = 0
+                        else:
+                            rate_val = 0
+                        if metric_name == "net_rx_raw": net_rx_rate = rate_val
+                        elif metric_name == "net_tx_raw": net_tx_rate = rate_val
+                        elif metric_name == "disk_read_raw": disk_read_rate = rate_val
+                        elif metric_name == "disk_write_raw": disk_write_rate = rate_val
+                    
+                    metrics_to_store = {
+                        "cpu": data.get("cpu_percent", 0),
+                        "memory": data.get("memory_percent", 0),
+                        "disk": data.get("disk_percent", 0),
+                        "load1": data.get("load1", 0),
+                        "load5": data.get("load5", 0),
+                        "load15": data.get("load15", 0),
+                        "net_rx": net_rx_rate,
+                        "net_tx": net_tx_rate,
+                        "disk_read": disk_read_rate,
+                        "disk_write": disk_write_rate,
+                        "net_rx_raw": cur_net_rx,
+                        "net_tx_raw": cur_net_tx,
+                        "disk_read_raw": cur_disk_read,
+                        "disk_write_raw": cur_disk_write,
+                    }
+                    for metric_name, value in metrics_to_store.items():
+                        record = MetricHistory(
+                            server_id=srv.id,
+                            timestamp=now,
+                            metric=metric_name,
+                            value=float(value) if value else 0,
+                        )
+                        db.add(record)
+                    
+                    # Update server status
+                    srv.status = ServerStatus.online.value
+                    srv.last_seen = now
+                    srv.agent_status = "running"
+                    
+                except Exception as e:
+                    print(f"Agent metrics collection error for {srv.host}: {e}")
+                    srv.agent_status = "stopped"
+            
+            db.commit()
+            
+            # Cleanup old metrics (keep 7 days)
+            from datetime import timedelta
+            cutoff = datetime.utcnow() - timedelta(days=7)
+            db.query(MetricHistory).filter(MetricHistory.timestamp < cutoff).delete()
+            db.commit()
+            
+            # Clean up old raw metrics that are older than 1 hour (rate calculation only needs recent)
+            raw_cutoff = datetime.utcnow() - timedelta(hours=1)
+            for raw_m in ["net_rx_raw", "net_tx_raw", "disk_read_raw", "disk_write_raw"]:
+                db.query(MetricHistory).filter(
+                    MetricHistory.metric == raw_m,
+                    MetricHistory.timestamp < raw_cutoff,
+                ).delete()
+            db.commit()
+            
+    except Exception as e:
+        print(f"Agent metrics collection error: {e}")
+
+
+async def background_agent_collector():
+    """Periodically collect metrics from all running agents."""
+    while True:
+        await asyncio.to_thread(_collect_agent_metrics)
+        await asyncio.sleep(30)
+
+
+@app.get("/api/v2/servers/{server_id}/agent-metrics")
+def get_agent_metrics_api(server_id: str):
+    """Get real-time metrics from a running OpsAgent."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+    
+    if srv.is_local:
+        return {"error": "本机Agent已内置运行，无需手动部署"}
+    
+    if srv.agent_status != "running":
+        return {"error": "Agent未运行", "agent_status": srv.agent_status}
+    
+    data = fetch_agent_metrics("127.0.0.1" if srv.is_local else srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    if not data:
+        # Update status
+        with get_db() as db:
+            s = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+            s.agent_status = "stopped"
+            db.commit()
+        return {"error": "Agent连接失败", "agent_status": "stopped"}
+    
+    # Calculate rate metrics from cumulative Agent values
+    _cur_net_rx2 = data.get("net_rx_bytes", 0) or 0
+    _cur_net_tx2 = data.get("net_tx_bytes", 0) or 0
+    _cur_disk_read2 = data.get("disk_read_bytes", 0) or 0
+    _cur_disk_write2 = data.get("disk_write_bytes", 0) or 0
+    _net_rx_rate2 = 0.0
+    _net_tx_rate2 = 0.0
+    _disk_read_rate2 = 0.0
+    _disk_write_rate2 = 0.0
+    from sqlalchemy import func as _sa_func2
+    with get_db() as _db2:
+        for _mn2, _cv2 in [("net_rx_raw", _cur_net_rx2), ("net_tx_raw", _cur_net_tx2), ("disk_read_raw", _cur_disk_read2), ("disk_write_raw", _cur_disk_write2)]:
+            _last2 = _db2.query(MetricHistory).filter(
+                MetricHistory.server_id == uuid.UUID(server_id),
+                MetricHistory.metric == _mn2,
+            ).order_by(MetricHistory.timestamp.desc()).first()
+            if _last2 and _last2.value:
+                _elapsed2 = (datetime.utcnow() - _last2.timestamp).total_seconds()
+                if _elapsed2 > 0:
+                    _rv2 = max(0, (_cv2 - _last2.value) / _elapsed2)
+                else:
+                    _rv2 = 0
+            else:
+                _rv2 = 0
+            if _mn2 == "net_rx_raw": _net_rx_rate2 = _rv2
+            elif _mn2 == "net_tx_raw": _net_tx_rate2 = _rv2
+            elif _mn2 == "disk_read_raw": _disk_read_rate2 = _rv2
+            elif _mn2 == "disk_write_raw": _disk_write_rate2 = _rv2
+
+    # Normalize metrics to match Prometheus format
+    normalized = {
+        "cpu": data.get("cpu_percent", 0),
+        "cpu_count": data.get("cpu_count", 0),
+        "memory": data.get("memory_percent", 0),
+        "memory_total": data.get("memory_total", 0),
+        "memory_used": data.get("memory_used", 0),
+        "memory_avail": data.get("memory_available", 0),
+        "disk": data.get("disk_percent", 0),
+        "disk_total": data.get("disk_total", 0),
+        "disk_used": data.get("disk_used", 0),
+        "disk_avail": data.get("disk_avail", 0),
+        "disk_read": _disk_read_rate2,
+        "disk_write": _disk_write_rate2,
+        "load1": data.get("load1", 0),
+        "load5": data.get("load5", 0),
+        "load15": data.get("load15", 0),
+        "net_rx": _net_rx_rate2,
+        "net_tx": _net_tx_rate2,
+        "uptime": data.get("uptime", 0),
+        "container_running": data.get("container_running", 0),
+        "container_stopped": data.get("container_stopped", 0),
+    }
+    return {
+        "server_id": server_id,
+        "timestamp": datetime.utcnow().isoformat(),
+        "metrics": normalized,
+        "containers": data.get("containers", []),
+    }
+
+
+@app.get("/api/v2/servers/{server_id}/agent-history")
+def get_agent_history_api(server_id: str, metric: str = "cpu", hours: int = 24):
+    """Get historical metrics for a remote server from Agent-collected data."""
+    from sqlalchemy import func as sa_func
+    
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        if srv.is_local:
+            return {"metric": metric, "values": [], "note": "本机请使用 /history 端点"}
+        
+        from datetime import timedelta
+        cutoff = datetime.utcnow() - timedelta(hours=hours)
+        records = db.query(MetricHistory).filter(
+            MetricHistory.server_id == srv.id,
+            MetricHistory.metric == metric,
+            MetricHistory.timestamp >= cutoff,
+        ).order_by(MetricHistory.timestamp).all()
+        
+        values = []
+        for r in records:
+            values.append([r.timestamp.timestamp(), r.value])
+        
+        return {"metric": metric, "values": _downsample_history(values, hours)}
+
+# === Health ===
+@app.get("/api/v2/health")
+def health_check():
+    with get_db() as db:
+        try:
+            db.execute(text("SELECT 1"))
+            db_ok = True
+        except:
+            db_ok = False
+    
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": db_ok,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+# === Stats ===
+@app.get("/api/v2/stats")
+def get_stats():
+    with get_db() as db:
+        server_count = db.query(Server).count()
+        service_count = db.query(Service).count()
+        up_count = db.query(Service).filter(Service.status == ServiceStatus.up.value).count()
+        down_count = db.query(Service).filter(Service.status == ServiceStatus.down.value).count()
+        return {
+            "servers": server_count,
+            "services": service_count,
+            "up": up_count,
+            "down": down_count,
+        }
+# === Patch: add health-check-url and group-config endpoints ===
+# This code should be appended before the last line of main.py
+
+# === URL-based Health Check (for manual services) ===
+@app.get("/api/v2/health-check-url")
+def health_check_url(url: str = Query(..., description="URL to check")):
+    """Check if a URL is reachable from server side (handles HTTPS/self-signed certs)."""
+    import requests as req
+    import urllib.parse
+    # Validate URL
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        # Try as relative path
+        if url.startswith("/"):
+            url = f"http://{LOCAL_HOST}{url}"
+        else:
+            return {"status": "error", "message": "Invalid URL"}
+    try:
+        resp = req.head(url, timeout=5, allow_redirects=True, verify=False)
+        if resp.status_code < 500:
+            return {"status": "online", "code": resp.status_code, "url": url}
+        else:
+            return {"status": "offline", "code": resp.status_code, "url": url}
+    except req.exceptions.SSLError:
+        # Self-signed cert: try HTTP fallback
+        http_url = url.replace("https://", "http://", 1)
+        try:
+            resp2 = req.head(http_url, timeout=5, allow_redirects=True, verify=False)
+            if resp2.status_code < 500:
+                return {"status": "online", "code": resp2.status_code, "url": http_url, "note": "HTTPS cert error, HTTP fallback"}
+            else:
+                return {"status": "offline", "code": resp2.status_code, "url": http_url}
+        except Exception:
+            return {"status": "offline", "url": http_url, "note": "HTTPS cert error, HTTP also failed"}
+    except req.exceptions.Timeout:
+        return {"status": "offline", "url": url, "note": "timeout"}
+    except Exception as e:
+        return {"status": "offline", "url": url, "note": str(e)[:100]}
+
+
+# === Group Config API (read/write groups.json) ===
+GROUPS_JSON_PATH = "/opt/opscenter/frontend/groups.json"
+
+def _read_groups_json():
+    import json as _json
+    try:
+        with open(GROUPS_JSON_PATH, "r", encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return {"groups": [], "serviceGroupMap": {}}
+
+def _write_groups_json(data):
+    import json as _json
+    with open(GROUPS_JSON_PATH, "w", encoding="utf-8") as f:
+        _json.dump(data, f, ensure_ascii=False, indent=2)
+    return True
+
+class GroupItem(BaseModel):
+    id: str
+    name: str
+    order: int = 100
+    color: str = "#64748b"
+    icon: str = "box"
+
+class GroupConfigUpdate(BaseModel):
+    groups: Optional[List[GroupItem]] = None
+    serviceGroupMap: Optional[dict] = None
+
+@app.get("/api/v2/group-config")
+def get_group_config():
+    """Read groups.json configuration."""
+    return _read_groups_json()
+
+@app.put("/api/v2/group-config")
+def update_group_config(data: GroupConfigUpdate):
+    """Update groups.json configuration (full replace)."""
+    current = _read_groups_json()
+    if data.groups is not None:
+        current["groups"] = [g.model_dump() for g in data.groups]
+    if data.serviceGroupMap is not None:
+        current["serviceGroupMap"] = data.serviceGroupMap
+    _write_groups_json(current)
+    return {"ok": True, "config": current}
+
+@app.patch("/api/v2/group-config/service-map")
+def update_service_group_map(serviceKey: str = Query(...), groupId: str = Query(...)):
+    """Move a service to a different group (update single mapping)."""
+    current = _read_groups_json()
+    if groupId == "ungrouped":
+        # Remove from map to ungroup it
+        current["serviceGroupMap"].pop(serviceKey, None)
+    else:
+        current["serviceGroupMap"][serviceKey] = groupId
+    _write_groups_json(current)
+    return {"ok": True, "serviceKey": serviceKey, "groupId": groupId}
+
+@app.post("/api/v2/group-config/groups")
+def add_group(item: GroupItem):
+    """Add a new group."""
+    current = _read_groups_json()
+    # Check duplicate id
+    if any(g["id"] == item.id for g in current["groups"]):
+        raise HTTPException(400, f"Group id '{item.id}' already exists")
+    current["groups"].append(item.model_dump())
+    current["groups"].sort(key=lambda g: g.get("order", 100))
+    _write_groups_json(current)
+    return {"ok": True, "group": item.model_dump()}
+
+@app.put("/api/v2/group-config/groups/{group_id}")
+def update_group(group_id: str, item: GroupItem):
+    """Update a group's name, color, icon, or order."""
+    current = _read_groups_json()
+    found = False
+    for i, g in enumerate(current["groups"]):
+        if g["id"] == group_id:
+            current["groups"][i] = item.model_dump()
+            found = True
+            break
+    if not found:
+        raise HTTPException(404, f"Group '{group_id}' not found")
+    current["groups"].sort(key=lambda g: g.get("order", 100))
+    _write_groups_json(current)
+    return {"ok": True, "group": item.model_dump()}
+
+
+@app.delete("/api/v2/group-config/groups/{group_id}")
+def delete_group(group_id: str):
+    """Delete a group (only if not 'ungrouped' and no services mapped to it)."""
+    if group_id == "ungrouped":
+        raise HTTPException(400, "Cannot delete the 'ungrouped' group")
+    current = _read_groups_json()
+    # Remove group
+    current["groups"] = [g for g in current["groups"] if g["id"] != group_id]
+    # Remove mappings pointing to this group
+    to_remove = [k for k, v in current.get("serviceGroupMap", {}).items() if v == group_id]
+    for k in to_remove:
+        del current["serviceGroupMap"][k]
+    _write_groups_json(current)
+    return {"ok": True, "removed_mappings": to_remove}
+
+
+# === Services with server status (enhanced) ===
+@app.get("/api/v2/services-with-status")
+def list_services_with_status(server_id: Optional[str] = None):
+    """List services with their server status included for frontend display."""
+    with get_db() as db:
+        q = db.query(Service)
+        if server_id:
+            q = q.filter(Service.server_id == uuid.UUID(server_id))
+        # Only show services that have a web-accessible URL and are not hidden
+        q = q.filter(Service.url != None, Service.url != '', Service.hidden != True)
+        q = q.order_by(Service.sort_order, Service.category, Service.name)
+        services = q.all()
+        
+        # Get server statuses
+        server_ids = set(s.server_id for s in services)
+        servers_map = {}
+        for sid in server_ids:
+            srv = db.query(Server).filter(Server.id == sid).first()
+            if srv:
+                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local}
+        
+        result = []
+        for s in services:
+            srv_info = servers_map.get(str(s.server_id), {})
+            result.append({
+                "id": str(s.id), "server_id": str(s.server_id),
+                "name": s.name, "url": s.url, "category": s.category,
+                "icon": s.icon, "description": s.description,
+                "source": s.source, "status": s.status, "pinned": s.pinned,
+                "health_path": s.health_path, "container_name": s.container_name,
+                "image": s.image, "ports": s.ports,
+                "server_name": srv_info.get("name", ""),
+                "server_host": srv_info.get("host", ""),
+                "server_status": srv_info.get("status", "unknown"),
+                "server_is_local": srv_info.get("is_local", False),
+            })
+        return result
+
+
+@app.get("/api/v2/services/all")
+def list_all_services(server_id: Optional[str] = None):
+    """List all services including hidden ones. For admin/resource management only."""
+    with get_db() as db:
+        q = db.query(Service)
+        if server_id:
+            q = q.filter(Service.server_id == uuid.UUID(server_id))
+        q = q.order_by(Service.category, Service.name)
+        services = q.all()
+        server_ids = set(s.server_id for s in services)
+        servers_map = {}
+        for sid in server_ids:
+            srv = db.query(Server).filter(Server.id == sid).first()
+            if srv:
+                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local}
+        result = []
+        for s in services:
+            si = servers_map.get(str(s.server_id), {})
+            result.append({
+                "id": str(s.id), "server_id": str(s.server_id),
+                "name": s.name, "url": s.url, "category": s.category,
+                "icon": s.icon, "description": s.description,
+                "source": s.source, "status": s.status, "pinned": s.pinned,
+                "health_path": s.health_path, "container_name": s.container_name,
+                "image": s.image, "ports": s.ports,
+                "hidden": s.hidden or False,
+                "account": s.account or "",
+                "password": s.password or "",
+                "server_name": si.get("name", ""),
+                "server_host": si.get("host", ""),
+                "server_status": si.get("status", "unknown"),
+                "server_is_local": si.get("is_local", False),
+            })
+        return result
+
+
+# === SSH Terminal Endpoints ===
+
+@app.post("/api/v2/terminal/sessions")
+async def api_create_terminal_session(req: TerminalCreateRequest):
+    """Create a new SSH terminal session"""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(req.server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        # Extract fields while session is active to avoid DetachedInstanceError
+        srv_id = str(srv.id)
+        srv_name = srv.name
+        # Local server: use 127.0.0.1 instead of public IP (cannot loopback via public IP on cloud)
+        srv_host = "127.0.0.1" if srv.is_local else srv.host
+        srv_port = srv.ssh_port or 22
+        srv_user = srv.ssh_user or "root"
+        # ssh_key field stores either a real key or __password__<password>
+        srv_password = None
+        srv_key = None
+        if srv.ssh_key:
+            if srv.ssh_key.startswith("__password__"):
+                srv_password = srv.ssh_key[len("__password__"):]
+            else:
+                srv_key = srv.ssh_key
+    sid, err = create_session(
+        server_id=srv_id, server_name=srv_name,
+        host=srv_host, port=srv_port,
+        user=srv_user,
+        password=srv_password,
+        key_content=srv_key,
+    )
+    if not srv_password and not srv_key:
+        raise HTTPException(400, f"服务器 {srv_name} 未配置SSH密码或密钥，请先在资源管理中添加")
+    if err:
+        raise HTTPException(400, err)
+    session = get_session(sid)
+    if not session:
+        raise HTTPException(500, "Failed to create session")
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(None, lambda: session.connect(cols=req.cols, rows=req.rows))
+    if not ok:
+        remove_session(sid)
+        raise HTTPException(500, f"SSH connection to {srv_host} failed")
+    return {"session_id": sid, "server_name": srv_name, "server_host": srv_host, "user": srv_user}
+
+
+@app.websocket("/ws/terminal/{session_id}")
+async def ws_terminal(websocket: WebSocket, session_id: str):
+    """WebSocket proxy for SSH terminal, supports reconnect within grace period"""
+    session = get_session(session_id)
+    if not session:
+        await websocket.close(code=4004, reason="Invalid or expired session")
+        return
+    # Support reconnect: if session is in pending_reconnect state, resume it
+    if session.pending_reconnect:
+        if not session.connected or not session.channel:
+            await websocket.close(code=4004, reason="SSH connection lost during grace")
+            remove_session(session_id)
+            return
+        session.cancel_pending_reconnect()
+    elif not session.connected:
+        await websocket.close(code=4004, reason="Invalid or expired session")
+        return
+    await websocket.accept()
+    loop = asyncio.get_event_loop()
+
+    async def recv_from_ssh():
+        """Read from SSH and send to WebSocket"""
+        while session.is_alive:
+            try:
+                data = await loop.run_in_executor(None, session.recv, 4096)
+                if data:
+                    await websocket.send_text(data.decode("utf-8", errors="replace"))
+                else:
+                    await asyncio.sleep(0.05)
+            except Exception:
+                break
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+    async def send_to_ssh():
+        """Read from WebSocket and send to SSH"""
+        try:
+            while session.is_alive and not session.pending_reconnect:
+                msg = await websocket.receive_text()
+                import json
+                try:
+                    obj = json.loads(msg)
+                    if obj.get("type") == "resize":
+                        session.resize(obj.get("cols", 80), obj.get("rows", 24))
+                    elif obj.get("type") == "input":
+                        session.send(obj.get("data", ""))
+                except json.JSONDecodeError:
+                    # Plain text - send directly
+                    session.send(msg)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+
+    # Run both directions concurrently
+    recv_task = asyncio.create_task(recv_from_ssh())
+    send_task = asyncio.create_task(send_to_ssh())
+    done, pending = await asyncio.wait(
+        [recv_task, send_task], return_when=asyncio.FIRST_COMPLETED
+    )
+    for t in pending:
+        t.cancel()
+    # On WebSocket disconnect: mark pending reconnect instead of destroy
+    if session.is_alive and session.connected:
+        session.mark_pending_reconnect()
+    else:
+        remove_session(session_id)
+
+
+@app.get("/api/v2/terminal/sessions/{session_id}/files")
+async def api_sftp_list(session_id: str, path: str = "."):
+    """List directory contents via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    entries, err = session.sftp_list(path)
+    if err:
+        raise HTTPException(400, err)
+    return {"path": path, "entries": entries}
+
+
+@app.get("/api/v2/terminal/sessions/{session_id}/files/download")
+async def api_sftp_download(session_id: str, path: str):
+    """Download a file via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    data, err = session.sftp_download(path)
+    if err:
+        raise HTTPException(400, err)
+    import os
+    filename = os.path.basename(path)
+    return Response(content=data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@app.post("/api/v2/terminal/sessions/{session_id}/files/upload")
+async def api_sftp_upload(session_id: str, path: str = "", file: UploadFile = FastAPIFile(...)):
+    """Upload a file via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    content = await file.read()
+    remote_path = path.rstrip("/") + "/" + file.filename if path else file.filename
+    ok, err = session.sftp_upload(remote_path, content)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True, "path": remote_path, "size": len(content)}
+
+
+class SftpMkdirRequest(BaseModel):
+    path: str
+
+
+class SftpRenameRequest(BaseModel):
+    old_path: str
+    new_path: str
+
+
+class SftpDeleteRequest(BaseModel):
+    path: str
+
+
+@app.post("/api/v2/terminal/sessions/{session_id}/files/mkdir")
+async def api_sftp_mkdir(session_id: str, req: SftpMkdirRequest):
+    """Create directory via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    ok, err = session.sftp_mkdir(req.path)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
+
+
+@app.post("/api/v2/terminal/sessions/{session_id}/files/rename")
+async def api_sftp_rename(session_id: str, req: SftpRenameRequest):
+    """Rename file or directory via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    ok, err = session.sftp_rename(req.old_path, req.new_path)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
+
+
+@app.post("/api/v2/terminal/sessions/{session_id}/files/delete")
+async def api_sftp_delete(session_id: str, req: SftpDeleteRequest):
+    """Delete file or directory via SFTP"""
+    session = get_session(session_id)
+    if not session or not session.is_alive:
+        raise HTTPException(404, "Session not found or expired")
+    ok, err = session.sftp_remove(req.path)
+    if not ok:
+        raise HTTPException(400, err)
+    return {"ok": True}
+
+
+@app.get("/api/v2/terminal/sessions/{session_id}/status")
+async def api_terminal_session_status(session_id: str):
+    """Check if a terminal session can be reconnected"""
+    session = get_session(session_id)
+    if not session:
+        return {"alive": False, "reconnectable": False}
+    if session.pending_reconnect:
+        return {"alive": True, "reconnectable": True, "server_name": session.server_name,
+                "server_host": session.host, "user": session.user, "server_id": session.server_id}
+    if session.is_alive:
+        return {"alive": True, "reconnectable": True, "server_name": session.server_name,
+                "server_host": session.host, "user": session.user, "server_id": session.server_id}
+    return {"alive": False, "reconnectable": False}
+
+
+@app.get("/api/v2/terminal/stats")
+async def api_terminal_stats():
+    """Get active terminal session stats"""
+    return {"active_sessions": get_active_count()}

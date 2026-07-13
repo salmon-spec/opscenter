@@ -1,0 +1,1400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpsCenter v2.0</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+:root {
+  --bg: #0f172a; --sidebar: #0f172a; --card: #1e293b; --border: #334155;
+  --text1: #e2e8f0; --text2: #94a3b8; --accent: #10b981;
+  --online: #22c55e; --offline: #ef4444; --unknown: #f59e0b;
+}
+.light {
+  --bg: #f1f5f9; --sidebar: #1e293b; --card: #ffffff; --border: #e2e8f0;
+  --text1: #1e293b; --text2: #64748b; --accent: #059669;
+  --online: #16a34a; --offline: #dc2626; --unknown: #d97706;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; font-family: 'Inter', sans-serif; }
+body { background: var(--bg); color: var(--text1); transition: background .3s, color .3s; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text2); }
+.fade-enter-active, .fade-leave-active { transition: opacity .2s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
+.slide-enter-active, .slide-leave-active { transition: all .25s ease; }
+.slide-enter-from { opacity: 0; transform: translateY(8px); }
+.slide-leave-to { opacity: 0; transform: translateY(-8px); }
+.collapse-enter-active, .collapse-leave-active { transition: max-height .3s ease, opacity .2s ease; overflow: hidden; }
+.collapse-enter-from, .collapse-leave-to { max-height: 0; opacity: 0; }
+.collapse-enter-to, .collapse-leave-from { max-height: 2000px; opacity: 1; }
+.sidebar-item { transition: all .15s ease; }
+.sidebar-item:hover { background: rgba(255,255,255,.08); }
+.sidebar-item.active { background: rgba(16,185,129,.15); color: #10b981; border-right: 3px solid #10b981; }
+.card-hover { transition: all .2s ease; }
+.card-hover:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,.3); }
+.pulse-dot { animation: pulse 2s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+.terminal-line::before { content: '$ '; color: #10b981; font-weight: 600; }
+.terminal-output { color: #94a3b8; }
+.terminal-window { font-family: 'JetBrains Mono', monospace; }
+.toast-enter { animation: slideInRight .3s ease; }
+.toast-leave { animation: slideOutRight .3s ease; }
+@keyframes slideInRight { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes slideOutRight { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+.status-online { color: var(--online); }
+.status-offline { color: var(--offline); }
+.status-unknown { color: var(--unknown); }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(16,185,129,.15); }
+.loading-spinner { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 768px) {
+  .sidebar-desktop { display: none !important; }
+  .mobile-nav { display: flex !important; }
+  .main-content { margin-left: 0 !important; padding-bottom: 70px !important; }
+}
+@media (min-width: 769px) {
+  .mobile-nav { display: none !important; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Toast Notifications -->
+  <div class="fixed top-4 right-4 z-50 space-y-2">
+    <div v-for="t in toasts" :key="t.id"
+         :class="['toast-enter rounded-lg px-4 py-3 shadow-lg flex items-center gap-2 text-sm',
+                   t.type==='success' ? 'bg-emerald-600 text-white' :
+                   t.type==='error' ? 'bg-red-600 text-white' :
+                   'bg-blue-600 text-white']">
+      <i :class="['fas', t.type==='success'?'fa-check-circle':t.type==='error'?'fa-exclamation-circle':'fa-info-circle']"></i>
+      <span>{{ t.message }}</span>
+    </div>
+  </div>
+
+  <!-- Sidebar (Desktop) -->
+  <aside v-if="!mobileView" class="sidebar-desktop fixed top-0 left-0 h-full z-40 flex flex-col"
+         :style="{ width: sidebarCollapsed ? '64px' : '200px', background: 'var(--sidebar)', borderRight: '1px solid var(--border)', transition: 'width .2s ease' }">
+    <!-- Logo -->
+    <div class="flex items-center gap-2 px-4 py-4 border-b" style="border-color: var(--border)">
+      <div class="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">OC</div>
+      <span v-show="!sidebarCollapsed" class="font-semibold text-sm whitespace-nowrap" style="color: var(--text1)">OpsCenter</span>
+      <button v-show="!sidebarCollapsed" @click="sidebarCollapsed=true" class="ml-auto text-xs opacity-50 hover:opacity-100" style="color:var(--text2)">
+        <i class="fas fa-angles-left"></i>
+      </button>
+    </div>
+    <button v-if="sidebarCollapsed" @click="sidebarCollapsed=false" class="px-4 py-3 text-xs opacity-50 hover:opacity-100" style="color:var(--text2)">
+      <i class="fas fa-angles-right"></i>
+    </button>
+
+    <!-- Server Selector -->
+    <div class="px-3 py-2" v-show="!sidebarCollapsed">
+      <select v-model="currentServerId" @change="onServerChange"
+              class="w-full rounded px-2 py-1.5 text-xs border"
+              style="background:var(--card);color:var(--text1);border-color:var(--border)">
+        <option value="">选择服务器</option>
+        <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }}</option>
+      </select>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="flex-1 py-2 space-y-0.5 px-2">
+      <button v-for="item in navItems" :key="item.key"
+              @click="currentPage=item.key"
+              :class="['sidebar-item w-full flex items-center gap-3 px-3 py-2.5 rounded-l text-sm rounded',
+                       currentPage===item.key ? 'active' : '']"
+              :style="{ color: currentPage===item.key ? '#10b981' : 'var(--text2)', justifyContent: sidebarCollapsed ? 'center' : 'flex-start' }">
+        <i :class="['fas', item.icon, 'w-5 text-center']"></i>
+        <span v-show="!sidebarCollapsed" class="whitespace-nowrap">{{ item.label }}</span>
+      </button>
+    </nav>
+
+    <!-- Bottom -->
+    <div class="px-3 py-3 border-t" style="border-color:var(--border)">
+      <div v-show="!sidebarCollapsed" class="text-xs" style="color:var(--text2)">
+        <div class="flex items-center gap-1.5 mb-1">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>
+          <span>v2.0</span>
+        </div>
+        <div>{{ servers.length }} 服务器 · {{ allServices.length }} 服务</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Mobile Bottom Nav -->
+  <nav class="mobile-nav fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around py-2 border-t"
+       style="background:var(--sidebar);border-color:var(--border)">
+    <button v-for="item in navItems" :key="item.key"
+            @click="currentPage=item.key"
+            class="flex flex-col items-center gap-0.5 px-3 py-1 rounded"
+            :style="{ color: currentPage===item.key ? '#10b981' : 'var(--text2)' }">
+      <i :class="['fas', item.icon, 'text-lg']"></i>
+      <span class="text-xs">{{ item.label }}</span>
+    </button>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="main-content min-h-screen"
+        :style="{ marginLeft: mobileView ? '0' : (sidebarCollapsed ? '64px' : '200px'), transition: 'margin-left .2s ease' }">
+    <!-- Top Bar -->
+    <header class="sticky top-0 z-30 px-4 py-3 flex items-center gap-3 border-b"
+            style="background:var(--bg);border-color:var(--border)">
+      <!-- Search -->
+      <div class="relative flex-1 max-w-md">
+        <i class="fas fa-search absolute left-3 top-1/2 -translate-y-1/2 text-xs" style="color:var(--text2)"></i>
+        <input v-model="searchQuery" @keydown.ctrl.k.prevent="$refs.searchInput?.focus()"
+               ref="searchInput"
+               placeholder="搜索服务... (Ctrl+K)"
+               class="w-full pl-9 pr-3 py-2 rounded-lg text-sm border"
+               style="background:var(--card);color:var(--text1);border-color:var(--border)">
+        <kbd v-if="!searchQuery" class="absolute right-3 top-1/2 -translate-y-1/2 text-xs px-1.5 py-0.5 rounded border"
+             style="color:var(--text2);border-color:var(--border);background:var(--bg)">⌘K</kbd>
+      </div>
+
+      <!-- Pinned Services Quick Bar -->
+      <div v-if="pinnedServices.length" class="hidden md:flex items-center gap-1.5 overflow-x-auto max-w-lg px-2">
+        <button v-for="ps in pinnedServices" :key="ps.id"
+                @click="openService(ps)"
+                class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs whitespace-nowrap border card-hover"
+                style="background:var(--card);border-color:var(--border);color:var(--text1)">
+          <i :class="['fas', ps.icon||'fa-cube']" :style="{color: ps.icon_color||'var(--accent)'}"></i>
+          <span>{{ ps.name }}</span>
+          <span class="w-1.5 h-1.5 rounded-full" :class="ps.status==='online'?'bg-emerald-500':ps.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
+        </button>
+      </div>
+
+      <!-- Theme Toggle -->
+      <button @click="toggleTheme"
+              class="w-9 h-9 rounded-lg flex items-center justify-center border"
+              style="background:var(--card);border-color:var(--border);color:var(--text2)"
+              :title="isDark?'切换亮色':'切换暗色'">
+        <i :class="['fas', isDark?'fa-sun':'fa-moon']"></i>
+      </button>
+    </header>
+
+    <!-- Page Content -->
+    <div class="p-4 md:p-6">
+      <!-- ===================== 服务导航 ===================== -->
+      <div v-if="currentPage==='nav'">
+        <!-- Server Cards -->
+        <div class="mb-6">
+          <h2 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text2)">
+            <i class="fas fa-server"></i> 服务器
+            <button @click="loadServers" class="text-xs opacity-50 hover:opacity-100 ml-1"><i class="fas fa-sync-alt" :class="{'loading-spinner':loading.servers}"></i></button>
+          </h2>
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div v-for="s in servers" :key="s.id" @click="currentServerId=s.id;onServerChange()"
+                 :class="['rounded-xl p-4 cursor-pointer border-2 card-hover',
+                           currentServerId===s.id ? 'border-emerald-500' : '']"
+                 :style="{ background: 'var(--card)', borderColor: currentServerId===s.id ? '#10b981' : 'var(--border)' }">
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full" :class="s.status==='online'?'bg-emerald-500':s.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
+                  <span class="font-semibold text-sm" style="color:var(--text1)">{{ s.name }}</span>
+                </div>
+                <span class="text-xs px-2 py-0.5 rounded-full" :style="{background:s.status==='online'?'rgba(34,197,94,.15)':'rgba(239,68,68,.15)',color:s.status==='online'?'#22c55e':'#ef4444'}">
+                  {{ s.status==='online'?'在线':s.status==='offline'?'离线':'未知' }}
+                </span>
+              </div>
+              <div class="text-xs" style="color:var(--text2)">
+                <div class="flex items-center gap-1 mb-1"><i class="fas fa-globe w-4"></i>{{ s.host }}</div>
+                <div class="flex items-center gap-1"><i class="fas fa-cube w-4"></i>{{ s.service_count||0 }} 服务</div>
+              </div>
+            </div>
+            <div v-if="!servers.length && !loading.servers" class="col-span-full text-center py-8 rounded-xl border"
+                 style="background:var(--card);border-color:var(--border);color:var(--text2)">
+              <i class="fas fa-server text-3xl mb-2 block opacity-30"></i>
+              <p class="text-sm">暂无服务器，请在设置中添加</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Search results or Service Grid -->
+        <div v-if="currentServerId">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold flex items-center gap-2" style="color:var(--text2)">
+              <i class="fas fa-th-large"></i> 服务列表
+              <button @click="loadServices" class="text-xs opacity-50 hover:opacity-100 ml-1"><i class="fas fa-sync-alt" :class="{'loading-spinner':loading.services}"></i></button>
+            </h2>
+            <span class="text-xs" style="color:var(--text2)">{{ filteredServices.length }} 个服务</span>
+          </div>
+
+          <!-- Pinned Bar (mobile) -->
+          <div v-if="pinnedServices.length" class="md:hidden mb-4 flex gap-2 overflow-x-auto pb-2">
+            <button v-for="ps in pinnedServices" :key="ps.id" @click="openService(ps)"
+                    class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs whitespace-nowrap border"
+                    style="background:var(--card);border-color:var(--border);color:var(--text1)">
+              <i :class="['fas', ps.icon||'fa-cube']" :style="{color:ps.icon_color||'var(--accent)'}"></i>
+              {{ ps.name }}
+            </button>
+          </div>
+
+          <!-- Search Mode -->
+          <div v-if="searchQuery && filteredServices.length">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div v-for="svc in filteredServices" :key="svc.id"
+                   @click="openService(svc)"
+                   class="rounded-xl p-4 border card-hover cursor-pointer relative group"
+                   style="background:var(--card);border-color:var(--border)">
+                <button @click.stop="togglePin(svc)"
+                        class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                        :style="{color: svc.pinned?'#f59e0b':'var(--text2)', background:'var(--bg)'}">
+                  <i :class="['fas', svc.pinned?'fa-thumbtack':'fa-thumbtack']" :style="{transform:svc.pinned?'none':'rotate(45deg)'}"></i>
+                </button>
+                <div class="flex items-center gap-3 mb-2">
+                  <div class="w-9 h-9 rounded-lg flex items-center justify-center" :style="{background: (svc.icon_color||'#10b981')+'20'}">
+                    <i :class="['fas', svc.icon||'fa-cube']" :style="{color:svc.icon_color||'#10b981'}"></i>
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                      <span class="font-medium text-sm truncate" style="color:var(--text1)">{{ svc.name }}</span>
+                      <span class="w-2 h-2 rounded-full flex-shrink-0" :class="svc.status==='online'?'bg-emerald-500':svc.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
+                    </div>
+                    <div class="text-xs truncate" style="color:var(--text2)">{{ svc.description||svc.url||'' }}</div>
+                  </div>
+                </div>
+                <div v-if="svc.category" class="text-xs mt-1 px-2 py-0.5 rounded-full inline-block" style="background:rgba(16,185,129,.1);color:#10b981">{{ svc.category }}</div>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="searchQuery && !filteredServices.length" class="text-center py-12" style="color:var(--text2)">
+            <i class="fas fa-search text-3xl mb-2 block opacity-30"></i>
+            <p class="text-sm">未找到匹配的服务</p>
+          </div>
+
+          <!-- Category Mode -->
+          <div v-else>
+            <div v-for="cat in categoriesWithServices" :key="cat.name" class="mb-5">
+              <button @click="toggleCategory(cat.name)"
+                      class="flex items-center gap-2 mb-3 w-full text-left group">
+                <i :class="['fas fa-chevron-right text-xs transition-transform', categoryExpanded[cat.name]?'rotate-90':'']" style="color:var(--accent)"></i>
+                <span class="text-sm font-semibold" style="color:var(--text1)">{{ cat.name }}</span>
+                <span class="text-xs px-2 py-0.5 rounded-full" style="background:var(--card);color:var(--text2)">{{ cat.services.length }}</span>
+              </button>
+              <div v-show="categoryExpanded[cat.name]" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div v-for="svc in cat.services" :key="svc.id"
+                     @click="openService(svc)"
+                     class="rounded-xl p-4 border card-hover cursor-pointer relative group"
+                     style="background:var(--card);border-color:var(--border)">
+                  <button @click.stop="togglePin(svc)"
+                          class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                          :style="{color: svc.pinned?'#f59e0b':'var(--text2)', background:'var(--bg)'}">
+                    <i class="fas fa-thumbtack" :style="{transform:svc.pinned?'none':'rotate(45deg)'}"></i>
+                  </button>
+                  <div class="flex items-center gap-3 mb-2">
+                    <div class="w-9 h-9 rounded-lg flex items-center justify-center" :style="{background:(svc.icon_color||'#10b981')+'20'}">
+                      <i :class="['fas', svc.icon||'fa-cube']" :style="{color:svc.icon_color||'#10b981'}"></i>
+                    </div>
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium text-sm truncate" style="color:var(--text1)">{{ svc.name }}</span>
+                        <span class="w-2 h-2 rounded-full flex-shrink-0" :class="svc.status==='online'?'bg-emerald-500':svc.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
+                      </div>
+                      <div class="text-xs truncate" style="color:var(--text2)">{{ svc.description||svc.url||'' }}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div v-if="!categoriesWithServices.length && !loading.services" class="text-center py-12" style="color:var(--text2)">
+              <i class="fas fa-cube text-3xl mb-2 block opacity-30"></i>
+              <p class="text-sm">该服务器暂无服务数据</p>
+            </div>
+          </div>
+        </div>
+        <div v-else class="text-center py-16" style="color:var(--text2)">
+          <i class="fas fa-hand-pointer text-4xl mb-3 block opacity-30"></i>
+          <p class="text-sm">请选择一个服务器查看服务</p>
+        </div>
+      </div>
+
+      <!-- ===================== 系统监控 ===================== -->
+      <div v-if="currentPage==='monitor'">
+        <div v-if="!currentServerId" class="text-center py-16" style="color:var(--text2)">
+          <i class="fas fa-chart-line text-4xl mb-3 block opacity-30"></i>
+          <p class="text-sm">请先选择服务器</p>
+        </div>
+        <template v-else>
+          <div class="flex items-center justify-between mb-5">
+            <h2 class="text-lg font-semibold flex items-center gap-2" style="color:var(--text1)">
+              <i class="fas fa-chart-line" style="color:var(--accent)"></i> 系统监控
+              <button @click="loadMonitor" class="text-xs opacity-50 hover:opacity-100 ml-1"><i class="fas fa-sync-alt" :class="{'loading-spinner':loading.monitor}"></i></button>
+            </h2>
+            <div class="flex items-center gap-2 text-xs" style="color:var(--text2)">
+              <span class="w-2 h-2 rounded-full pulse-dot" :class="monitor.connected?'bg-emerald-500':'bg-red-500'"></span>
+              <span>{{ monitor.connected?'实时连接':'已断开' }}</span>
+              <span>· 自动刷新 {{ refreshCountdown }}s</span>
+            </div>
+          </div>
+
+          <!-- Metric Cards -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+            <div v-for="m in metricCards" :key="m.key" @click="historyMetric=m.key"
+                 :class="['rounded-xl p-4 border cursor-pointer card-hover', historyMetric===m.key?'ring-2 ring-emerald-500':'']"
+                 style="background:var(--card);border-color:var(--border)">
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-medium" style="color:var(--text2)">{{ m.label }}</span>
+                <i :class="['fas', m.icon]" :style="{color:m.color}"></i>
+              </div>
+              <div class="text-2xl font-bold" :style="{color:m.color}">{{ m.value }}{{ m.unit }}</div>
+              <div class="mt-2 h-1.5 rounded-full overflow-hidden" style="background:var(--border)">
+                <div class="h-full rounded-full transition-all duration-500" :style="{width: Math.min(m.value,100)+'%', background:m.color}"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- History Chart -->
+          <div class="rounded-xl border p-4 mb-5" style="background:var(--card);border-color:var(--border)">
+            <div class="flex items-center justify-between mb-3">
+              <span class="text-sm font-semibold" style="color:var(--text1)">历史趋势 (24h)</span>
+              <div class="flex gap-1">
+                <button v-for="hk in ['cpu','memory','disk','network']" :key="hk" @click="historyMetric=hk"
+                        :class="['px-2.5 py-1 rounded text-xs', historyMetric===hk?'bg-emerald-500 text-white':'']"
+                        :style="historyMetric!==hk?'background:var(--bg);color:var(--text2)':''">
+                  {{ {cpu:'CPU',memory:'内存',disk:'磁盘',network:'网络'}[hk] }}
+                </button>
+              </div>
+            </div>
+            <div ref="historyChart" style="height:280px"></div>
+          </div>
+
+          <!-- Containers Table -->
+          <div class="rounded-xl border overflow-hidden" style="background:var(--card);border-color:var(--border)">
+            <div class="px-4 py-3 border-b flex items-center justify-between" style="border-color:var(--border)">
+              <span class="text-sm font-semibold" style="color:var(--text1)">容器列表</span>
+              <span class="text-xs" style="color:var(--text2)">{{ monitor.containers.length }} 个容器</span>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr style="border-bottom:1px solid var(--border)">
+                    <th class="px-4 py-2.5 text-left text-xs font-medium" style="color:var(--text2)">名称</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium" style="color:var(--text2)">镜像</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium" style="color:var(--text2)">状态</th>
+                    <th class="px-4 py-2.5 text-left text-xs font-medium" style="color:var(--text2)">端口</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="c in monitor.containers" :key="c.name" style="border-bottom:1px solid var(--border)">
+                    <td class="px-4 py-2.5 font-medium" style="color:var(--text1)">{{ c.name }}</td>
+                    <td class="px-4 py-2.5 text-xs" style="color:var(--text2)">{{ c.image }}</td>
+                    <td class="px-4 py-2.5">
+                      <span class="inline-flex items-center gap-1.5 text-xs">
+                        <span class="w-1.5 h-1.5 rounded-full" :class="c.status==='running'?'bg-emerald-500':'bg-red-500'"></span>
+                        <span :class="c.status==='running'?'status-online':'status-offline'">{{ c.status }}</span>
+                      </span>
+                    </td>
+                    <td class="px-4 py-2.5 text-xs" style="color:var(--text2)">{{ c.ports }}</td>
+                  </tr>
+                  <tr v-if="!monitor.containers.length">
+                    <td colspan="4" class="px-4 py-6 text-center text-xs" style="color:var(--text2)">暂无容器数据</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- ===================== 终端 ===================== -->
+      <div v-if="currentPage==='terminal'">
+        <div v-if="!currentServerId" class="text-center py-16" style="color:var(--text2)">
+          <i class="fas fa-terminal text-4xl mb-3 block opacity-30"></i>
+          <p class="text-sm">请先选择服务器</p>
+        </div>
+        <template v-else>
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold flex items-center gap-2" style="color:var(--text1)">
+              <i class="fas fa-terminal" style="color:var(--accent)"></i> 终端
+            </h2>
+            <span class="text-xs px-2 py-1 rounded-full" style="background:rgba(245,158,11,.15);color:#f59e0b">Phase 1 - 模拟模式</span>
+          </div>
+
+          <div class="rounded-xl border overflow-hidden" style="background:var(--card);border-color:var(--border)">
+            <!-- Terminal Header -->
+            <div class="flex items-center gap-2 px-4 py-2.5 border-b" style="border-color:var(--border);background:rgba(0,0,0,.2)">
+              <span class="w-3 h-3 rounded-full bg-red-500"></span>
+              <span class="w-3 h-3 rounded-full bg-yellow-500"></span>
+              <span class="w-3 h-3 rounded-full bg-green-500"></span>
+              <span class="ml-2 text-xs font-mono" style="color:var(--text2)">{{ currentServer?.name }} - SSH</span>
+            </div>
+            <!-- Terminal Body -->
+            <div ref="terminalBody" class="terminal-window p-4 h-96 overflow-y-auto text-sm" style="background:#0c0c0c">
+              <div v-for="(line,i) in terminalLines" :key="i" class="mb-1">
+                <div v-if="line.type==='cmd'" class="terminal-line" style="color:#e2e8f0">{{ line.text }}</div>
+                <div v-else-if="line.type==='output'" class="terminal-output" style="color:#94a3b8" v-html="line.text"></div>
+                <div v-else-if="line.type==='info'" style="color:#10b981">{{ line.text }}</div>
+                <div v-else-if="line.type==='error'" style="color:#ef4444">{{ line.text }}</div>
+              </div>
+              <div class="flex items-center gap-2 mt-1">
+                <span style="color:#10b981" class="font-semibold">$</span>
+                <input v-model="terminalInput" @keydown.enter="executeTerminal" @keydown.up="terminalHistoryUp" @keydown.down="terminalHistoryDown"
+                       class="flex-1 bg-transparent border-none text-sm" style="color:#e2e8f0;outline:none"
+                       placeholder="输入命令..." autocomplete="off" spellcheck="false">
+              </div>
+            </div>
+          </div>
+          <div class="mt-3 text-xs rounded-lg p-3 border" style="background:rgba(245,158,11,.05);border-color:rgba(245,158,11,.2);color:var(--text2)">
+            <i class="fas fa-info-circle mr-1" style="color:#f59e0b"></i>
+            Phase 1 模拟终端：可尝试 ls, pwd, whoami, date, uname, uptime, df, free, docker ps, cat /etc/os-release, help 等命令。Phase 2 将支持真实 SSH 连接。
+          </div>
+        </template>
+      </div>
+
+      <!-- ===================== 工具箱 ===================== -->
+      <div v-if="currentPage==='tools'">
+        <h2 class="text-lg font-semibold flex items-center gap-2 mb-5" style="color:var(--text1)">
+          <i class="fas fa-toolbox" style="color:var(--accent)"></i> 工具箱
+        </h2>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <!-- Timestamp -->
+          <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
+            <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text1)">
+              <i class="fas fa-clock" style="color:#8b5cf6"></i> 时间戳转换
+            </h3>
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">Unix 时间戳</label>
+                <input v-model="tools.timestamp.unix" @input="convertTimestamp('unix')"
+                       class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="如 1700000000">
+              </div>
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">日期时间</label>
+                <input v-model="tools.timestamp.date" @input="convertTimestamp('date')"
+                       class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="如 2024-01-01 00:00:00">
+              </div>
+            </div>
+            <div class="text-xs space-y-1" style="color:var(--text2)">
+              <div>当前时间戳: <span class="font-mono" style="color:var(--accent)">{{ tools.timestamp.now }}</span></div>
+              <div>ISO 8601: <span class="font-mono" style="color:var(--accent)">{{ tools.timestamp.iso }}</span></div>
+            </div>
+          </div>
+
+          <!-- Base64 -->
+          <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
+            <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text1)">
+              <i class="fas fa-code" style="color:#f59e0b"></i> Base64 编解码
+            </h3>
+            <div class="mb-3">
+              <label class="text-xs block mb-1" style="color:var(--text2)">原始文本</label>
+              <textarea v-model="tools.base64.input" @input="encodeBase64"
+                        class="w-full px-3 py-2 rounded-lg text-sm border resize-none h-20"
+                        style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="输入文本..."></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="text-xs block mb-1" style="color:var(--text2)">Base64 编码</label>
+              <textarea v-model="tools.base64.encoded" @input="decodeBase64"
+                        class="w-full px-3 py-2 rounded-lg text-sm border resize-none h-20 font-mono"
+                        style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="Base64 字符串..."></textarea>
+            </div>
+            <div v-if="tools.base64.error" class="text-xs text-red-400">{{ tools.base64.error }}</div>
+          </div>
+
+          <!-- JSON -->
+          <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
+            <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text1)">
+              <i class="fas fa-brackets-curly fa-code" style="color:#3b82f6"></i> JSON 格式化
+            </h3>
+            <div class="mb-3">
+              <label class="text-xs block mb-1" style="color:var(--text2)">输入 JSON</label>
+              <textarea v-model="tools.json.input"
+                        class="w-full px-3 py-2 rounded-lg text-sm border resize-none h-28 font-mono"
+                        style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder='{"key": "value"}'></textarea>
+            </div>
+            <div class="flex gap-2 mb-3">
+              <button @click="formatJson" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition">格式化</button>
+              <button @click="compressJson" class="px-3 py-1.5 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
+                      style="background:var(--bg);color:var(--text1);border-color:var(--border)">压缩</button>
+              <button @click="copyJson" class="px-3 py-1.5 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
+                      style="background:var(--bg);color:var(--text1);border-color:var(--border)">复制</button>
+            </div>
+            <div v-if="tools.json.error" class="text-xs text-red-400 mb-2">{{ tools.json.error }}</div>
+            <textarea v-model="tools.json.output" readonly
+                      class="w-full px-3 py-2 rounded-lg text-sm border resize-none h-28 font-mono"
+                      style="background:var(--bg);color:var(--text1);border-color:var(--border)"></textarea>
+          </div>
+
+          <!-- Password -->
+          <div class="rounded-xl border p-5" style="background:var(--card);border-color:var(--border)">
+            <h3 class="text-sm font-semibold mb-3 flex items-center gap-2" style="color:var(--text1)">
+              <i class="fas fa-key" style="color:#ec4899"></i> 密码生成器
+            </h3>
+            <div class="space-y-3 mb-4">
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">长度: {{ tools.password.length }}</label>
+                <input type="range" v-model.number="tools.password.length" min="4" max="64" @input="generatePassword"
+                       class="w-full accent-emerald-500">
+              </div>
+              <div class="flex flex-wrap gap-3 text-xs">
+                <label class="flex items-center gap-1.5 cursor-pointer" style="color:var(--text1)">
+                  <input type="checkbox" v-model="tools.password.upper" @change="generatePassword" class="accent-emerald-500"> 大写
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer" style="color:var(--text1)">
+                  <input type="checkbox" v-model="tools.password.lower" @change="generatePassword" class="accent-emerald-500"> 小写
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer" style="color:var(--text1)">
+                  <input type="checkbox" v-model="tools.password.digits" @change="generatePassword" class="accent-emerald-500"> 数字
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer" style="color:var(--text1)">
+                  <input type="checkbox" v-model="tools.password.symbols" @change="generatePassword" class="accent-emerald-500"> 符号
+                </label>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <input :value="tools.password.result" readonly
+                     class="flex-1 px-3 py-2.5 rounded-lg text-sm font-mono border"
+                     style="background:var(--bg);color:var(--accent);border-color:var(--border)">
+              <button @click="copyPassword" class="px-4 py-2.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition">
+                <i class="fas fa-copy"></i>
+              </button>
+            </div>
+            <div class="mt-2 text-xs" style="color:var(--text2)">
+              强度: <span :style="{color: passwordStrengthColor}">{{ passwordStrengthLabel }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================== 设置 ===================== -->
+      <div v-if="currentPage==='settings'">
+        <h2 class="text-lg font-semibold flex items-center gap-2 mb-5" style="color:var(--text1)">
+          <i class="fas fa-cog" style="color:var(--accent)"></i> 设置
+        </h2>
+
+        <!-- Stats -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+          <div v-for="st in statsCards" :key="st.label" class="rounded-xl p-4 border" style="background:var(--card);border-color:var(--border)">
+            <div class="text-xs mb-1" style="color:var(--text2)">{{ st.label }}</div>
+            <div class="text-xl font-bold" style="color:var(--accent)">{{ st.value }}</div>
+          </div>
+        </div>
+
+        <!-- Server Management -->
+        <div class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
+          <div class="px-5 py-3 border-b flex items-center justify-between" style="border-color:var(--border)">
+            <h3 class="text-sm font-semibold" style="color:var(--text1)">服务器管理</h3>
+            <button @click="showAddServer=!showAddServer" class="px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition">
+              <i class="fas fa-plus mr-1"></i>添加服务器
+            </button>
+          </div>
+          <!-- Add Server Form -->
+          <div v-if="showAddServer" class="px-5 py-4 border-b" style="border-color:var(--border);background:rgba(16,185,129,.03)">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">名称 *</label>
+                <input v-model="newServer.name" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="如: 生产服务器">
+              </div>
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">主机地址 *</label>
+                <input v-model="newServer.host" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="如: 192.168.1.1">
+              </div>
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">SSH 端口</label>
+                <input v-model.number="newServer.ssh_port" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="22">
+              </div>
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">用户名</label>
+                <input v-model="newServer.username" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="root">
+              </div>
+            </div>
+            <div class="flex gap-2">
+              <button @click="addServer" :disabled="!newServer.name||!newServer.host"
+                      class="px-4 py-2 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition disabled:opacity-50">保存</button>
+              <button @click="showAddServer=false" class="px-4 py-2 rounded-lg text-xs font-medium border hover:bg-opacity-80 transition"
+                      style="background:var(--bg);color:var(--text1);border-color:var(--border)">取消</button>
+            </div>
+          </div>
+          <!-- Server List -->
+          <div class="divide-y" style="border-color:var(--border)">
+            <div v-for="s in servers" :key="s.id" class="px-5 py-3 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="w-2.5 h-2.5 rounded-full" :class="s.status==='online'?'bg-emerald-500':s.status==='offline'?'bg-red-500':'bg-amber-500'"></span>
+                <div>
+                  <div class="text-sm font-medium" style="color:var(--text1)">{{ s.name }}</div>
+                  <div class="text-xs" style="color:var(--text2)">{{ s.host }}:{{ s.ssh_port||22 }} · {{ s.username||'root' }}</div>
+                </div>
+              </div>
+              <button @click="deleteServer(s.id)" class="text-xs px-2.5 py-1.5 rounded-lg border hover:bg-red-500 hover:text-white hover:border-red-500 transition"
+                      style="color:var(--text2);border-color:var(--border)">
+                <i class="fas fa-trash"></i>
+              </button>
+            </div>
+            <div v-if="!servers.length" class="px-5 py-6 text-center text-xs" style="color:var(--text2)">暂无服务器</div>
+          </div>
+        </div>
+
+        <!-- Manual Service Registration -->
+        <div class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
+          <div class="px-5 py-3 border-b" style="border-color:var(--border)">
+            <h3 class="text-sm font-semibold" style="color:var(--text1)">手动注册服务</h3>
+          </div>
+          <div class="px-5 py-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">服务名称 *</label>
+                <input v-model="newService.name" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="如: Nginx">
+              </div>
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">URL *</label>
+                <input v-model="newService.url" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="如: http://localhost:80">
+              </div>
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">分类</label>
+                <input v-model="newService.category" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="如: 基础设施">
+              </div>
+              <div>
+                <label class="text-xs block mb-1" style="color:var(--text2)">图标</label>
+                <input v-model="newService.icon" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="如: fa-server">
+              </div>
+              <div class="sm:col-span-2">
+                <label class="text-xs block mb-1" style="color:var(--text2)">描述</label>
+                <input v-model="newService.description" class="w-full px-3 py-2 rounded-lg text-sm border"
+                       style="background:var(--bg);color:var(--text1);border-color:var(--border)" placeholder="服务描述">
+              </div>
+            </div>
+            <button @click="addService" :disabled="!newService.name||!newService.url||!currentServerId"
+                    class="px-4 py-2 rounded-lg text-xs font-medium bg-emerald-500 text-white hover:bg-emerald-600 transition disabled:opacity-50">
+              <i class="fas fa-plus mr-1"></i>注册服务
+            </button>
+            <span v-if="!currentServerId" class="ml-2 text-xs" style="color:var(--unknown)">请先选择服务器</span>
+          </div>
+        </div>
+
+        <!-- Scan -->
+        <div class="rounded-xl border mb-5" style="background:var(--card);border-color:var(--border)">
+          <div class="px-5 py-3 border-b" style="border-color:var(--border)">
+            <h3 class="text-sm font-semibold" style="color:var(--text1)">服务扫描</h3>
+          </div>
+          <div class="px-5 py-4 flex items-center gap-4">
+            <button @click="triggerScan" :disabled="scanning"
+                    class="px-4 py-2.5 rounded-lg text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 transition disabled:opacity-50">
+              <i :class="['fas', scanning?'fa-spinner loading-spinner':'fa-radar']" class="mr-1"></i>
+              {{ scanning ? '扫描中...' : '触发全量扫描' }}
+            </button>
+            <span class="text-xs" style="color:var(--text2)">扫描将自动发现服务器上的运行服务</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Confirm Modal -->
+  <div v-if="confirmModal.show" class="fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,.6)">
+    <div class="rounded-xl p-6 w-full max-w-sm border" style="background:var(--card);border-color:var(--border)">
+      <h3 class="text-sm font-semibold mb-2" style="color:var(--text1)">{{ confirmModal.title }}</h3>
+      <p class="text-xs mb-4" style="color:var(--text2)">{{ confirmModal.message }}</p>
+      <div class="flex gap-2 justify-end">
+        <button @click="confirmModal.show=false" class="px-4 py-2 rounded-lg text-xs font-medium border"
+                style="background:var(--bg);color:var(--text1);border-color:var(--border)">取消</button>
+        <button @click="confirmModal.action();confirmModal.show=false"
+                class="px-4 py-2 rounded-lg text-xs font-medium bg-red-500 text-white hover:bg-red-600 transition">确认</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
+
+const API = '/ops/api/v2';
+
+createApp({
+  setup() {
+    const isDark = ref(localStorage.getItem('oc-theme') !== 'light');
+    const currentPage = ref('nav');
+    const currentServerId = ref('');
+    const sidebarCollapsed = ref(localStorage.getItem('oc-sidebar-collapsed') === 'true');
+    const searchQuery = ref('');
+    const mobileView = ref(window.innerWidth < 769);
+
+    const navItems = [
+      { key: 'nav', label: '服务导航', icon: 'fa-compass' },
+      { key: 'monitor', label: '系统监控', icon: 'fa-chart-line' },
+      { key: 'terminal', label: '终端', icon: 'fa-terminal' },
+      { key: 'tools', label: '工具箱', icon: 'fa-toolbox' },
+      { key: 'settings', label: '设置', icon: 'fa-cog' },
+    ];
+
+    const loading = reactive({ servers: false, services: false, monitor: false });
+    const servers = ref([]);
+    const allServices = ref([]);
+    const categories = ref([]);
+    const categoryExpanded = reactive({});
+    const pinnedIds = ref(JSON.parse(localStorage.getItem('oc-pinned') || '[]'));
+    const toasts = ref([]);
+
+    const monitor = reactive({
+      connected: false,
+      cpu: 0, memory: 0, disk: 0, network: 0,
+      cpu_total: 0, memory_total: 0, memory_used: 0, disk_total: 0, disk_used: 0,
+      network_in: 0, network_out: 0,
+      containers: [],
+      history: [],
+    });
+    const historyMetric = ref('cpu');
+    const refreshCountdown = ref(30);
+    let refreshTimer = null;
+    const historyChart = ref(null);
+    let chartInstance = null;
+
+    const terminalLines = ref([]);
+    const terminalInput = ref('');
+    const terminalHistoryIdx = ref(-1);
+    let terminalHistoryList = [];
+
+    const tools = reactive({
+      timestamp: { unix: '', date: '', now: '', iso: '' },
+      base64: { input: '', encoded: '', error: '' },
+      json: { input: '', output: '', error: '' },
+      password: { length: 16, upper: true, lower: true, digits: true, symbols: true, result: '' },
+    });
+
+    const showAddServer = ref(false);
+    const newServer = reactive({ name: '', host: '', ssh_port: 22, username: 'root' });
+    const newService = reactive({ name: '', url: '', category: '', icon: '', description: '' });
+    const scanning = ref(false);
+    const stats = reactive({ servers: 0, services: 0, categories: 0, containers: 0 });
+    const confirmModal = reactive({ show: false, title: '', message: '', action: () => {} });
+
+    function applyTheme() {
+      document.documentElement.classList.toggle('light', !isDark.value);
+      localStorage.setItem('oc-theme', isDark.value ? 'dark' : 'light');
+    }
+
+    function toggleTheme() {
+      isDark.value = !isDark.value;
+      applyTheme();
+      updateChart();
+    }
+
+    function toast(message, type = 'info') {
+      const id = Date.now() + Math.random();
+      toasts.value.push({ id, message, type });
+      setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, 3000);
+    }
+
+    async function apiFetch(path, options = {}) {
+      try {
+        const res = await fetch(`${API}${path}`, {
+          headers: { 'Content-Type': 'application/json', ...options.headers },
+          ...options,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || res.statusText);
+        }
+        return await res.json();
+      } catch (e) {
+        console.error(`API ${path}:`, e);
+        throw e;
+      }
+    }
+
+    async function loadServers() {
+      loading.servers = true;
+      try {
+        const data = await apiFetch('/servers');
+        servers.value = data.servers || data || [];
+        if (!currentServerId.value && servers.value.length) {
+          currentServerId.value = localStorage.getItem('oc-server') || servers.value[0].id;
+          await loadServices();
+        }
+      } catch (e) {
+        toast('加载服务器列表失败: ' + e.message, 'error');
+      } finally {
+        loading.servers = false;
+      }
+    }
+
+    async function loadServices() {
+      if (!currentServerId.value) return;
+      loading.services = true;
+      try {
+        const [svcData, catData] = await Promise.all([
+          apiFetch(`/services?server_id=${currentServerId.value}`),
+          apiFetch(`/categories?server_id=${currentServerId.value}`),
+        ]);
+        allServices.value = (svcData.services || svcData || []).map(s => ({
+          ...s, pinned: pinnedIds.value.includes(s.id),
+        }));
+        categories.value = catData.categories || catData || [];
+        categories.value.forEach(c => {
+          if (categoryExpanded[c.name] === undefined) categoryExpanded[c.name] = true;
+        });
+      } catch (e) {
+        toast('加载服务列表失败: ' + e.message, 'error');
+      } finally {
+        loading.services = false;
+      }
+    }
+
+    async function onServerChange() {
+      localStorage.setItem('oc-server', currentServerId.value);
+      searchQuery.value = '';
+      await loadServices();
+      if (currentPage.value === 'monitor') loadMonitor();
+      if (currentPage.value === 'terminal') initTerminal();
+    }
+
+    async function addServer() {
+      try {
+        await apiFetch('/servers', {
+          method: 'POST',
+          body: JSON.stringify(newServer),
+        });
+        toast('服务器添加成功', 'success');
+        showAddServer.value = false;
+        Object.assign(newServer, { name: '', host: '', ssh_port: 22, username: 'root' });
+        await loadServers();
+      } catch (e) {
+        toast('添加失败: ' + e.message, 'error');
+      }
+    }
+
+    function deleteServer(id) {
+      const s = servers.value.find(x => x.id === id);
+      confirmModal.title = '删除服务器';
+      confirmModal.message = `确定删除 "${s?.name}" 及其所有服务？此操作不可撤销。`;
+      confirmModal.action = async () => {
+        try {
+          await apiFetch(`/servers/${id}`, { method: 'DELETE' });
+          toast('服务器已删除', 'success');
+          if (currentServerId.value === id) currentServerId.value = '';
+          await loadServers();
+        } catch (e) {
+          toast('删除失败: ' + e.message, 'error');
+        }
+      };
+      confirmModal.show = true;
+    }
+
+    async function addService() {
+      if (!currentServerId.value) return;
+      try {
+        await apiFetch(`/services?server_id=${currentServerId.value}`, {
+          method: 'POST',
+          body: JSON.stringify(newService),
+        });
+        toast('服务注册成功', 'success');
+        Object.assign(newService, { name: '', url: '', category: '', icon: '', description: '' });
+        await loadServices();
+      } catch (e) {
+        toast('注册失败: ' + e.message, 'error');
+      }
+    }
+
+    async function togglePin(svc) {
+      try {
+        await apiFetch(`/services/${svc.id}/pin`, { method: 'PATCH' });
+        svc.pinned = !svc.pinned;
+        if (svc.pinned) {
+          pinnedIds.value.push(svc.id);
+        } else {
+          pinnedIds.value = pinnedIds.value.filter(id => id !== svc.id);
+        }
+        localStorage.setItem('oc-pinned', JSON.stringify(pinnedIds.value));
+      } catch (e) {
+        toast('操作失败: ' + e.message, 'error');
+      }
+    }
+
+    async function triggerScan() {
+      scanning.value = true;
+      try {
+        await apiFetch('/scan', { method: 'POST' });
+        toast('扫描已触发', 'success');
+        setTimeout(() => loadServices(), 3000);
+      } catch (e) {
+        toast('扫描失败: ' + e.message, 'error');
+      } finally {
+        scanning.value = false;
+      }
+    }
+
+    async function loadStats() {
+      try {
+        const data = await apiFetch('/stats');
+        Object.assign(stats, data.stats || data);
+      } catch (e) { /* silent */ }
+    }
+
+    function openService(svc) {
+      if (svc.url) window.open(svc.url, '_blank');
+    }
+
+    function toggleCategory(name) {
+      categoryExpanded[name] = !categoryExpanded[name];
+    }
+
+    // ========== Monitor ==========
+    async function loadMonitor() {
+      if (!currentServerId.value) return;
+      loading.monitor = true;
+      try {
+        const data = await apiFetch(`/monitor/${currentServerId.value}`);
+        const m = data.metrics || data.monitor || data;
+        monitor.connected = true;
+        monitor.cpu = m.cpu_percent ?? m.cpu ?? 0;
+        monitor.memory = m.memory_percent ?? m.memory ?? 0;
+        monitor.disk = m.disk_percent ?? m.disk ?? 0;
+        monitor.network = m.network_mbps != null ? m.network_mbps : ((m.net_rx || 0) + (m.net_tx || 0) || 0);
+        monitor.cpu_total = m.cpu_count ?? m.cpu_total ?? 0;
+        monitor.memory_total = m.memory_total ?? 0;
+        monitor.memory_used = m.memory_used ?? (m.memory_total != null && m.memory_avail != null ? m.memory_total - m.memory_avail : 0);
+        monitor.disk_total = m.disk_total ?? 0;
+        monitor.disk_used = m.disk_used ?? (m.disk_total != null && m.disk_avail != null ? m.disk_total - m.disk_avail : 0);
+        monitor.network_in = m.network_in ?? m.net_rx ?? 0;
+        monitor.network_out = m.network_out ?? m.net_tx ?? 0;
+        monitor.containers = data.containers ?? m.containers ?? [];
+      } catch (e) {
+        monitor.connected = false;
+        toast('监控数据加载失败', 'error');
+      } finally {
+        loading.monitor = false;
+      }
+    }
+
+    async function loadHistory() {
+      if (!currentServerId.value) return;
+      try {
+        const data = await apiFetch(`/monitor/${currentServerId.value}/history?metric=${historyMetric.value}&hours=24`);
+        monitor.history = data.values || data.history || data.points || [];
+        updateChart();
+      } catch (e) { /* fail silently, chart shows empty */ }
+    }
+
+    function initChart() {
+      if (historyChart.value && !chartInstance) {
+        chartInstance = echarts.init(historyChart.value, isDark.value ? 'dark' : null);
+        window.addEventListener('resize', () => chartInstance?.resize());
+      }
+    }
+
+    function updateChart() {
+      if (!chartInstance) return;
+      const metricLabels = { cpu: 'CPU 使用率', memory: '内存使用率', disk: '磁盘使用率', network: '网络流量' };
+      const metricUnits = { cpu: '%', memory: '%', disk: '%', network: 'MB/s' };
+      const metricColors = { cpu: '#22c55e', memory: '#3b82f6', disk: '#f59e0b', network: '#8b5cf6' };
+      const h = monitor.history;
+      // Support both [[timestamp, value]] and [{timestamp, value}] formats
+      const normalized = h.map ? h.map(p => {
+        if (Array.isArray(p)) return { timestamp: p[0] * 1000, value: parseFloat(p[1]) };
+        return p;
+      }) : [];
+      const xData = normalized.map(p => {
+        const d = new Date(p.timestamp || p.time || p.x);
+        return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+      });
+      const yData = normalized.map(p => p.value ?? p.y ?? 0);
+
+      chartInstance.setOption({
+        backgroundColor: 'transparent',
+        textStyle: { color: isDark.value ? '#94a3b8' : '#64748b' },
+        grid: { left: 45, right: 15, top: 15, bottom: 30 },
+        tooltip: { trigger: 'axis', backgroundColor: isDark.value ? '#1e293b' : '#fff', borderColor: isDark.value ? '#334155' : '#e2e8f0', textStyle: { color: isDark.value ? '#e2e8f0' : '#1e293b', fontSize: 12 } },
+        xAxis: { type: 'category', data: xData, axisLine: { lineStyle: { color: isDark.value ? '#334155' : '#e2e8f0' } }, axisLabel: { fontSize: 10 }, boundaryGap: false },
+        yAxis: { type: 'value', axisLine: { show: false }, splitLine: { lineStyle: { color: isDark.value ? '#1e293b' : '#f1f5f9' } }, axisLabel: { fontSize: 10, formatter: `{value}${metricUnits[historyMetric.value]}` } },
+        series: [{
+          type: 'line', data: yData, smooth: true, symbol: 'none', lineStyle: { width: 2, color: metricColors[historyMetric.value] },
+          areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: metricColors[historyMetric.value] + '40' },
+            { offset: 1, color: metricColors[historyMetric.value] + '05' },
+          ])},
+        }],
+      });
+    }
+
+    // ========== Terminal ==========
+    function initTerminal() {
+      const s = currentServer.value;
+      terminalLines.value = [
+        { type: 'info', text: `═══ OpsCenter Terminal v2.0 ═══` },
+        { type: 'info', text: `Phase 1 — 模拟模式` },
+        { type: 'output', text: '' },
+        { type: 'info', text: `已连接到: ${s?.name || 'unknown'} (${s?.host || 'unknown'})` },
+        { type: 'output', text: `用户: ${s?.username || 'root'} · 端口: ${s?.ssh_port || 22}` },
+        { type: 'output', text: '' },
+        { type: 'output', text: `输入 <span style="color:#10b981">help</span> 查看可用命令` },
+        { type: 'output', text: '' },
+      ];
+      terminalHistoryList = [];
+      terminalHistoryIdx.value = -1;
+    }
+
+    function executeTerminal() {
+      const cmd = terminalInput.value.trim();
+      if (!cmd) return;
+      terminalLines.value.push({ type: 'cmd', text: cmd });
+      terminalHistoryList.unshift(cmd);
+      terminalHistoryIdx.value = -1;
+      terminalInput.value = '';
+
+      const parts = cmd.split(/\s+/);
+      const command = parts[0].toLowerCase();
+      const args = parts.slice(1);
+      let output = '';
+
+      switch (command) {
+        case 'help':
+          output = `可用命令:\n  ls          - 列出目录\n  pwd         - 当前路径\n  whoami      - 当前用户\n  date        - 当前时间\n  uname -a    - 系统信息\n  uptime      - 运行时间\n  df -h       - 磁盘使用\n  free -h     - 内存使用\n  docker ps   - 容器列表\n  cat /etc/os-release - 系统版本\n  clear       - 清屏\n  ping <host> - Ping 主机\n  netstat -tlnp - 端口监听\n  top         - 进程概览\n  help        - 帮助`;
+          break;
+        case 'ls':
+          output = 'bin  boot  dev  etc  home  lib  lib64  media  mnt  opt  proc  root  run  sbin  srv  sys  tmp  usr  var';
+          break;
+        case 'pwd':
+          output = '/root';
+          break;
+        case 'whoami':
+          output = currentServer.value?.username || 'root';
+          break;
+        case 'date':
+          output = new Date().toString();
+          break;
+        case 'uname':
+          output = 'Linux ' + (currentServer.value?.host || 'opscenter') + ' 6.8.0-124-generic #124-Ubuntu SMP x86_64 GNU/Linux';
+          break;
+        case 'uptime':
+          output = ' ' + new Date().toLocaleTimeString() + ' up 42 days, 3:17, 1 user, load average: 0.15, 0.12, 0.08';
+          break;
+        case 'df':
+          output = 'Filesystem      Size  Used Avail Use% Mounted on\n/dev/vda1        49G   25G   22G  54% /\ntmpfs           3.6G     0  3.6G   0% /dev/shm';
+          break;
+        case 'free':
+          output = '              total        used        free      shared  buff/cache   available\nMem:          7.1Gi       3.8Gi       1.2Gi       256Mi       2.1Gi       3.3Gi\nSwap:            0B          0B          0B';
+          break;
+        case 'docker':
+          if (args[0] === 'ps') {
+            const ct = monitor.containers.length ? monitor.containers : [
+              { name: 'nginx', image: 'nginx:alpine', status: 'running', ports: '80, 443' },
+              { name: 'gitea', image: 'gitea/gitea:latest', status: 'running', ports: '3000, 2222' },
+              { name: 'jenkins', image: 'jenkins/jenkins:lts', status: 'running', ports: '8080' },
+            ];
+            output = 'CONTAINER ID   IMAGE' + ' '.repeat(25) + 'STATUS      PORTS                  NAMES\n';
+            ct.forEach(c => {
+              const id = Math.random().toString(36).substring(2, 14);
+              output += `${id}   ${c.image.padEnd(32)} Up ${c.status === 'running' ? '2 days' : 'Exited'}   ${(c.ports||'').padEnd(22)} ${c.name}\n`;
+            });
+          } else {
+            output = 'Usage: docker ps';
+          }
+          break;
+        case 'cat':
+          if (args.join(' ').includes('os-release')) {
+            output = 'PRETTY_NAME="Ubuntu 24.04.4 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="24.04.4 LTS (Noble Numbat)"\nID=ubuntu\nHOME_URL="https://www.ubuntu.com/"';
+          } else {
+            output = `cat: ${args[0] || ''}: No such file or directory`;
+          }
+          break;
+        case 'clear':
+          terminalLines.value = [];
+          return;
+        case 'ping':
+          if (args[0]) {
+            output = `PING ${args[0]} (${args[0].includes('.') ? args[0] : '93.184.216.34'}) 56(84) bytes of data.\n64 bytes from ${args[0]}: icmp_seq=1 ttl=52 time=11.3 ms\n64 bytes from ${args[0]}: icmp_seq=2 ttl=52 time=11.1 ms\n--- ${args[0]} ping statistics ---\n2 packets transmitted, 2 received, 0% packet loss, time 1002ms`;
+          } else {
+            output = 'Usage: ping <host>';
+          }
+          break;
+        case 'netstat':
+          output = 'Active Internet connections (only servers)\nProto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name\ntcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      1234/sshd\ntcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN      5678/nginx\ntcp        0      0 0.0.0.0:443             0.0.0.0:*               LISTEN      5678/nginx';
+          break;
+        case 'top': {
+          const cpuPct = monitor.cpu || Math.floor(Math.random() * 15);
+          const memPct = monitor.memory || 54;
+          output = `top - ${new Date().toLocaleTimeString()} up 42 days, 3:17, 1 user, load average: 0.15, 0.12, 0.08\nTasks: 128 total, 1 running, 127 sleeping, 0 stopped, 0 zombie\n%Cpu(s): ${cpuPct} us, 2.0 sy, 0.0 ni, ${(100-cpuPct-2).toFixed(1)} id, 0.0 wa, 0.0 hi, 0.2 si\nMiB Mem: 7264.0 total, 1228.0 free, 3891.0 used, 2145.0 buff/cache\nMiB Swap: 0.0 total, 0.0 free, 0.0 used. 3372.0 avail Mem`;
+          break;
+        }
+        default:
+          output = `bash: ${command}: command not found`;
+          terminalLines.value.push({ type: 'error', text: output });
+          scrollTerminal();
+          return;
+      }
+      if (output) {
+        output.split('\n').forEach(line => {
+          terminalLines.value.push({ type: 'output', text: line.replace(/</g, '&lt;').replace(/>/g, '&gt;') });
+        });
+      }
+      scrollTerminal();
+    }
+
+    function terminalHistoryUp() {
+      if (terminalHistoryIdx.value < terminalHistoryList.length - 1) {
+        terminalHistoryIdx.value++;
+        terminalInput.value = terminalHistoryList[terminalHistoryIdx.value];
+      }
+    }
+
+    function terminalHistoryDown() {
+      if (terminalHistoryIdx.value > 0) {
+        terminalHistoryIdx.value--;
+        terminalInput.value = terminalHistoryList[terminalHistoryIdx.value];
+      } else {
+        terminalHistoryIdx.value = -1;
+        terminalInput.value = '';
+      }
+    }
+
+    function scrollTerminal() {
+      nextTick(() => {
+        const el = document.querySelector('.terminal-window');
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    }
+
+    // ========== Tools ==========
+    function convertTimestamp(dir) {
+      if (dir === 'unix' && tools.timestamp.unix) {
+        const ts = parseInt(tools.timestamp.unix);
+        if (!isNaN(ts)) {
+          const d = new Date(ts < 1e12 ? ts * 1000 : ts);
+          tools.timestamp.date = d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).replace(/\//g, '-');
+          tools.timestamp.iso = d.toISOString();
+        }
+      } else if (dir === 'date' && tools.timestamp.date) {
+        const d = new Date(tools.timestamp.date);
+        if (!isNaN(d.getTime())) {
+          tools.timestamp.unix = Math.floor(d.getTime() / 1000);
+          tools.timestamp.iso = d.toISOString();
+        }
+      }
+    }
+
+    function updateTimestampNow() {
+      const now = new Date();
+      tools.timestamp.now = Math.floor(now.getTime() / 1000);
+      tools.timestamp.iso = now.toISOString();
+    }
+
+    function encodeBase64() {
+      try {
+        tools.base64.encoded = btoa(unescape(encodeURIComponent(tools.base64.input)));
+        tools.base64.error = '';
+      } catch (e) {
+        tools.base64.error = '编码失败';
+      }
+    }
+
+    function decodeBase64() {
+      try {
+        tools.base64.input = decodeURIComponent(escape(atob(tools.base64.encoded)));
+        tools.base64.error = '';
+      } catch (e) {
+        tools.base64.error = '无效的 Base64 字符串';
+      }
+    }
+
+    function formatJson() {
+      try {
+        const obj = JSON.parse(tools.json.input);
+        tools.json.output = JSON.stringify(obj, null, 2);
+        tools.json.error = '';
+      } catch (e) {
+        tools.json.error = 'JSON 解析失败: ' + e.message;
+      }
+    }
+
+    function compressJson() {
+      try {
+        const obj = JSON.parse(tools.json.input);
+        tools.json.output = JSON.stringify(obj);
+        tools.json.error = '';
+      } catch (e) {
+        tools.json.error = 'JSON 解析失败: ' + e.message;
+      }
+    }
+
+    function copyJson() {
+      navigator.clipboard?.writeText(tools.json.output);
+      toast('已复制', 'success');
+    }
+
+    function generatePassword() {
+      let chars = '';
+      if (tools.password.upper) chars += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      if (tools.password.lower) chars += 'abcdefghijklmnopqrstuvwxyz';
+      if (tools.password.digits) chars += '0123456789';
+      if (tools.password.symbols) chars += '!@#$%^&*()_+-=[]{}|;:,.<>?';
+      if (!chars) chars = 'abcdefghijklmnopqrstuvwxyz';
+      let result = '';
+      const arr = new Uint32Array(tools.password.length);
+      crypto.getRandomValues(arr);
+      for (let i = 0; i < tools.password.length; i++) {
+        result += chars[arr[i] % chars.length];
+      }
+      tools.password.result = result;
+    }
+
+    function copyPassword() {
+      navigator.clipboard?.writeText(tools.password.result);
+      toast('密码已复制', 'success');
+    }
+
+    const passwordStrengthLabel = computed(() => {
+      const p = tools.password;
+      let score = 0;
+      if (p.upper) score++;
+      if (p.lower) score++;
+      if (p.digits) score++;
+      if (p.symbols) score++;
+      if (p.length >= 12) score++;
+      if (p.length >= 20) score++;
+      if (score <= 2) return '弱';
+      if (score <= 4) return '中等';
+      return '强';
+    });
+
+    const passwordStrengthColor = computed(() => {
+      const l = passwordStrengthLabel.value;
+      if (l === '强') return '#22c55e';
+      if (l === '中等') return '#f59e0b';
+      return '#ef4444';
+    });
+
+    // ========== Computed ==========
+    const currentServer = computed(() => servers.value.find(s => s.id === currentServerId.value));
+
+    const filteredServices = computed(() => {
+      if (!searchQuery.value) return allServices.value;
+      const q = searchQuery.value.toLowerCase();
+      return allServices.value.filter(s =>
+        (s.name || '').toLowerCase().includes(q) ||
+        (s.description || '').toLowerCase().includes(q) ||
+        (s.category || '').toLowerCase().includes(q) ||
+        (s.url || '').toLowerCase().includes(q)
+      );
+    });
+
+    const pinnedServices = computed(() => allServices.value.filter(s => s.pinned));
+
+    const categoriesWithServices = computed(() => {
+      return categories.value.map(cat => {
+        const catName = cat.name || cat;
+        const svcs = allServices.value.filter(s => s.category === catName);
+        return { name: catName, services: svcs };
+      }).filter(c => c.services.length > 0);
+    });
+
+    const formatNetwork = (bytesPerSec) => {
+      if (bytesPerSec >= 1048576) return { value: (bytesPerSec / 1048576).toFixed(1), unit: ' MB/s' };
+      if (bytesPerSec >= 1024) return { value: (bytesPerSec / 1024).toFixed(1), unit: ' KB/s' };
+      return { value: bytesPerSec.toFixed ? bytesPerSec.toFixed(0) : bytesPerSec, unit: ' B/s' };
+    };
+    const metricCards = computed(() => {
+      const net = formatNetwork(monitor.network);
+      return [
+        { key: 'cpu', label: 'CPU 使用率', value: monitor.cpu.toFixed ? monitor.cpu.toFixed(1) : monitor.cpu, unit: '%', icon: 'fa-microchip', color: '#22c55e' },
+        { key: 'memory', label: '内存使用率', value: monitor.memory.toFixed ? monitor.memory.toFixed(1) : monitor.memory, unit: '%', icon: 'fa-memory', color: '#3b82f6' },
+        { key: 'disk', label: '磁盘使用率', value: monitor.disk.toFixed ? monitor.disk.toFixed(1) : monitor.disk, unit: '%', icon: 'fa-hard-drive', color: '#f59e0b' },
+        { key: 'network', label: '网络流量', value: net.value, unit: net.unit, icon: 'fa-network-wired', color: '#8b5cf6' },
+      ];
+    });
+
+    const statsCards = computed(() => [
+      { label: '服务器', value: stats.servers || servers.value.length },
+      { label: '服务', value: stats.services || allServices.value.length },
+      { label: '分类', value: stats.categories || categories.value.length },
+      { label: '容器', value: stats.containers || monitor.containers.length },
+    ]);
+
+    // ========== Watchers ==========
+    watch(currentPage, (page) => {
+      if (page === 'monitor' && currentServerId.value) {
+        nextTick(() => { initChart(); loadMonitor(); loadHistory(); });
+      }
+      if (page === 'terminal' && currentServerId.value && !terminalLines.value.length) {
+        initTerminal();
+      }
+      if (page === 'settings') loadStats();
+    });
+
+    watch(historyMetric, () => { loadHistory(); });
+
+    watch(sidebarCollapsed, (v) => { localStorage.setItem('oc-sidebar-collapsed', v); });
+
+    watch(pinnedIds, (v) => {
+      allServices.value.forEach(s => { s.pinned = v.includes(s.id); });
+    }, { deep: true });
+
+    // ========== Keyboard ==========
+    function onKeyDown(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        currentPage.value = 'nav';
+        nextTick(() => {
+          const input = document.querySelector('header input');
+          if (input) input.focus();
+        });
+      }
+      if (e.key === 'Escape') {
+        searchQuery.value = '';
+      }
+    }
+
+    // ========== Lifecycle ==========
+    onMounted(() => {
+      applyTheme();
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('resize', () => { mobileView.value = window.innerWidth < 769; });
+      loadServers();
+      updateTimestampNow();
+      setInterval(updateTimestampNow, 1000);
+      generatePassword();
+
+      refreshTimer = setInterval(() => {
+        refreshCountdown.value--;
+        if (refreshCountdown.value <= 0) {
+          refreshCountdown.value = 30;
+          if (currentPage.value === 'monitor' && currentServerId.value) {
+            loadMonitor();
+            loadHistory();
+          }
+        }
+      }, 1000);
+    });
+
+    onUnmounted(() => {
+      window.removeEventListener('keydown', onKeyDown);
+      if (refreshTimer) clearInterval(refreshTimer);
+      if (chartInstance) chartInstance.dispose();
+    });
+
+    return {
+      isDark, currentPage, currentServerId, sidebarCollapsed, searchQuery, mobileView,
+      navItems, loading, servers, allServices, categories, categoryExpanded, pinnedIds, toasts,
+      monitor, historyMetric, refreshCountdown, historyChart,
+      terminalLines, terminalInput, terminalHistoryIdx,
+      tools, showAddServer, newServer, newService, scanning, stats, confirmModal,
+      currentServer, filteredServices, pinnedServices, categoriesWithServices,
+      metricCards, statsCards, passwordStrengthLabel, passwordStrengthColor,
+      toggleTheme, onServerChange, addServer, deleteServer, addService,
+      togglePin, triggerScan, openService, toggleCategory,
+      loadServers, loadServices, loadMonitor,
+      executeTerminal, terminalHistoryUp, terminalHistoryDown,
+      convertTimestamp, encodeBase64, decodeBase64,
+      formatJson, compressJson, copyJson,
+      generatePassword, copyPassword,
+    };
+  },
+}).mount('#app');
+</script>
+</body>
+</html>
