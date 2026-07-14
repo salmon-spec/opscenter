@@ -90,7 +90,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
                 if old_version == _AGENT_VERSION:
                     return {
                         "success": True,
-                        "message": "Agent已是最新版本(v2.0.0)",
+                        "message": f"Agent已是最新版本(v{_AGENT_VERSION})",
                         "agent_port": existing_config.get("port", port),
                         "agent_token": existing_config.get("token", ""),
                         "agent_version": _AGENT_VERSION,

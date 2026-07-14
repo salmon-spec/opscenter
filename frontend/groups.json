@@ -391,7 +391,8 @@
       ],
       "serviceGroupMap": {
         "auto:bcc879d2-e2ee-4f11-8fef-b6daa2fa761d:1f73f843-d9d5-45bf-a36d-28a05985d34a": "ungrouped",
-        "auto:bcc879d2-e2ee-4f11-8fef-b6daa2fa761d:f4158c8c-f113-4366-a3fe-4d8bd92ba0b9": "ops"
+        "auto:bcc879d2-e2ee-4f11-8fef-b6daa2fa761d:f4158c8c-f113-4366-a3fe-4d8bd92ba0b9": "ops",
+        "auto:bcc879d2-e2ee-4f11-8fef-b6daa2fa761d:None": "ungrouped"
       }
     },
     "e1a08449-b8ce-402c-bfc3-6b451c6be1a0": {
@@ -469,7 +470,8 @@
       ],
       "serviceGroupMap": {
         "auto:e1a08449-b8ce-402c-bfc3-6b451c6be1a0:27a525aa-814b-4952-b077-69d0fc50ecac": "ops",
-        "auto:e1a08449-b8ce-402c-bfc3-6b451c6be1a0:92e33584-6d03-4156-8e4c-e8749b97e2ab": "ungrouped"
+        "auto:e1a08449-b8ce-402c-bfc3-6b451c6be1a0:92e33584-6d03-4156-8e4c-e8749b97e2ab": "ungrouped",
+        "auto:e1a08449-b8ce-402c-bfc3-6b451c6be1a0:None": "ungrouped"
       }
     }
   }
