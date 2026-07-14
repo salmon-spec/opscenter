@@ -1,4 +1,4 @@
-﻿import os
+import os
 import calendar, uuid, asyncio, re
 from datetime import datetime
 from typing import Optional, List
@@ -25,7 +25,7 @@ class TerminalCreateRequest(BaseModel):
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
-LOCAL_HOST = os.getenv("LOCAL_HOST", "39.98.123.190")
+LOCAL_HOST = os.getenv("LOCAL_HOST", "ops.salmon.xin")
 
 # Category -> Group ID auto-mapping for service grouping
 CATEGORY_TO_GROUP = {
@@ -114,7 +114,6 @@ _SKIP_PORTS = {22, 25, 53, 68, 323, 5433, 9323}
 _SKIP_PROCESSES = {"hbrclient", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
 
 
-
 # === Database ===
 engine = create_engine(DB_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)
 SessionLocal = sessionmaker(bind=engine)
@@ -146,7 +145,6 @@ class ServerUpdate(BaseModel):
     ssh_key: Optional[str] = None
     ssh_password: Optional[str] = None
     tags: Optional[List[str]] = None
-
 
 
 class SshTestRequest(BaseModel):
@@ -182,7 +180,6 @@ class PinToggle(BaseModel):
 
 # === App ===
 app = FastAPI(title="OpsCenter API", version="2.0")
-
 
 
 # Category metadata for enhanced UI
@@ -271,7 +268,6 @@ async def background_health_check():
         await asyncio.sleep(60)
 
 
-
 async def _agent_health_check_loop():
     """Background task: check Agent status on all remote servers every 5 minutes."""
     import asyncio
@@ -279,6 +275,21 @@ async def _agent_health_check_loop():
     while True:
         try:
             with get_db() as db:
+                # Check local Agent status
+                local_srv = db.query(Server).filter(Server.is_local == True).first()
+                if local_srv:
+                    try:
+                        local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
+                        if local_data:
+                            local_srv.agent_status = "running"
+                            local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
+                            local_srv.last_seen = datetime.utcnow()
+                        else:
+                            local_srv.agent_status = "stopped"
+                    except Exception as e:
+                        print(f"[AgentHealthCheck] Local Agent error: {e}")
+                        local_srv.agent_status = "stopped"
+
                 remote_servers = db.query(Server).filter(Server.is_local == False).all()
                 for srv in remote_servers:
                     try:
@@ -305,36 +316,102 @@ async def _agent_health_check_loop():
         await asyncio.sleep(300)  # 5 minutes
 
 
+def _migrate_groups_json():
+    """Migrate groups.json from old flat format to per-server format."""
+    import json as _json
+    import shutil
+    if not os.path.exists(GROUPS_JSON_PATH):
+        return
+    try:
+        with open(GROUPS_JSON_PATH, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+    except Exception:
+        return
+    if "groups" not in data or "servers" in data:
+        return
+    shutil.copy2(GROUPS_JSON_PATH, GROUPS_JSON_PATH + ".bak")
+    old_groups = data.get("groups", [])
+    old_smap = data.get("serviceGroupMap", {})
+    server_smaps = {}
+    for key, group_id in old_smap.items():
+        parts = key.split(":")
+        if len(parts) >= 3 and parts[0] == "auto":
+            sid = parts[1]
+        else:
+            sid = "_unknown"
+        server_smaps.setdefault(sid, {})[key] = group_id
+    new_data = {
+        "defaultGroups": old_groups if old_groups else list(DEFAULT_GROUPS),
+        "servers": {}
+    }
+    for sid, smap in server_smaps.items():
+        new_data["servers"][sid] = {
+            "groups": [dict(g) for g in (old_groups if old_groups else DEFAULT_GROUPS)],
+            "serviceGroupMap": smap
+        }
+    with open(GROUPS_JSON_PATH, "w", encoding="utf-8") as f:
+        _json.dump(new_data, f, ensure_ascii=False, indent=2)
+    print(f"[Migration] groups.json migrated to per-server format ({len(new_data['servers'])} servers)")
 
 def _auto_assign_group(server_id: str, service_id: str, category: str):
-    """Auto-assign a service to a group based on its category."""
+    """Auto-assign a service to a group based on its category (per-server)."""
     group_id = CATEGORY_TO_GROUP.get(category, "ungrouped")
     config = _read_groups_json()
-    existing_ids = [g["id"] for g in config.get("groups", [])]
+    if server_id not in config.get("servers", {}):
+        config.setdefault("servers", {})[server_id] = {
+            "groups": [dict(g) for g in config.get("defaultGroups", DEFAULT_GROUPS)],
+            "serviceGroupMap": {}
+        }
+    srv_cfg = config["servers"][server_id]
+    existing_ids = [g["id"] for g in srv_cfg.get("groups", [])]
     for dg in DEFAULT_GROUPS:
         if dg["id"] not in existing_ids:
-            config.setdefault("groups", []).append(dg)
+            srv_cfg.setdefault("groups", []).append(dg)
     key = f"auto:{server_id}:{service_id}"
-    config.setdefault("serviceGroupMap", {})[key] = group_id
+    srv_cfg.setdefault("serviceGroupMap", {})[key] = group_id
     _write_groups_json(config)
     return group_id
 
 
 def _auto_assign_all_groups():
-    """Auto-assign all services to groups based on their categories."""
+    """Auto-assign all services to groups based on their categories (per-server)."""
     with get_db() as db:
         services = db.query(Service).all()
+        server_ids = {str(s.id) for s in db.query(Server).all()}
     config = _read_groups_json()
-    existing_ids = [g["id"] for g in config.get("groups", [])]
-    for dg in DEFAULT_GROUPS:
-        if dg["id"] not in existing_ids:
-            config.setdefault("groups", []).append(dg)
     changed = False
+    for sid in server_ids:
+        if sid not in config.get("servers", {}):
+            config.setdefault("servers", {})[sid] = {
+                "groups": [dict(g) for g in config.get("defaultGroups", DEFAULT_GROUPS)],
+                "serviceGroupMap": {}
+            }
+            changed = True
+        srv_cfg = config["servers"][sid]
+        existing_ids = [g["id"] for g in srv_cfg.get("groups", [])]
+        for dg in DEFAULT_GROUPS:
+            if dg["id"] not in existing_ids:
+                srv_cfg.setdefault("groups", []).append(dg)
+                changed = True
     for svc in services:
-        key = f"auto:{svc.server_id}:{svc.id}"
+        sid = str(svc.server_id)
+        if sid not in config.get("servers", {}):
+            continue
+        srv_cfg = config["servers"][sid]
+        key = f"auto:{sid}:{svc.id}"
         group_id = CATEGORY_TO_GROUP.get(svc.category, "ungrouped")
-        if config.get("serviceGroupMap", {}).get(key) != group_id:
-            config.setdefault("serviceGroupMap", {})[key] = group_id
+        if srv_cfg.get("serviceGroupMap", {}).get(key) != group_id:
+            srv_cfg.setdefault("serviceGroupMap", {})[key] = group_id
+            changed = True
+    # Clean invalid mappings
+    valid_keys = set()
+    for svc in services:
+        valid_keys.add(f"auto:{svc.server_id}:{svc.id}")
+    for sid in list(config.get("servers", {}).keys()):
+        smap = config["servers"][sid].get("serviceGroupMap", {})
+        invalid = [k for k in smap if k not in valid_keys]
+        for k in invalid:
+            del smap[k]
             changed = True
     if changed:
         _write_groups_json(config)
@@ -374,6 +451,21 @@ async def startup():
         
         # Run initial discovery
         discover_docker_services(local, db, LOCAL_HOST)
+        # Auto-detect local Agent status on startup
+        try:
+            local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, local.agent_token or "")
+            if local_agent:
+                local.agent_status = "running"
+                local.agent_version = local_agent.get("agent_version", "2.1.0")
+                local.last_seen = datetime.utcnow()
+                print(f"[Startup] Local Agent detected: v{local.agent_version}")
+            else:
+                local.agent_status = "stopped"
+                print("[Startup] Local Agent not reachable")
+        except Exception as e:
+            print(f"[Startup] Local Agent check error: {e}")
+
+
         
         # Parse nginx config
         nginx_routes = parse_nginx_config(host=LOCAL_HOST)
@@ -401,6 +493,8 @@ async def startup():
     asyncio.create_task(background_health_check())
     # Start background agent metrics collector
     asyncio.create_task(background_agent_collector())
+    # Migrate groups.json to per-server format if needed
+    _migrate_groups_json()
     # Auto-assign groups on startup
     _auto_assign_all_groups()
 
@@ -611,8 +705,6 @@ def test_server(server_id: str, password: Optional[str] = None):
         return {"status": "offline", "message": "Cannot connect via SSH. Check credentials."}
 
 
-
-
 @app.post("/api/v2/test-ssh")
 def test_ssh_connection_api(data: SshTestRequest):
     """Test SSH connection with provided credentials (before creating server)."""
@@ -626,8 +718,6 @@ def test_ssh_connection_api(data: SshTestRequest):
         ssh_key=data.ssh_key,
     )
     return {"success": success, "message": message}
-
-
 
 
 # === Agent Service Scan APIs ===
@@ -1340,6 +1430,21 @@ def scan_all():
                 total_added += len(discovered)
             server_results.append(sr_detail)
         # Remote servers: try Agent first, then SSH fallback
+            # Check local Agent status too
+            local_srv = db.query(Server).filter(Server.is_local == True).first()
+            if local_srv:
+                try:
+                    local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
+                    if local_data:
+                        local_srv.agent_status = "running"
+                        local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
+                        local_srv.last_seen = datetime.utcnow()
+                    else:
+                        local_srv.agent_status = "stopped"
+                except Exception as e:
+                    print(f"[AgentHealthCheck] Local Agent error: {e}")
+                    local_srv.agent_status = "stopped"
+
         remote_servers = db.query(Server).filter(Server.is_local == False).all()
         for srv in remote_servers:
             sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "", "added": 0, "updated": 0, "status": "ok"}
@@ -1547,6 +1652,48 @@ def get_monitor(server_id: str):
         "error": "本机Agent未部署，请部署Agent以启用监控",
     }
 
+
+def _downsample_history(values, hours):
+    """Smart downsampling: return aggregated data covering the full time range.
+    
+    For short ranges (<=1h): return raw data (no downsampling).
+    For longer ranges: average values within time buckets to cover the full range
+    while keeping the result count reasonable (~100-200 points).
+    """
+    if not values or hours <= 1:
+        return values
+    # Target: ~120 data points covering the full range
+    # bucket_size = total_seconds / target_points
+    total_span = values[-1][0] - values[0][0]
+    if total_span <= 0:
+        return values
+    bucket_size = total_span / 120
+    # Minimum bucket: 60 seconds (don't over-subdivide)
+    bucket_size = max(bucket_size, 60)
+    
+    result = []
+    bucket_start = values[0][0]
+    bucket_vals = []
+    
+    for ts, val in values:
+        if ts >= bucket_start + bucket_size:
+            if bucket_vals:
+                avg_ts = bucket_vals[len(bucket_vals)//2][0]  # midpoint timestamp
+                avg_val = sum(v for _, v in bucket_vals) / len(bucket_vals)
+                result.append([avg_ts, round(avg_val, 2)])
+            bucket_start = ts
+            bucket_vals = [(ts, val)]
+        else:
+            bucket_vals.append((ts, val))
+    
+    # Don't forget the last bucket
+    if bucket_vals:
+        avg_ts = bucket_vals[len(bucket_vals)//2][0]
+        avg_val = sum(v for _, v in bucket_vals) / len(bucket_vals)
+        result.append([avg_ts, round(avg_val, 2)])
+    
+    return result
+
 # === Monitor History ===
 @app.get("/api/v2/servers/{server_id}/history")
 @app.get("/api/v2/monitor/{server_id}/history")
@@ -1570,7 +1717,7 @@ def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
             ).order_by(MetricHistory.timestamp).all()
             values = [[calendar.timegm(r.timestamp.timetuple()), r.value] for r in records]
             if values:
-                return {"metric": metric, "values": values[-200:], "source": "agent"}
+                return {"metric": metric, "values": _downsample_history(values, hours), "source": "agent"}
             return {"metric": metric, "values": [], "note": "Agent未部署或无历史数据"}
 
     # Local server: use Agent-collected history (same as remote)
@@ -1583,7 +1730,7 @@ def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
     ).order_by(MetricHistory.timestamp).all()
     values = [[calendar.timegm(r.timestamp.timetuple()), r.value] for r in records]
     if values:
-        return {"metric": metric, "values": values[-200:], "source": "agent"}
+        return {"metric": metric, "values": _downsample_history(values, hours), "source": "agent"}
     return {"metric": metric, "values": [], "note": "本机Agent未部署或无历史数据"}
 
 
@@ -1611,7 +1758,6 @@ def list_categories(server_id: Optional[str] = None):
             })
         result.sort(key=lambda x: x["order"])
         return result
-
 
 
 # === Agent Management APIs ===
@@ -1948,7 +2094,7 @@ def get_agent_history_api(server_id: str, metric: str = "cpu", hours: int = 24):
         for r in records:
             values.append([r.timestamp.timestamp(), r.value])
         
-        return {"metric": metric, "values": values[-200:]}
+        return {"metric": metric, "values": _downsample_history(values, hours)}
 
 # === Health ===
 @app.get("/api/v2/health")
@@ -2022,15 +2168,22 @@ def health_check_url(url: str = Query(..., description="URL to check")):
 
 
 # === Group Config API (read/write groups.json) ===
-GROUPS_JSON_PATH = "/opt/cicd/nginx/html/groups.json"
+GROUPS_JSON_PATH = "/opt/opscenter/frontend/groups.json"
 
 def _read_groups_json():
     import json as _json
     try:
         with open(GROUPS_JSON_PATH, "r", encoding="utf-8") as f:
-            return _json.load(f)
+            data = _json.load(f)
+        if "servers" not in data and "groups" in data:
+            _migrate_groups_json()
+            with open(GROUPS_JSON_PATH, "r", encoding="utf-8") as f:
+                data = _json.load(f)
+        if "defaultGroups" not in data or "servers" not in data:
+            return {"defaultGroups": list(DEFAULT_GROUPS), "servers": {}}
+        return data
     except Exception:
-        return {"groups": [], "serviceGroupMap": {}}
+        return {"defaultGroups": list(DEFAULT_GROUPS), "servers": {}}
 
 def _write_groups_json(data):
     import json as _json
@@ -2050,76 +2203,179 @@ class GroupConfigUpdate(BaseModel):
     serviceGroupMap: Optional[dict] = None
 
 @app.get("/api/v2/group-config")
-def get_group_config():
-    """Read groups.json configuration."""
-    return _read_groups_json()
+def get_group_config(server_id: Optional[str] = Query(None)):
+    """Read groups.json configuration. If server_id given, return that server's groups+serviceGroupMap (or defaultGroups if not configured)."""
+    config = _read_groups_json()
+    if not server_id:
+        return config
+    srv = config.get("servers", {}).get(server_id)
+    if srv:
+        return {"groups": srv.get("groups", []), "serviceGroupMap": srv.get("serviceGroupMap", {})}
+    return {"groups": config.get("defaultGroups", []), "serviceGroupMap": {}}
 
 @app.put("/api/v2/group-config")
-def update_group_config(data: GroupConfigUpdate):
-    """Update groups.json configuration (full replace)."""
+def update_group_config(data: GroupConfigUpdate, server_id: Optional[str] = Query(None)):
+    """Update groups.json configuration (full replace). If server_id given, update that server's section only."""
     current = _read_groups_json()
-    if data.groups is not None:
-        current["groups"] = [g.model_dump() for g in data.groups]
-    if data.serviceGroupMap is not None:
-        current["serviceGroupMap"] = data.serviceGroupMap
+    if not server_id:
+        if data.groups is not None:
+            current["defaultGroups"] = [g.model_dump() for g in data.groups]
+        if data.serviceGroupMap is not None:
+            if "servers" not in current:
+                current["servers"] = {}
+        _write_groups_json(current)
+        return {"ok": True, "config": current}
+    if "servers" not in current:
+        current["servers"] = {}
+    if server_id not in current["servers"]:
+        current["servers"][server_id] = {
+            "groups": [g.model_dump() for g in data.groups] if data.groups else list(current.get("defaultGroups", [])),
+            "serviceGroupMap": data.serviceGroupMap if data.serviceGroupMap else {}
+        }
+    else:
+        if data.groups is not None:
+            current["servers"][server_id]["groups"] = [g.model_dump() for g in data.groups]
+        if data.serviceGroupMap is not None:
+            current["servers"][server_id]["serviceGroupMap"] = data.serviceGroupMap
     _write_groups_json(current)
-    return {"ok": True, "config": current}
+    return {"ok": True, "server_id": server_id, "groups": current["servers"][server_id]["groups"], "serviceGroupMap": current["servers"][server_id]["serviceGroupMap"]}
 
 @app.patch("/api/v2/group-config/service-map")
 def update_service_group_map(serviceKey: str = Query(...), groupId: str = Query(...)):
-    """Move a service to a different group (update single mapping)."""
+    """Move a service to a different group. serviceKey format: auto:{server_id}:{service_id}. Parses server_id from key."""
+    parts = serviceKey.split(":")
+    server_id = parts[1] if len(parts) >= 3 and parts[0] == "auto" else None
     current = _read_groups_json()
-    if groupId == "ungrouped":
-        # Remove from map to ungroup it
-        current["serviceGroupMap"].pop(serviceKey, None)
+    if "servers" not in current:
+        current["servers"] = {}
+    if server_id:
+        if server_id not in current["servers"]:
+            current["servers"][server_id] = {
+                "groups": list(current.get("defaultGroups", [])),
+                "serviceGroupMap": {}
+            }
+        smap = current["servers"][server_id]["serviceGroupMap"]
     else:
-        current["serviceGroupMap"][serviceKey] = groupId
+        smap = current.setdefault("serviceGroupMap", {})
+    if groupId == "ungrouped":
+        smap.pop(serviceKey, None)
+    else:
+        smap[serviceKey] = groupId
     _write_groups_json(current)
-    return {"ok": True, "serviceKey": serviceKey, "groupId": groupId}
+    return {"ok": True, "serviceKey": serviceKey, "groupId": groupId, "server_id": server_id}
 
 @app.post("/api/v2/group-config/groups")
-def add_group(item: GroupItem):
-    """Add a new group."""
+def add_group(item: GroupItem, server_id: Optional[str] = Query(None)):
+    """Add a new group to a specific server's groups (or defaultGroups if no server_id)."""
     current = _read_groups_json()
-    # Check duplicate id
-    if any(g["id"] == item.id for g in current["groups"]):
+    if "servers" not in current:
+        current["servers"] = {}
+    if server_id:
+        if server_id not in current["servers"]:
+            current["servers"][server_id] = {
+                "groups": list(current.get("defaultGroups", [])),
+                "serviceGroupMap": {}
+            }
+        groups = current["servers"][server_id]["groups"]
+    else:
+        groups = current.setdefault("defaultGroups", [])
+    if any(g["id"] == item.id for g in groups):
         raise HTTPException(400, f"Group id '{item.id}' already exists")
-    current["groups"].append(item.model_dump())
-    current["groups"].sort(key=lambda g: g.get("order", 100))
+    groups.append(item.model_dump())
+    groups.sort(key=lambda g: g.get("order", 100))
     _write_groups_json(current)
-    return {"ok": True, "group": item.model_dump()}
+    return {"ok": True, "group": item.model_dump(), "server_id": server_id, "groups": groups}
 
 @app.put("/api/v2/group-config/groups/{group_id}")
-def update_group(group_id: str, item: GroupItem):
-    """Update a group's name, color, icon, or order."""
+def update_group(group_id: str, item: GroupItem, server_id: Optional[str] = Query(None)):
+    """Update a group's name, color, icon, or order for a specific server."""
     current = _read_groups_json()
+    if "servers" not in current:
+        current["servers"] = {}
+    if server_id:
+        if server_id not in current["servers"]:
+            raise HTTPException(404, f"Server '{server_id}' not configured")
+        groups = current["servers"][server_id]["groups"]
+    else:
+        groups = current.setdefault("defaultGroups", [])
     found = False
-    for i, g in enumerate(current["groups"]):
+    for i, g in enumerate(groups):
         if g["id"] == group_id:
-            current["groups"][i] = item.model_dump()
+            groups[i] = item.model_dump()
             found = True
             break
     if not found:
         raise HTTPException(404, f"Group '{group_id}' not found")
-    current["groups"].sort(key=lambda g: g.get("order", 100))
+    groups.sort(key=lambda g: g.get("order", 100))
     _write_groups_json(current)
-    return {"ok": True, "group": item.model_dump()}
+    return {"ok": True, "group": item.model_dump(), "server_id": server_id}
 
 
 @app.delete("/api/v2/group-config/groups/{group_id}")
-def delete_group(group_id: str):
-    """Delete a group (only if not 'ungrouped' and no services mapped to it)."""
+def delete_group(group_id: str, server_id: Optional[str] = Query(None)):
+    """Delete a group for a specific server. Also cleans serviceGroupMap mappings pointing to it."""
     if group_id == "ungrouped":
         raise HTTPException(400, "Cannot delete the 'ungrouped' group")
     current = _read_groups_json()
-    # Remove group
-    current["groups"] = [g for g in current["groups"] if g["id"] != group_id]
-    # Remove mappings pointing to this group
-    to_remove = [k for k, v in current.get("serviceGroupMap", {}).items() if v == group_id]
+    if "servers" not in current:
+        current["servers"] = {}
+    if server_id:
+        if server_id not in current["servers"]:
+            raise HTTPException(404, f"Server '{server_id}' not configured")
+        groups = current["servers"][server_id]["groups"]
+        smap = current["servers"][server_id]["serviceGroupMap"]
+    else:
+        groups = current.setdefault("defaultGroups", [])
+        smap = current.setdefault("serviceGroupMap", {})
+    current_groups_len = len(groups)
+    groups[:] = [g for g in groups if g["id"] != group_id]
+    if len(groups) == current_groups_len:
+        raise HTTPException(404, f"Group '{group_id}' not found")
+    to_remove = [k for k, v in smap.items() if v == group_id]
     for k in to_remove:
-        del current["serviceGroupMap"][k]
+        del smap[k]
     _write_groups_json(current)
-    return {"ok": True, "removed_mappings": to_remove}
+    return {"ok": True, "server_id": server_id, "removed_mappings": to_remove}
+
+
+@app.get("/api/v2/group-config/merged")
+def get_merged_groups():
+    """Aggregate groups from all servers, merge by name, count services per group, sorted by order."""
+    config = _read_groups_json()
+    merged = {}
+    for sid, srv in config.get("servers", {}).items():
+        for g in srv.get("groups", []):
+            key = g.get("name", "")
+            if key in merged:
+                merged[key]["serviceCount"] += len([
+                    k for k, v in srv.get("serviceGroupMap", {}).items() if v == g["id"]
+                ])
+            else:
+                sc = len([k for k, v in srv.get("serviceGroupMap", {}).items() if v == g["id"]])
+                merged[key] = {
+                    "id": g.get("id", ""),
+                    "name": g.get("name", ""),
+                    "order": g.get("order", 100),
+                    "color": g.get("color", "#64748b"),
+                    "icon": g.get("icon", "box"),
+                    "serviceCount": sc
+                }
+    result = sorted(merged.values(), key=lambda x: x.get("order", 100))
+    return result
+
+
+@app.post("/api/v2/group-config/apply-default")
+def apply_default_groups(server_id: str = Query(..., description="Server ID to apply default groups to")):
+    """Copy defaultGroups to a specific server's groups. Does not affect existing serviceGroupMap."""
+    config = _read_groups_json()
+    if "servers" not in config:
+        config["servers"] = {}
+    defaults = config.get("defaultGroups", [])
+    if server_id not in config["servers"]:
+        config["servers"][server_id] = {"groups": [], "serviceGroupMap": {}}
+    config["servers"][server_id]["groups"] = [dict(g) for g in defaults]
+    _write_groups_json(config)
+    return {"ok": True, "server_id": server_id, "groups": config["servers"][server_id]["groups"]}
 
 
 # === Services with server status (enhanced) ===
