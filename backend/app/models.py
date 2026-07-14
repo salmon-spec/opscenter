@@ -49,6 +49,7 @@ class Server(Base):
     agent_port = Column(Integer, default=19100)
     agent_token = Column(Text, nullable=True)
     agent_version = Column(String(20), nullable=True)
+    agent_type = Column(String(20), default="remote")  # remote=SSH部署, local=本机内置
     services = relationship("Service", back_populates="server", cascade="all, delete-orphan")
 
 class Service(Base):
@@ -73,6 +74,7 @@ class Service(Base):
     account = Column(String(100), nullable=True)
     password = Column(String(200), nullable=True)
     last_scanned_at = Column(DateTime, nullable=True)
+    url_overridden = Column(Boolean, default=False)  # URL是否被手动修改，True时扫描不覆盖
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     server = relationship("Server", back_populates="services")

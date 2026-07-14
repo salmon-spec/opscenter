@@ -1,4 +1,4 @@
-﻿import docker, re, os, subprocess
+import docker, re, os, subprocess
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from app.models import Service, Server, ServiceSource, ServiceStatus
@@ -77,6 +77,26 @@ NAME_URLS = {
     "hbbr": "http://{host}:21117"
 }
 
+# 镜像名前缀映射
+IMAGE_PREFIX_URLS = {
+    'redis': {'url': 'redis://{host}:6379', 'category': '数据存储', 'name': 'Redis'},
+    'mysql': {'url': 'mysql://{host}:3306', 'category': '数据存储', 'name': 'MySQL'},
+    'postgres': {'url': 'postgresql://{host}:5432', 'category': '数据存储', 'name': 'PostgreSQL'},
+    'mongo': {'url': 'mongodb://{host}:27017', 'category': '数据存储', 'name': 'MongoDB'},
+    'rabbitmq': {'url': 'http://{host}:15672', 'category': '消息与注册', 'name': 'RabbitMQ'},
+    'nacos': {'url': 'http://{host}:8848/nacos', 'category': '消息与注册', 'name': 'Nacos'},
+    'elasticsearch': {'url': 'http://{host}:9200', 'category': '数据存储', 'name': 'Elasticsearch'},
+    'minio': {'url': 'http://{host}:9001', 'category': '数据存储', 'name': 'MinIO'},
+}
+
+# 端口协议推断
+PORT_PROTOCOL_HINTS = {
+    80: 'http', 443: 'https', 8080: 'http', 8443: 'https',
+    3000: 'http', 5000: 'http', 9000: 'http', 9090: 'http',
+    3306: 'mysql', 5432: 'postgresql', 6379: 'redis',
+    27017: 'mongodb', 9200: 'http', 15672: 'http',
+}
+
 def classify_image(image_name: str) -> str:
     img_lower = image_name.lower()
     for cat, keywords in IMAGE_CATEGORIES.items():
@@ -135,7 +155,6 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
     Returns dict like {'0.0.0.0': [21115, 21116], ...}
     """
     try:
-        # Get container main PID
         r = subprocess.run(
             ['docker', 'inspect', '--format', '{{.State.Pid}}', container_name],
             capture_output=True, text=True, timeout=5
@@ -146,12 +165,8 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
         if not pid or pid == '0':
             return {}
 
-        # Use `ss -tlnp` to find listening ports owned by this PID (or child processes)
-        # ss output: users:(("process",pid=1234,fd=6))
-        # We collect ports where the process PID matches or is a child of container PID
         ports_by_bind = {}
         
-        # First, get all child PIDs of the container process
         r2 = subprocess.run(
             ['pgrep', '-P', pid],
             capture_output=True, text=True, timeout=3
@@ -162,7 +177,6 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
                 child_pid = child_pid.strip()
                 if child_pid:
                     container_pids.add(child_pid)
-                    # Also get grandchildren
                     r3 = subprocess.run(
                         ['pgrep', '-P', child_pid],
                         capture_output=True, text=True, timeout=2
@@ -173,7 +187,6 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
                             if gc_pid:
                                 container_pids.add(gc_pid)
 
-        # Now scan ss output for ports bound by these PIDs
         r4 = subprocess.run(
             ['ss', '-tlnp'],
             capture_output=True, text=True, timeout=5
@@ -186,7 +199,6 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
                 local_addr = parts[3] if len(parts) > 3 else parts[-2]
                 process_info = ' '.join(parts[4:]) if len(parts) > 4 else ''
                 
-                # Check if this socket belongs to one of our container PIDs
                 matched = False
                 if 'users:((' in process_info:
                     for cpid in container_pids:
@@ -197,7 +209,6 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
                 if not matched:
                     continue
                 
-                # Parse bind address and port
                 bind_ip = '0.0.0.0'
                 port = 0
                 if ':' in local_addr:
@@ -213,7 +224,6 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
                     except ValueError:
                         continue
                 
-                # Normalize bind_ip
                 if bind_ip in ('0.0.0.0', '*', '::', ':::'):
                     bind_ip = '0.0.0.0'
                 elif bind_ip.startswith('127.'):
@@ -222,7 +232,6 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
                 if port > 0:
                     ports_by_bind.setdefault(bind_ip, []).append(port)
 
-        # Deduplicate ports per bind address
         for k in ports_by_bind:
             ports_by_bind[k] = sorted(set(ports_by_bind[k]))
         return ports_by_bind
@@ -245,20 +254,16 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
         
         for ctr in containers:
             name = ctr.name.replace("-", " ").replace("_", " ").title().replace(" ", "") 
-            # Better name from container name
             raw_name = ctr.name
             labels = ctr.labels or {}
             image_name = ctr.image.tags[0] if ctr.image.tags else str(ctr.image.id[:20])
             short_image = image_name.split(":")[0].split("/")[-1]
             
-            # Check for opscenter.* labels first
             if labels.get("opscenter.enable", "").lower() != "true" and not labels.get("opscenter.name"):
-                # Auto-discover: skip very low-level containers
                 skip_images = ["pause", "kindnet", "kube-proxy", "coredns", "etcd", "apiserver"]
                 if any(s in short_image for s in skip_images):
                     continue
             
-            # Get metadata - labels take priority
             svc_name = labels.get("opscenter.name", raw_name.replace("-", " ").replace("_", " ").title())
             svc_url = labels.get("opscenter.url", get_url(raw_name, host) or "")
             svc_category = labels.get("opscenter.category", classify_image(short_image))
@@ -267,8 +272,6 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
             svc_health = labels.get("opscenter.health", None)
             source = ServiceSource.docker_label.value if labels.get("opscenter.name") else ServiceSource.docker_auto.value
             
-            # Determine URL based on ports
-            # Also detect host network mode and resolve ports from /proc
             is_host_network = False
             host_net_ports = {}
             try:
@@ -280,7 +283,6 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
 
             if not svc_url:
                 ports = ctr.ports
-                # First try standard Docker port mapping
                 for p in (ports or {}):
                     if isinstance(p, tuple) and len(p) == 2:
                         host_port = p[1] if p[0] == "0.0.0.0" or p[0] == "" else None
@@ -288,25 +290,46 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
                             svc_url = f"http://{host}:{host_port}"
                             break
 
-            # Fallback: for host network containers with no mapped ports,
-            # probe the container's listening ports from /proc
             if not svc_url and is_host_network:
                 host_net_ports = _get_host_network_ports(raw_name)
                 public_ports = host_net_ports.get('0.0.0.0', [])
                 if public_ports:
-                    # Use NAME_URLS first, then lowest public port
                     svc_url = get_url(raw_name, host) or ""
                     if not svc_url:
-                        # Pick the lowest public port (usually the main service port)
                         main_port = min(public_ports)
                         svc_url = f"http://{host}:{main_port}"
             
-            # For host network containers, always probe ports (even if URL was found via NAME_URLS)
             if is_host_network and not host_net_ports:
                 host_net_ports = _get_host_network_ports(raw_name)
             
+            # 镜像名前缀推断
+            if not svc_url and image_name:
+                for prefix, info in IMAGE_PREFIX_URLS.items():
+                    if image_name.split('/')[-1].split(':')[0].lower().startswith(prefix):
+                        svc_url = info['url'].format(host=host if not server.is_local else '127.0.0.1')
+                        if not svc_category or svc_category == '未分类':
+                            svc_category = info['category']
+                        break
+
+            # 端口协议推断（兜底）
             if not svc_url:
-                continue
+                port_num = None
+                try:
+                    port_bindings = ctr.attrs.get('HostConfig', {}).get('PortBindings', {})
+                    if port_bindings:
+                        for container_port, bindings in port_bindings.items():
+                            if bindings and bindings[0].get('HostPort'):
+                                port_num = int(bindings[0]['HostPort'])
+                                break
+                except Exception:
+                    pass
+                if port_num:
+                    proto = PORT_PROTOCOL_HINTS.get(port_num, 'http')
+                    if proto in ('http', 'https'):
+                        svc_url = f"{proto}://{host if not server.is_local else '127.0.0.1'}:{port_num}/"
+
+            if not svc_url:
+                svc_url = "#none"  # 无URL服务保留为纯信息卡片
             
             # Build ports_str: for host network containers, use discovered ports
             if is_host_network and host_net_ports:
@@ -318,7 +341,6 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
             else:
                 ports_str = ", ".join([f"{k}->{v}" for k, v in (ctr.ports or {}).items() if v]) if ctr.ports else ""
             
-            # Upsert service
             existing = db.query(Service).filter(
                 Service.server_id == server.id,
                 Service.container_name == raw_name
@@ -355,12 +377,46 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
                 )
                 db.add(svc)
                 discovered.append(svc)
-                # Auto-assign group
                 try:
                     from app.main import _auto_assign_group
                     _auto_assign_group(str(server.id), str(svc.id), svc.category or '')
                 except Exception:
                     pass
+
+        # 扫描已停止的容器
+        try:
+            all_containers = client.containers.list(all=True)
+            stopped = [c for c in all_containers if c.status != 'running']
+            for container in stopped:
+                name = container.name
+                image = str(container.image.tags[0]) if container.image.tags else str(container.image.id[:19])
+                existing = next((s for s in discovered if s.container_name == name), None)
+                if not existing:
+                    existing_db = db.query(Service).filter(
+                        Service.server_id == server.id,
+                        Service.container_name == name
+                    ).first()
+                    if existing_db:
+                        existing = existing_db
+                if not existing:
+                    short_img = image.split(":")[0].split("/")[-1]
+                    svc = Service(
+                        server_id=server.id,
+                        name=f"{name} [已停止]",
+                        url='#none',
+                        category=classify_image(short_img),
+                        icon=get_icon_for_container(short_img, name),
+                        description=get_desc(short_img, name),
+                        source=ServiceSource.docker_auto.value,
+                        container_name=name,
+                        image=image,
+                        status=ServiceStatus.down.value,
+                        ports='',
+                    )
+                    db.add(svc)
+                    discovered.append(svc)
+        except Exception as e:
+            pass
         
         # Mark stale docker_auto services as down when their container is gone
         active_container_names = {ctr.name for ctr in containers}
@@ -375,7 +431,6 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
                 discovered.append(svc)
 
         # Permanently remove down docker_auto services whose container has been gone
-        # (prevents zombie entries from accumulating indefinitely)
         gone_services = db.query(Service).filter(
             Service.server_id == server.id,
             Service.source == ServiceSource.docker_auto.value,
@@ -396,30 +451,104 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
 
 
 def parse_nginx_config(config_path: str = "/etc/nginx-source/nginx.conf", host: str = None) -> List[Dict]:
-    """Parse Nginx config to discover service routes."""
-    if not os.path.exists(config_path):
-        return []
-    
+    """Parse Nginx config to discover service routes.
+    Scans /etc/nginx-source/nginx.conf, /etc/nginx/sites-enabled/, and /etc/nginx/conf.d/.
+    Extracts server_name, location, and proxy_pass to generate service entries.
+    """
     if host is None:
         host = "127.0.0.1"
-    try:
-        with open(config_path, "r") as f:
-            content = f.read()
-        
-        routes = []
-        # Match location blocks: location /path/ {
-        pattern = r'location\s+([~^]*)\s*(/\w+/?)\s*\{'
-        for match in re.finditer(pattern, content):
-            path = match.group(2)
-            if path in ["/", "/api/", "/ws/"]:
+    routes = []
+
+    def _parse_config_content(content: str) -> List[Dict]:
+        found = []
+        server_blocks = re.findall(r'server\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}', content, re.DOTALL)
+        if not server_blocks:
+            server_blocks = [content]
+        for block in server_blocks:
+            server_names = re.findall(r'server_name\s+([^;]+);', block)
+            sname = server_names[0].strip().split()[0] if server_names else host
+            if sname == '_':
+                sname = host
+            locations = re.findall(r'location\s+([~^*]*)\s*(/\S*)\s*\{', block)
+            proxy_passes = re.findall(r'proxy_pass\s+([^;]+);', block)
+            filtered_locations = []
+            for loc_match in locations:
+                path = loc_match[1].rstrip()
+                if path in ['/api/', '/ws/']:
+                    continue
+                if path == '/' and not server_names:
+                    continue
+                filtered_locations.append((loc_match, path))
+            for (loc_match, path) in filtered_locations:
+                if path == '/' :
+                    name = sname.split('.')[0].replace('-', ' ').replace('_', ' ').title()
+                else:
+                    name = path.strip('/').replace('-', ' ').replace('/', ' ').title()
+                proxy = ''
+                for pp in proxy_passes:
+                    proxy = pp.strip()
+                found.append({
+                    'name': name,
+                    'url': f'http://{sname}{path}',
+                    'source': 'nginx',
+                    'proxy_pass': proxy,
+                })
+            if not locations:
+                for pp in proxy_passes:
+                    found.append({
+                        'name': pp.strip().split('//')[-1].split('/')[0].split(':')[0] if '//' in pp else host,
+                        'url': f'http://{sname}/',
+                        'source': 'nginx',
+                        'proxy_pass': pp.strip(),
+                    })
+        return found
+
+    # Parse main nginx config
+    nginx_search_paths = [
+        config_path,
+        '/etc/nginx-source/nginx.conf',
+        '/etc/nginx/nginx.conf',
+    ]
+    parsed_main = set()
+    for npath in nginx_search_paths:
+        if os.path.exists(npath) and npath not in parsed_main:
+            try:
+                with open(npath, 'r') as f:
+                    content = f.read()
+                routes.extend(_parse_config_content(content))
+                parsed_main.add(npath)
+                includes = re.findall(r'include\s+([^;]+);', content)
+                for inc in includes:
+                    inc = inc.strip()
+                    if os.path.exists(inc):
+                        with open(inc, 'r') as f:
+                            routes.extend(_parse_config_content(f.read()))
+            except Exception as e:
+                print(f'Nginx parse error for {npath}: {e}')
+
+    # Scan sites-enabled and conf.d directories
+    nginx_dirs = ['/etc/nginx/sites-enabled/', '/etc/nginx/conf.d/', '/etc/nginx-source/conf.d/']
+    seen_paths = set()
+    for ndir in nginx_dirs:
+        if not os.path.isdir(ndir):
+            continue
+        for fname in sorted(os.listdir(ndir)):
+            fpath = os.path.join(ndir, fname)
+            if fpath in parsed_main or fpath in seen_paths or not os.path.isfile(fpath):
                 continue
-            name = path.strip("/").replace("-", " ").replace("/", " ").title()
-            routes.append({
-                "name": name,
-                "url": f"http://{host}{path}",
-                "source": "nginx",
-            })
-        return routes
-    except Exception as e:
-        print(f"Nginx parse error: {e}")
-        return []
+            seen_paths.add(fpath)
+            try:
+                with open(fpath, 'r') as f:
+                    content = f.read()
+                routes.extend(_parse_config_content(content))
+            except Exception as e:
+                print(f'Nginx parse error for {fpath}: {e}')
+
+    # Deduplicate by url
+    seen_urls = set()
+    unique_routes = []
+    for r in routes:
+        if r['url'] not in seen_urls:
+            seen_urls.add(r['url'])
+            unique_routes.append(r)
+    return unique_routes

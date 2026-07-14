@@ -5,7 +5,20 @@ import json
 import secrets
 from typing import Optional, Tuple, Dict
 from app.models import Server
+import os
 
+
+# 动态读取Agent版本号
+_AGENT_VERSION = "2.1.0"  # 默认值
+try:
+    _agent_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'agent', 'opsagent.py')
+    with open(_agent_src) as f:
+        for line in f:
+            if line.strip().startswith('AGENT_VERSION'):
+                _AGENT_VERSION = line.split('=')[1].strip().strip('"').strip("'")
+                break
+except:
+    pass
 
 # Agent file path on target server
 AGENT_DIR = "/opt/opsagent"
@@ -74,13 +87,13 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             try:
                 existing_config = json.loads(out2.strip())
                 old_version = existing_config.get("version", "1.0.0")
-                if old_version == "2.0.0":
+                if old_version == _AGENT_VERSION:
                     return {
                         "success": True,
                         "message": "Agent已是最新版本(v2.0.0)",
                         "agent_port": existing_config.get("port", port),
                         "agent_token": existing_config.get("token", ""),
-                        "agent_version": "2.0.0",
+                        "agent_version": _AGENT_VERSION,
                     }
             except Exception:
                 pass
@@ -121,7 +134,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
                    f"f.write('''{service_content}''')\"")
 
         # 5. Save agent config
-        config = {"port": port, "token": token, "version": "2.0.0"}
+        config = {"port": port, "token": token, "version": _AGENT_VERSION}
         _ssh_exec(client, f"python3 -c \""
                    f"import json; "
                    f"open('{AGENT_DIR}/.agent_config', 'w').write(json.dumps({config}))\"")
@@ -151,7 +164,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             "message": "Agent部署成功",
             "agent_port": port,
             "agent_token": token,
-            "agent_version": "2.0.0",
+            "agent_version": _AGENT_VERSION,
         }
 
     except Exception as e:
@@ -180,10 +193,10 @@ def check_agent_status(server: Server, password: str = None) -> Dict:
                     "status": "running",
                     "agent_port": config.get("port", AGENT_DEFAULT_PORT),
                     "agent_token": config.get("token", ""),
-                    "agent_version": config.get("version", "2.0.0"),
+                    "agent_version": config.get("version", _AGENT_VERSION),
                 }
             except Exception:
-                return {"status": "running", "agent_port": AGENT_DEFAULT_PORT, "agent_token": "", "agent_version": "2.0.0"}
+                return {"status": "running", "agent_port": AGENT_DEFAULT_PORT, "agent_token": "", "agent_version": _AGENT_VERSION}
         elif out.strip() == "inactive":
             return {"status": "stopped", "message": "Agent已安装但未运行"}
         else:
@@ -301,3 +314,30 @@ def trigger_agent_scan(host: str, port: int = AGENT_DEFAULT_PORT, token: str = "
     except Exception:
         return None
 
+
+def upgrade_local_agent():
+    """升级本机Agent：复制源码到/opt/opsagent/ + systemctl restart"""
+    import shutil, subprocess
+    src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'agent')
+    dst_dir = '/opt/opsagent'
+    
+    # 复制源码文件
+    for fname in ['opsagent.py', 'scanner.py']:
+        src = os.path.join(src_dir, fname)
+        dst = os.path.join(dst_dir, fname)
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+    
+    # 重启服务
+    result = subprocess.run(['systemctl', 'restart', 'opsagent'], capture_output=True, text=True, timeout=10)
+    if result.returncode != 0:
+        return {"success": False, "message": f"重启Agent失败: {result.stderr}"}
+    
+    # 等待验证
+    import time
+    time.sleep(2)
+    check = subprocess.run(['systemctl', 'is-active', 'opsagent'], capture_output=True, text=True)
+    if check.stdout.strip() != 'active':
+        return {"success": False, "message": "Agent重启后未激活"}
+    
+    return {"success": True, "version": _AGENT_VERSION, "message": f"本机Agent已升级到 v{_AGENT_VERSION}"}

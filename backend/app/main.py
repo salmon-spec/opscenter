@@ -62,22 +62,21 @@ DEFAULT_GROUPS = [
 ]
 
 
-# Systemd services to skip (OS-level, not user-facing)
-_SKIP_SYSTEMD_NAMES = {
-    "aliyun.service", "aegis.service", "atd.service", "auditd.service",
-    "chrony.service", "containerd.service", "cron.service", "dbus.service",
-    "docker.service", "fail2ban.service", "fwupd.service", "getty@tty1.service",
-    "hbrclient.service", "hbrclientupdater.service", "irqbalance.service",
-    "multipathd.service", "networkd-dispatcher.service", "packagekit.service",
-    "polkit.service", "rsyslog.service", "serial-getty@ttyS0.service",
-    "snapd.service", "ssh.service", "sshd.service", "systemd-*",
-    "systemd-journald.service", "systemd-logind.service", "systemd-networkd.service",
-    "systemd-resolved.service", "systemd-timesyncd.service", "systemd-udevd.service",
-    "tuned.service", "udisks2.service", "unattended-upgrades.service",
-    "user@0.service", "lvm2-monitor.service", "modprobe@.service",
-    "dm-event.service", "blk-availability.service", "apparmor.service",
-    "ufw.service", "accounts-daemon.service", "cronie.service",
-}
+# Systemd service name prefixes to skip (OS-level, not user-facing)
+_SKIP_SYSTEMD_PREFIXES = (
+    'systemd-', 'dbus-', 'user-', 'session-', 'getty@',
+    'serial-', 'multi-user-', 'graphical-', 'networkd-',
+    'polkit', 'udisks', 'accounts-daemon', 'irqbalance',
+    'thermald', 'powerd', 'fwupd', 'packagekit', 'snapd.',
+    'ModemManager', 'NetworkManager', 'wpa_supplicant',
+    'cron', 'atd', 'rsyslog', 'logrotate',
+    'lvm2-', 'dm-event', 'multipathd', 'iscsi-',
+    'boot-', 'swap-', 'dev-', 'run-',
+    'aliyun', 'aegis', 'hbrclient', 'containerd', 'docker',
+    'ssh', 'sshd', 'auditd', 'chrony', 'fail2ban',
+    'unattended-upgrades', 'tuned', 'apparmor', 'ufw',
+    'blk-availability', 'modprobe@', 'cronie',
+)
 
 # Port-based service name/URL hints for known services
 _PORT_SERVICE_HINTS = {
@@ -109,8 +108,17 @@ _PORT_SERVICE_HINTS = {
            "url_tpl": "http://{host}:9999/", "desc": "Linux运维面板"},
 }
 
+# UDP port service hints for well-known UDP services
+_UDP_SERVICE_HINTS = {
+    53: {"name": "DNS", "category": "网络与代理", "url": ""},
+    123: {"name": "NTP", "category": "网络与代理", "url": ""},
+    161: {"name": "SNMP", "category": "监控与日志", "url": ""},
+    1900: {"name": "SSDP/UPnP", "category": "网络与代理", "url": ""},
+    5353: {"name": "mDNS", "category": "网络与代理", "url": ""},
+}
+
 # Ports to always skip (system/ephemeral)
-_SKIP_PORTS = {22, 25, 53, 68, 323, 5433, 9323}
+_SKIP_PORTS = {22, 25, 53, 68, 323, 9323}
 _SKIP_PROCESSES = {"hbrclient", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
 
 
@@ -444,6 +452,7 @@ async def startup():
                 status=ServerStatus.online.value,
                 docker_available=True,
                 is_local=True,
+                agent_type='local',
             )
             db.add(local)
             db.commit()
@@ -524,6 +533,7 @@ def list_servers():
                 "agent_status": s.agent_status or "not_deployed",
                 "agent_port": s.agent_port or 19100,
                 "agent_version": s.agent_version or "",
+                "agent_type": s.agent_type or "remote",
             })
         return result
 
@@ -638,14 +648,65 @@ def scan_server(server_id: str, password: Optional[str] = None):
                     # Auto-assign groups for newly discovered services
                     for svc in db.query(Service).filter(Service.server_id == srv.id).all():
                         _auto_assign_group(str(srv.id), str(svc.id), svc.category or "")
-                    return {"discovered": result["added"] + result["updated"], "source": "agent"}
-            # Fallback: Docker SDK
+                    # Also discover nginx services for local server
+                    nginx_count = 0
+                    try:
+                        nginx_routes = parse_nginx_config(host=srv.host)
+                        for route in nginx_routes:
+                            existing = db.query(Service).filter(
+                                Service.server_id == srv.id,
+                                Service.url == route["url"],
+                            ).first()
+                            if not existing:
+                                ns = Service(
+                                    server_id=srv.id,
+                                    name=route["name"],
+                                    url=route["url"],
+                                    source=ServiceSource.nginx.value,
+                                    category="网络与代理",
+                                    icon="fa-globe",
+                                    status=ServiceStatus.unknown.value,
+                                    last_scanned_at=datetime.utcnow(),
+                                )
+                                db.add(ns)
+                                nginx_count += 1
+                                _auto_assign_group(str(srv.id), str(ns.id), ns.category or "")
+                        db.commit()
+                    except Exception as e:
+                        print(f"[WARN] Local nginx parse failed: {e}")
+                    return {"discovered": result["added"] + result["updated"] + nginx_count, "source": "agent", "nginx_added": nginx_count}
+            # Fallback: Docker SDK + Nginx + stopped containers
             discovered = discover_docker_services(srv, db, srv.host)
             for d in discovered:
                 _auto_assign_group(str(srv.id), str(d.id), d.category or "")
+            # Also discover nginx services for local server
+            nginx_count = 0
+            try:
+                nginx_routes = parse_nginx_config(host=srv.host)
+                for route in nginx_routes:
+                    existing = db.query(Service).filter(
+                        Service.server_id == srv.id,
+                        Service.url == route["url"],
+                    ).first()
+                    if not existing:
+                        ns = Service(
+                            server_id=srv.id,
+                            name=route["name"],
+                            url=route["url"],
+                            source=ServiceSource.nginx.value,
+                            category="网络与代理",
+                            icon="fa-globe",
+                            status=ServiceStatus.unknown.value,
+                            last_scanned_at=datetime.utcnow(),
+                        )
+                        db.add(ns)
+                        nginx_count += 1
+                        _auto_assign_group(str(srv.id), str(ns.id), ns.category)
+            except Exception as e:
+                print(f"[WARN] Local nginx parse failed: {e}")
             srv.last_seen = datetime.utcnow()
             db.commit()
-            return {"discovered": len(discovered), "source": "docker_local"}
+            return {"discovered": len(discovered) + nginx_count, "source": "docker_local", "nginx_added": nginx_count}
         
         # Remote server: try Agent first, then SSH fallback
         # Try Agent if deployed and running
@@ -729,8 +790,7 @@ def get_agent_services(server_id: str):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.is_local:
-            raise HTTPException(400, "本机使用Docker发现，无需Agent扫描")
+
         if srv.agent_status != "running":
             raise HTTPException(400, f"Agent未运行 (status={srv.agent_status})")
     
@@ -857,6 +917,9 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                                    ("icon", svc_icon), ("description", svc_desc), ("image", image),
                                    ("ports", ports_display), ("source", ServiceSource.agent.value)]:
                     if val and getattr(existing, field) != val:
+                        # url字段受url_overridden保护
+                        if field == 'url' and existing.url_overridden:
+                            continue
                         setattr(existing, field, val)
                         changed = True
                 existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
@@ -879,17 +942,75 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
             print(f"[WARN] _sync_agent_scan_to_db skip container {c.get('name','?')}: {e}")
             errors += 1
     
+    # Sync stopped containers
+    stopped_data = scan_data.get('stopped_containers') or scan_data.get('stopped', [])
+    if stopped_data:
+        for cont in stopped_data:
+            cname = cont.get('name', '')
+            if not cname:
+                continue
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == cname
+            ).first()
+            if not existing:
+                short_img = cont.get('image', '').split(':')[0].split('/')[-1] if cont.get('image') else ''
+                new_svc = Service(
+                    server_id=srv.id,
+                    name=f"{cname.replace('-', ' ').replace('_', ' ').title()} [已停止]",
+                    url="#none",
+                    category=cont.get('category', '') or classify_image(short_img),
+                    source='docker_auto',
+                    container_name=cname,
+                    image=cont.get('image', ''),
+                    status='down',
+                    ports=cont.get('ports', ''),
+                    last_scanned_at=datetime.utcnow(),
+                )
+                db.add(new_svc)
+                synced += 1
+                _auto_assign_group(str(srv.id), str(new_svc.id), new_svc.category)
+
+    # Sync Nginx-discovered services
+    nginx_data = scan_data.get('nginx_services') or scan_data.get('nginx', [])
+    if nginx_data:
+        for ng in nginx_data:
+            cname = ng.get('container_name', f"nginx:{ng.get('name', '')}")
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == cname
+            ).first()
+            if not existing:
+                new_svc = Service(
+                    server_id=srv.id,
+                    name=ng.get('name', ''),
+                    url=ng.get('url', ''),
+                    category=ng.get('category', '网络与代理'),
+                    source=ServiceSource.nginx.value,
+                    container_name=cname,
+                    last_scanned_at=datetime.utcnow(),
+                )
+                db.add(new_svc)
+                synced += 1
+                _auto_assign_group(str(srv.id), str(new_svc.id), new_svc.category)
+            else:
+                for field, val in [('name', ng.get('name')), ('category', ng.get('category'))]:
+                    if val and getattr(existing, field) != val:
+                        setattr(existing, field, val)
+                updated += 1
+
     return {"added": synced, "updated": updated, "errors": errors}
 
 
 def _sync_agent_ports_and_systemd(srv, db, scan_data):
     """Sync Agent ports and systemd_services into services table."""
     try:
-        _do_sync_ports_systemd(srv, db, scan_data)
+        return _do_sync_ports_systemd(srv, db, scan_data)
     except Exception as e:
         import traceback
         print(f"[ERROR] _sync_agent_ports_and_systemd failed: {e}")
         traceback.print_exc()
+        return {"added": 0, "updated": 0}
 
 
 def _do_sync_ports_systemd(srv, db, scan_data):
@@ -922,12 +1043,8 @@ def _do_sync_ports_systemd(srv, db, scan_data):
     valid_systemd = []
     for svc_info in systemd_services:
         name = svc_info.get("name", "")
-        # Skip system-level services
-        if name in _SKIP_SYSTEMD_NAMES:
-            continue
-        if name.startswith("systemd-") or name.startswith("getty@") or name.startswith("serial-getty@"):
-            continue
-        if name.startswith("user@") or name.startswith("modprobe@"):
+        # Skip system-level services by prefix matching
+        if any(name.startswith(prefix) for prefix in _SKIP_SYSTEMD_PREFIXES):
             continue
         desc = svc_info.get("description", "")
         # Also skip if already tracked as a container
@@ -946,8 +1063,8 @@ def _do_sync_ports_systemd(srv, db, scan_data):
         bind_ip = p.get("bind_ip", "")
         process = p.get("process", "unknown")
         
-        # Only tcp, skip udp system ports
-        if proto != "tcp":
+        # Process both TCP and UDP ports
+        if proto not in ('tcp', 'udp'):
             continue
         # Skip system/ephemeral ports
         if port_num in _SKIP_PORTS or port_num > 60000:
@@ -971,7 +1088,7 @@ def _do_sync_ports_systemd(srv, db, scan_data):
         existing_by_source[key] = svc
     
     for process, port_list in port_services.items():
-        # Pick the most interesting port (lowest public port)
+        # Pick the most interesting port (lowest public port, prefer TCP over UDP)
         public_ports = [p for p in port_list if p.get("bind_ip", "") == "0.0.0.0"]
         if not public_ports:
             # Use localhost ports only if they look like real services
@@ -980,30 +1097,41 @@ def _do_sync_ports_systemd(srv, db, scan_data):
                 continue
             chosen = min(local_ports, key=lambda x: x.get("port", 99999))
         else:
-            chosen = min(public_ports, key=lambda x: x.get("port", 99999))
-        
+            tcp_ports = [p for p in public_ports if p.get("proto", "tcp") == "tcp"]
+            chosen = min(tcp_ports if tcp_ports else public_ports, key=lambda x: x.get("port", 99999))
+
         port_num = chosen.get("port", 0)
         bind_ip = chosen.get("bind_ip", "0.0.0.0")
-        
-        # Use port hints if available
-        hint = _PORT_SERVICE_HINTS.get(port_num, {})
-        svc_name = hint.get("name", process.replace("-", " ").replace("_", " ").title())
-        svc_category = hint.get("category", classify_image(process))
-        svc_icon = hint.get("icon", get_icon(process))
-        svc_desc = hint.get("desc", get_desc(process, process))
-        
-        if hint:
-            svc_url = hint["url_tpl"].format(host=srv.host)
+        proto = chosen.get("proto", "tcp")
+
+        # UDP ports: use special hints
+        if proto == "udp":
+            udp_hint = _UDP_SERVICE_HINTS.get(port_num, {})
+            svc_name = udp_hint.get("name", f"{process.replace('-', ' ').replace('_', ' ').title()} (UDP)")
+            svc_category = udp_hint.get("category", "网络与代理")
+            svc_icon = "fa-network-wired"
+            svc_desc = f"UDP {port_num}/{process}"
+            svc_url = udp_hint.get("url", "")
         else:
-            host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.is_local else srv.host
-            svc_url = f"http://{host}:{port_num}/"
-        
+            # Use port hints if available
+            hint = _PORT_SERVICE_HINTS.get(port_num, {})
+            svc_name = hint.get("name", process.replace("-", " ").replace("_", " ").title())
+            svc_category = hint.get("category", classify_image(process))
+            svc_icon = hint.get("icon", get_icon(process))
+            svc_desc = hint.get("desc", get_desc(process, process))
+
+            if hint:
+                svc_url = hint["url_tpl"].format(host=srv.host)
+            else:
+                host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.is_local else srv.host
+                svc_url = f"http://{host}:{port_num}/"
+
         # Skip if no meaningful URL
         if not svc_url:
             continue
         
-        # Dedup key: source=agent, container_name=process name or port-based key
-        dedup_key = f"port:{process}:{port_num}"
+        # Dedup key: source=agent, container_name=process name or port-based key (include proto for UDP)
+        dedup_key = f"port:{process}:{port_num}" + (f"/{proto}" if proto == "udp" else "")
         existing = db.query(Service).filter(
             Service.server_id == srv.id,
             Service.container_name == dedup_key,
@@ -1015,6 +1143,8 @@ def _do_sync_ports_systemd(srv, db, scan_data):
                                ("icon", svc_icon), ("description", svc_desc),
                                ("ports", str(port_num)), ("source", ServiceSource.agent.value)]:
                 if val and getattr(existing, field) != val:
+                    if field == 'url' and existing.url_overridden:
+                        continue
                     setattr(existing, field, val)
                     changed = True
             existing.status = ServiceStatus.up.value
@@ -1054,14 +1184,17 @@ def _do_sync_ports_systemd(srv, db, scan_data):
         # Also skip if a matching service already exists by name or keyword
         name_lower = name.replace("-", " ").replace("_", " ").lower()
         skip_keywords = ["nginx", "opsagent", "opscenter", "2fauth", "docker", "1panel"]
-        if any(kw in name_lower for kw in skip_keywords):
-            # Check if a service with similar name exists
-            similar = db.query(Service).filter(
-                Service.server_id == srv.id,
-                Service.name.ilike(f"%{kw}%"),
-            ).first()
-            if similar:
-                continue
+        similar = None
+        for kw in skip_keywords:
+            if kw in name_lower:
+                similar = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.name.ilike(f"%{kw}%"),
+                ).first()
+                if similar:
+                    break
+        if similar:
+            continue
         
         # Create entry (no URL for systemd-only services)
         svc_name = name.replace("-", " ").replace("_", " ").title()
@@ -1121,6 +1254,8 @@ def _sync_ssh_containers_to_db(srv, db, client):
                 for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
                                    ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
                     if val and getattr(existing, field) != val:
+                        if field == 'url' and existing.url_overridden:
+                            continue
                         setattr(existing, field, val)
                 existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
                 existing.last_scanned_at = datetime.utcnow()
@@ -1168,14 +1303,38 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
                         "source": "agent",
                         "containers": len(scan_data.get("containers", [])),
                     }
-            # Fallback: Docker SDK
+            # Fallback: Docker SDK + Nginx + stopped containers
             discovered = discover_docker_services(srv, db, srv.host)
             for d in discovered:
                 _auto_assign_group(str(srv.id), str(d.id), d.category or "")
+            nginx_added = 0
+            try:
+                nginx_routes = parse_nginx_config(host=srv.host)
+                for route in nginx_routes:
+                    existing = db.query(Service).filter(
+                        Service.server_id == srv.id,
+                        Service.url == route["url"],
+                    ).first()
+                    if not existing:
+                        ns = Service(
+                            server_id=srv.id,
+                            name=route["name"],
+                            url=route["url"],
+                            source=ServiceSource.nginx.value,
+                            category="网络与代理",
+                            icon="fa-globe",
+                            status=ServiceStatus.unknown.value,
+                            last_scanned_at=datetime.utcnow(),
+                        )
+                        db.add(ns)
+                        nginx_added += 1
+                        _auto_assign_group(str(srv.id), str(ns.id), ns.category)
+            except Exception as e:
+                print(f"[WARN] Local nginx parse in scan-services: {e}")
             srv.last_seen = datetime.utcnow()
             db.commit()
-            result_count = len(discovered)
-            return {"discovered": result_count, "source": "docker_local", "added": result_count, "updated": 0}
+            result_count = len(discovered) + nginx_added
+            return {"discovered": result_count, "source": "docker_local", "added": result_count, "updated": 0, "nginx_added": nginx_added}
         
         # Remote server: try Agent first
         if srv.agent_status == "running" and srv.agent_port:
@@ -1248,6 +1407,7 @@ def list_services(server_id: Optional[str] = None, category: Optional[str] = Non
                 "image": s.image, "ports": s.ports,
                 "account": s.account or "",
                 "password": s.password or "",
+                "url_overridden": s.url_overridden or False,
             })
         return result
 
@@ -1274,6 +1434,8 @@ def update_service(service_id: str, data: ServiceUpdate):
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
         if not svc:
             raise HTTPException(404, "Service not found")
+        # Save original url BEFORE setattr modifies it
+        original_url = svc.url
         for field, val in data.model_dump(exclude_unset=True).items():
             if val is not None:
                 setattr(svc, field, val)
@@ -1284,8 +1446,13 @@ def update_service(service_id: str, data: ServiceUpdate):
         if 'password' in data.model_dump(exclude_unset=True):
             pwd = data.model_dump(exclude_unset=True).get('password')
             svc.password = pwd if pwd else ''
+        # C4: 如果url被修改，自动设置url_overridden
+        if 'url' in data.model_dump(exclude_unset=True):
+            new_url = data.model_dump(exclude_unset=True).get('url')
+            if new_url and new_url != original_url:
+                svc.url_overridden = True
         db.commit()
-        return {"ok": True}
+        return {"ok": True, "url_overridden": svc.url_overridden}
 
 @app.delete("/api/v2/services/{service_id}")
 def delete_service(service_id: str):
@@ -1310,6 +1477,22 @@ def toggle_pin(service_id: str):
         db.commit()
         return {"ok": True, "pinned": svc.pinned}
 
+
+@app.patch("/api/v2/services/{service_id}/reset-url")
+def reset_service_url(service_id: str):
+    with get_db() as db:
+        svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
+        if not svc:
+            raise HTTPException(404, "服务不存在")
+        svc.url_overridden = False
+        db.commit()
+        server = svc.server
+        if server:
+            try:
+                scan_server_services(str(server.id))
+            except:
+                pass
+        return {"ok": True, "url_overridden": False, "url": svc.url}
 
 # === Health Check Trigger ===
 @app.post("/api/v2/health-check")
@@ -1425,9 +1608,34 @@ def scan_all():
                 discovered = discover_docker_services(srv, db, srv.host)
                 for d in discovered:
                     _auto_assign_group(str(srv.id), str(d.id), d.category or "")
+                nginx_cnt = 0
+                try:
+                    nginx_routes = parse_nginx_config(host=srv.host)
+                    for route in nginx_routes:
+                        existing = db.query(Service).filter(
+                            Service.server_id == srv.id,
+                            Service.url == route["url"],
+                        ).first()
+                        if not existing:
+                            ns = Service(
+                                server_id=srv.id,
+                                name=route["name"],
+                                url=route["url"],
+                                source=ServiceSource.nginx.value,
+                                category="网络与代理",
+                                icon="fa-globe",
+                                status=ServiceStatus.unknown.value,
+                                last_scanned_at=datetime.utcnow(),
+                            )
+                            db.add(ns)
+                            nginx_cnt += 1
+                            _auto_assign_group(str(srv.id), str(ns.id), ns.category)
+                except Exception as e:
+                    print(f"[WARN] scan_all nginx parse: {e}")
                 srv.last_seen = datetime.utcnow()
-                sr_detail["added"] = len(discovered)
-                total_added += len(discovered)
+                sr_detail["added"] = len(discovered) + nginx_cnt
+                sr_detail["nginx_added"] = nginx_cnt
+                total_added += len(discovered) + nginx_cnt
             server_results.append(sr_detail)
         # Remote servers: try Agent first, then SSH fallback
             # Check local Agent status too
@@ -1770,7 +1978,14 @@ def deploy_agent_api(server_id: str):
         if not srv:
             raise HTTPException(404, "Server not found")
         if srv.is_local:
-            return {"success": False, "message": "本机Agent已内置运行，无需手动部署"}
+            # 本机Agent升级：复制源码 + systemctl restart
+            from app.agent_manager import upgrade_local_agent
+            result = upgrade_local_agent()
+            if result["success"]:
+                srv.agent_version = result.get("version", srv.agent_version)
+                srv.agent_status = "running"
+                db.commit()
+            return result
     
     # Mark as deploying
     with get_db() as db:
@@ -1826,6 +2041,18 @@ def agent_status_api(server_id: str):
             raise HTTPException(404, "Server not found")
     
     if srv.is_local:
+        import subprocess
+        try:
+            result = subprocess.run(['systemctl', 'is-active', 'opsagent'], capture_output=True, text=True, timeout=5)
+            active = result.stdout.strip() == 'active'
+            srv.agent_status = 'running' if active else 'stopped'
+            with get_db() as _db:
+                _s = _db.query(Server).filter(Server.id == srv.id).first()
+                if _s:
+                    _s.agent_status = srv.agent_status
+                    _db.commit()
+        except:
+            pass
         return {"status": "running" if srv.agent_status == "running" else "not_deployed", "agent_port": srv.agent_port, "agent_version": srv.agent_version, "message": "Agent运行中" if srv.agent_status == "running" else "本机Agent未部署"}
     
     result = check_agent_status(srv)
@@ -2413,6 +2640,7 @@ def list_services_with_status(server_id: Optional[str] = None):
                 "server_host": srv_info.get("host", ""),
                 "server_status": srv_info.get("status", "unknown"),
                 "server_is_local": srv_info.get("is_local", False),
+                "url_overridden": s.url_overridden or False,
             })
         return result
 
@@ -2449,6 +2677,7 @@ def list_all_services(server_id: Optional[str] = None):
                 "server_host": si.get("host", ""),
                 "server_status": si.get("status", "unknown"),
                 "server_is_local": si.get("is_local", False),
+                "url_overridden": s.url_overridden or False,
             })
         return result
 

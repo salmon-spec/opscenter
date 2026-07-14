@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """OpsAgent Scanner - Service discovery for remote servers.
 
-Scans Docker containers, listening ports, and systemd services.
+Scans Docker containers, listening ports, systemd services,
+stopped containers, and nginx configurations.
 Pure stdlib, no external dependencies.
 """
 
 import json
+import os
 import subprocess
 import time
 
@@ -24,9 +26,8 @@ def run_cmd(cmd, timeout=5):
 
 def _get_host_net_ports(container_name, container_id):
     """For containers using network_mode=host, discover listening ports
-    by finding the container PID and filtering `ss -tlnp` by that PID
-    (and its children). Avoids including all host ports since host net
-    containers share the host network namespace.
+    by finding the container PID and filtering ss -tlnp by that PID
+    and its children.
     """
     ports = []
     try:
@@ -36,7 +37,6 @@ def _get_host_net_ports(container_name, container_id):
             return ports
         pid = pid_str.strip()
 
-        # Collect container PID + child PIDs
         container_pids = {pid}
         children = run_cmd(['pgrep', '-P', pid])
         if children:
@@ -51,7 +51,6 @@ def _get_host_net_ports(container_name, container_id):
                             if gcp:
                                 container_pids.add(gcp)
 
-        # Parse ss -tlnp output, keep only entries matching our PIDs
         ss_out = run_cmd(['ss', '-tlnp'], timeout=5)
         if not ss_out:
             return ports
@@ -62,7 +61,6 @@ def _get_host_net_ports(container_name, container_id):
             local_addr = parts[3] if len(parts) > 3 else parts[-2]
             process_info = ' '.join(parts[4:]) if len(parts) > 4 else ''
 
-            # Match PIDs
             matched = False
             for cpid in container_pids:
                 if f'pid={cpid},' in process_info or f'pid={cpid})' in process_info:
@@ -71,7 +69,6 @@ def _get_host_net_ports(container_name, container_id):
             if not matched:
                 continue
 
-            # Parse address
             bind_ip = '0.0.0.0'
             port_num = 0
             if ':' in local_addr:
@@ -123,13 +120,11 @@ def scan_docker_containers():
         networks_raw = parts[4].strip() if len(parts) > 4 else ''
         container_id = parts[5].strip() if len(parts) > 5 else ''
 
-        # Parse ports: "0.0.0.0:80->80/tcp, :::443->443/tcp" or ""
         ports = []
         if ports_raw:
             for p in ports_raw.split(', '):
                 p = p.strip()
                 if '->' in p:
-                    # Extract host port and container port
                     host_part = p.split('->')[0]
                     container_part = p.split('->')[1]
                     host_port = host_part.split(':')[-1] if ':' in host_part else host_part
@@ -142,22 +137,18 @@ def scan_docker_containers():
                         'raw': p,
                     })
 
-        # Parse networks
         networks = [n.strip() for n in networks_raw.split(',') if n.strip()] if networks_raw else []
 
-        # Detect host network mode and supplement ports for host-net containers
         is_host_network = 'host' in networks
         if is_host_network and not ports:
             host_ports = _get_host_net_ports(name, container_id)
             if host_ports:
                 ports = host_ports
-                # Rebuild port_summary for host network containers
                 port_summaries = []
                 for hp in host_ports:
                     port_summaries.append(f"{hp.get('bind_ip','0.0.0.0')}:{hp['host_port']}->{hp['container_port']}/{hp['proto']}")
                 ports_raw = ', '.join(port_summaries)
 
-        # Extract labels for service hints
         labels = {}
         label_output = run_cmd(['docker', 'inspect', '--format',
                                  '{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{println}}{{end}}',
@@ -182,44 +173,66 @@ def scan_docker_containers():
     return containers
 
 
+def scan_stopped_containers():
+    """Scan stopped Docker containers."""
+    try:
+        result = subprocess.run(
+            ['docker', 'ps', '-a', '--filter', 'status=exited', '--filter', 'status=created',
+             '--format', '{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}\t{{.Status}}'],
+            capture_output=True, text=True, timeout=30
+        )
+        containers = []
+        for line in result.stdout.strip().split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split('\t')
+            if len(parts) >= 5:
+                containers.append({
+                    'id': parts[0][:12],
+                    'name': parts[1],
+                    'image': parts[2],
+                    'ports': parts[3],
+                    'status': 'exited',
+                    'state': parts[4]
+                })
+        return containers
+    except Exception:
+        return []
+
+
 def scan_listening_ports():
     """Scan listening TCP/UDP ports via `ss -tlnpu`."""
     ports = []
     output = run_cmd(['ss', '-tlnpu'], timeout=3)
     if not output:
         return ports
-    for line in output.split('\n')[1:]:  # skip header
+    for line in output.split('\n')[1:]:
         if not line.strip():
             continue
         parts = line.split()
         if len(parts) < 5:
             continue
-        proto = parts[0].lower()  # tcp/udp/tcp6/udp6
+        proto = parts[0].lower()
         state = parts[1] if len(parts) > 1 else ''
         local_addr = parts[4] if len(parts) > 4 else ''
 
-        # Parse local address: 0.0.0.0:80 or [::]:443 or 127.0.0.1:9090
         bind_ip = ''
         port = ''
         if ':' in local_addr:
-            # IPv6: [::]:443
             if local_addr.startswith('['):
                 bracket_end = local_addr.index(']')
                 bind_ip = local_addr[1:bracket_end]
-                port = local_addr[bracket_end + 2:]  # skip ]:
+                port = local_addr[bracket_end + 2:]
             else:
                 bind_ip = local_addr.rsplit(':', 1)[0]
                 port = local_addr.rsplit(':', 1)[-1]
 
-        # Get process info from last column
         process_info = ' '.join(parts[5:]) if len(parts) > 5 else ''
         process_name = ''
         pid = ''
         if 'users:((' in process_info:
-            # users:(("nginx",pid=1234,fd=6))
             try:
                 info_part = process_info.split('users:((')[1].rstrip('))')
-                # Parse name and pid
                 for seg in info_part.split(','):
                     seg = seg.strip()
                     if seg.startswith('"'):
@@ -236,14 +249,13 @@ def scan_listening_ports():
 
         ports.append({
             'port': port_int,
-            'proto': proto.replace('6', ''),  # tcp6 -> tcp
+            'proto': proto.replace('6', ''),
             'bind_ip': bind_ip,
             'state': state,
             'process': process_name,
             'pid': pid,
         })
 
-    # Deduplicate by (port, proto, process)
     seen = set()
     unique = []
     for p in ports:
@@ -267,7 +279,7 @@ def scan_systemd_services():
         parts = line.split()
         if len(parts) < 4:
             continue
-        name = parts[0]  # e.g. nginx.service
+        name = parts[0]
         description = ' '.join(parts[4:]) if len(parts) > 4 else ''
         services.append({
             'name': name,
@@ -277,25 +289,82 @@ def scan_systemd_services():
     return services
 
 
+def scan_nginx_configs():
+    """Parse nginx configs to discover routed services."""
+    services = []
+    nginx_dirs = ['/etc/nginx/sites-enabled/', '/etc/nginx/conf.d/']
+    try:
+        import glob
+        import re
+        config_files = []
+        for d in nginx_dirs:
+            config_files.extend(glob.glob(os.path.join(d, '*')))
+
+        for cfg_file in config_files:
+            try:
+                with open(cfg_file) as f:
+                    content = f.read()
+                server_blocks = re.findall(r'server\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}', content, re.DOTALL)
+                for block in server_blocks:
+                    server_names = re.findall(r'server_name\s+([^;]+);', block)
+                    listen_ports = re.findall(r'listen\s+(\d+)', block)
+                    locations = re.findall(r'location\s+([^\s{]+)\s*\{[^}]*proxy_pass\s+([^;]+);', block, re.DOTALL)
+
+                    for loc_path, proxy in locations:
+                        name = server_names[0].split()[0] if server_names else 'nginx-service'
+                        port = listen_ports[0] if listen_ports else '80'
+                        url = proxy.strip().rstrip(';')
+                        if url.startswith('http'):
+                            services.append({
+                                'name': f"{name}{loc_path}",
+                                'url': url,
+                                'source': 'nginx',
+                                'category': '网络与代理',
+                                'container_name': f"nginx:{name}{loc_path}"
+                            })
+            except Exception:
+                continue
+        return services
+    except Exception:
+        return []
+
+
+IMAGE_PREFIX_URLS = {
+    'redis': {'url': 'redis://__HOST__:6379', 'category': '数据存储', 'name': 'Redis'},
+    'mysql': {'url': 'mysql://__HOST__:3306', 'category': '数据存储', 'name': 'MySQL'},
+    'postgres': {'url': 'postgresql://__HOST__:5432', 'category': '数据存储', 'name': 'PostgreSQL'},
+    'mongo': {'url': 'mongodb://__HOST__:27017', 'category': '数据存储', 'name': 'MongoDB'},
+    'rabbitmq': {'url': 'http://__HOST__:15672', 'category': '消息与注册', 'name': 'RabbitMQ Management'},
+    'nacos': {'url': 'http://__HOST__:8848/nacos', 'category': '消息与注册', 'name': 'Nacos'},
+    'elasticsearch': {'url': 'http://__HOST__:9200', 'category': '数据存储', 'name': 'Elasticsearch'},
+}
+
+PORT_PROTOCOL_HINTS = {
+    80: 'http', 443: 'https', 8080: 'http', 8443: 'https',
+    3000: 'http', 5000: 'http', 9000: 'http', 9090: 'http',
+    3306: 'mysql', 5432: 'postgresql', 6379: 'redis',
+    27017: 'mongodb', 9200: 'http', 15672: 'http',
+}
+
+
 def scan_all():
     """Run all scanners and return combined result."""
     now = time.time()
     return {
         'containers': scan_docker_containers(),
+        'stopped_containers': scan_stopped_containers(),
         'ports': scan_listening_ports(),
         'systemd_services': scan_systemd_services(),
+        'nginx_services': scan_nginx_configs(),
         'scanned_at': now,
         'scan_duration_ms': int((time.time() - now) * 1000),
     }
 
 
-# === Incremental diff ===
-
 def diff_scans(old_result, new_result):
     """Compare two scan results, return changes."""
     changes = {'added': [], 'removed': [], 'changed': []}
 
-    # Compare containers by name
     old_containers = {c['name']: c for c in old_result.get('containers', [])}
     new_containers = {c['name']: c for c in new_result.get('containers', [])}
 
@@ -311,7 +380,6 @@ def diff_scans(old_result, new_result):
         if name not in new_containers:
             changes['removed'].append({'type': 'container', 'name': name, 'data': old_containers[name]})
 
-    # Compare ports by (port, proto)
     old_ports = {(p['port'], p['proto']): p for p in old_result.get('ports', [])}
     new_ports = {(p['port'], p['proto']): p for p in new_result.get('ports', [])}
 
@@ -322,7 +390,6 @@ def diff_scans(old_result, new_result):
         if key not in new_ports:
             changes['removed'].append({'type': 'port', 'name': f"{key[0]}/{key[1]}", 'data': old_ports[key]})
 
-    # Compare systemd by name
     old_svc = {s['name']: s for s in old_result.get('systemd_services', [])}
     new_svc = {s['name']: s for s in new_result.get('systemd_services', [])}
     for name in new_svc:
@@ -341,7 +408,9 @@ if __name__ == '__main__':
     result['scan_duration_ms'] = int((time.time() - result['scanned_at']) * 1000)
     print(f"Scan completed in {result['scan_duration_ms']}ms")
     print(f"  Containers: {len(result['containers'])}")
+    print(f"  Stopped containers: {len(result['stopped_containers'])}")
     print(f"  Ports: {len(result['ports'])}")
     print(f"  Systemd services: {len(result['systemd_services'])}")
+    print(f"  Nginx services: {len(result['nginx_services'])}")
     print()
     pprint.pprint(result, width=120)

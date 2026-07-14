@@ -226,8 +226,12 @@
         "auto:aadfc37a-f8b4-4833-bc77-756954434f43:5d75e9da-4d05-421e-8a77-f26775a567ef": "ops",
         "auto:aadfc37a-f8b4-4833-bc77-756954434f43:c8e0b14e-fee3-4cab-98a9-292626f6bcd4": "ungrouped",
         "auto:aadfc37a-f8b4-4833-bc77-756954434f43:25d47219-5265-4234-9caf-aa92f3ecdd48": "network",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:4fe52ff7-b453-453a-9d2e-42f4fd339585": "ops",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:37bc55f2-3aba-445f-9669-469003dc1ad6": "ops"
+        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:21a7084a-1cdd-454b-a427-d312aab0fcf2": "database",
+        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:fe0a9a2c-a5c4-4a51-b66e-c3d961bdb447": "ungrouped",
+        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:6f229d26-0108-4e7c-8315-faaac395386a": "ungrouped",
+        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:fc5ea826-c8b4-4682-8cad-fa12c5620013": "ungrouped",
+        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:fc512ef4-8133-4545-bc9d-37067f5f4c41": "ungrouped",
+        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:549f2b69-bef0-4aac-8ff8-51c0a719a769": "ungrouped"
       }
     },
     "934025b6-529b-40dd-ac54-c9cd3967406e": {
@@ -327,10 +331,67 @@
           "order": 999,
           "color": "#475569",
           "icon": "box"
+        },
+        {
+          "id": "cicd",
+          "name": "代码与CI/CD",
+          "order": 10,
+          "color": "#2dd4bf",
+          "icon": "code"
+        },
+        {
+          "id": "monitor",
+          "name": "监控与日志",
+          "order": 20,
+          "color": "#3b82f6",
+          "icon": "chart"
+        },
+        {
+          "id": "network",
+          "name": "网络与代理",
+          "order": 30,
+          "color": "#64748b",
+          "icon": "globe"
+        },
+        {
+          "id": "database",
+          "name": "数据存储",
+          "order": 40,
+          "color": "#a855f7",
+          "icon": "database"
+        },
+        {
+          "id": "middleware",
+          "name": "消息与注册",
+          "order": 50,
+          "color": "#f97316",
+          "icon": "cube"
+        },
+        {
+          "id": "ops",
+          "name": "运维管理",
+          "order": 70,
+          "color": "#8b5cf6",
+          "icon": "tool"
+        },
+        {
+          "id": "app",
+          "name": "应用服务",
+          "order": 80,
+          "color": "#f59e0b",
+          "icon": "box"
+        },
+        {
+          "id": "security",
+          "name": "安全与认证",
+          "order": 90,
+          "color": "#ef4444",
+          "icon": "shield"
         }
       ],
       "serviceGroupMap": {
-        "auto:bcc879d2-e2ee-4f11-8fef-b6daa2fa761d:None": "ungrouped"
+        "auto:bcc879d2-e2ee-4f11-8fef-b6daa2fa761d:1f73f843-d9d5-45bf-a36d-28a05985d34a": "ungrouped",
+        "auto:bcc879d2-e2ee-4f11-8fef-b6daa2fa761d:f4158c8c-f113-4366-a3fe-4d8bd92ba0b9": "ops"
       }
     },
     "e1a08449-b8ce-402c-bfc3-6b451c6be1a0": {
@@ -407,7 +468,8 @@
         }
       ],
       "serviceGroupMap": {
-        "auto:e1a08449-b8ce-402c-bfc3-6b451c6be1a0:None": "ungrouped"
+        "auto:e1a08449-b8ce-402c-bfc3-6b451c6be1a0:27a525aa-814b-4952-b077-69d0fc50ecac": "ops",
+        "auto:e1a08449-b8ce-402c-bfc3-6b451c6be1a0:92e33584-6d03-4156-8e4c-e8749b97e2ab": "ungrouped"
       }
     }
   }

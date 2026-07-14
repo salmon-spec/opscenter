@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.12.1 运维工作台</title>
+<title>OpsCenter v3.18.0 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <link rel="stylesheet" href="/assets/xterm/xterm.min.css">
@@ -433,7 +433,7 @@ createApp({
     // ========== Resource: Service Management ==========
     const serverServices = ref({});   // { serverId: [services] }
     const showEditSvcModal = ref(false);
-    const editSvcForm = reactive({ id:'', name:'', url:'', description:'', hidden:false, account:'', password:'' });
+    const editSvcForm = reactive({ id:'', name:'', url:'', description:'', hidden:false, account:'', password:'', url_overridden:false });
 
     async function loadServerServices(sid) {
       try {
@@ -466,6 +466,7 @@ createApp({
       editSvcForm.hidden = svc.hidden;
       editSvcForm.account = svc.account || '';
       editSvcForm.password = svc.password || '';
+      editSvcForm.url_overridden = svc.url_overridden || false;
       showEditSvcModal.value = true;
     }
     async function saveEditSvc() {
@@ -483,6 +484,21 @@ createApp({
         await loadAllServerServices();
         await loadAutoServices();
       } catch(e) { alert('保存失败: ' + e.message); }
+    }
+
+    async function resetSvcUrl(svc) {
+      if (!confirm('确定要恢复自动检测的访问地址吗？')) return;
+      try {
+        const res = await fetch(API + '/services/' + svc.id + '/reset-url', {method:'PATCH'});
+        const data = await res.json();
+        if (data.ok) {
+          showToast('已恢复自动地址');
+          await loadAllServerServices();
+          await loadAutoServices();
+        }
+      } catch(e) {
+        showToast('恢复失败: ' + e.message);
+      }
     }
 
     // ========== Add Server Modal ==========
@@ -519,7 +535,7 @@ createApp({
         const data = await r.json();
         if (data.success) {
           const scanInfo = data.scan_added ? `，自动发现${data.scan_added}个服务` : '';
-          showToast((data.message || 'Agent部署成功') + scanInfo, 'ok', 5000);
+          showToast((data.message || 'Agent部署/升级成功') + scanInfo, 'ok', 5000);
         } else {
           showToast('Agent部署失败: ' + (data.message || '未知错误'), 'err', 5000);
         }
@@ -558,7 +574,7 @@ createApp({
         const data = await apiGet(`${API}/services-with-status`);
         const svcs = data.map(s => ({
           id: s.id, serverId: s.server_id, name: s.name,
-          url: s.url, category: s.category, icon: s.icon,
+          url: s.url, url_overridden: s.url_overridden || false, category: s.category, icon: s.icon,
           description: s.description, source: s.source,
           status: s.status === 'up' ? 'online' : s.status === 'down' ? 'offline' : 'unknown',
           pinned: s.pinned, containerName: s.container_name,
@@ -1701,6 +1717,7 @@ createApp({
             </div>
             <div class="svc-url" v-if="s.fullUrl">
               <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
+              <span v-if="s.url_overridden" style="margin-left:4px;color:#ea580c;font-size:12px;cursor:help;" title="此地址已被手动修改，扫描时不会被覆盖">✎</span>
             </div>
 
           </div>
@@ -1910,6 +1927,7 @@ createApp({
               <span class="status-dot" :class="srv.status==='online'?'online':'offline'" style="width:10px;height:10px"></span>
               <h4>{{srv.name}}</h4>
               <span v-if="srv.is_local" class="sc-badge online">本机</span>
+              <span v-if="srv.agent_status==='running' && srv.agent_version" style="font-size:11px;color:#64748b;margin-left:4px;">v{{srv.agent_version}}</span>
               <span v-if="srv.agent_status && !srv.is_local" class="agent-tag" :class="srv.agent_status">
                 {{srv.agent_status === 'running' ? 'Agent运行中' : srv.agent_status === 'not_deployed' ? '未部署Agent' : srv.agent_status === 'deploying' ? '部署中...' : srv.agent_status === 'stopped' ? 'Agent已停止' : 'Agent异常'}}
               </span>
@@ -1948,8 +1966,8 @@ createApp({
               <button class="btn-sm" @click="termConnect(srv.id)" style="color:var(--accent)">终端</button>
               <button class="btn-sm" :disabled="scanningServerId===srv.id" @click="triggerScan(srv.id)">{{scanningServerId===srv.id ? "扫描中..." : "扫描"}}</button>
               <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
-              <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status==='running'" @click="deployAgent(srv.id)">升级Agent</button>
-              <button class="btn-sm" v-if="!srv.is_local && srv.agent_status==='running'" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">检查Agent</button>
+              <button class="btn-deploy-agent" v-if="srv.agent_status==='running'" @click="deployAgent(srv.id)">{{ srv.is_local ? '升级Agent' : '升级Agent' }}</button>
+              <button class="btn-sm" v-if="srv.agent_status==='running'" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">检查Agent</button>
               <button class="btn-sm" @click="openEditServer(srv)" style="color:var(--accent2)">编辑</button>
               <div style="flex:1"></div>
               <button class="btn-sm danger" v-if="!srv.is_local" @click="deleteServer(srv.id)">删除</button>
@@ -2062,7 +2080,13 @@ createApp({
         </div>
         <div class="modal-row">
           <label>访问地址</label>
-          <input v-model="editSvcForm.url" placeholder="http://host:port/path" style="flex:1">
+          <div style="flex:1;display:flex;flex-direction:column">
+            <input v-model="editSvcForm.url" placeholder="http://host:port/path" style="width:100%">
+            <div v-if="editSvcForm.url_overridden" style="margin-top:4px;display:flex;align-items:center;gap:8px;">
+              <span style="font-size:12px;color:#ea580c;background:#fff7ed;padding:2px 8px;border-radius:4px;">已手动修改</span>
+              <button @click="resetSvcUrl(editSvcForm)" style="font-size:12px;color:#2563eb;background:none;border:1px solid #2563eb;padding:2px 8px;border-radius:4px;cursor:pointer;">恢复自动地址</button>
+            </div>
+          </div>
         </div>
         <div class="modal-row">
           <label>描述</label>
