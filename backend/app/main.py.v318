@@ -25,8 +25,7 @@ class TerminalCreateRequest(BaseModel):
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
-LOCAL_HOST = os.getenv("LOCAL_HOST", "101.200.91.229")
-LOCAL_DOMAIN = os.getenv("LOCAL_DOMAIN", "ops.salmon.xin")
+LOCAL_HOST = os.getenv("LOCAL_HOST", "ops.salmon.xin")
 
 # Category -> Group ID auto-mapping for service grouping
 CATEGORY_TO_GROUP = {
@@ -238,8 +237,8 @@ def _run_health_check():
                         check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
                     elif check_url.startswith("/"):
                         srv = db.query(Server).filter(Server.id == svc.server_id).first()
-                        host = srv.host_ip if hasattr(srv, 'host_ip') and srv.host_ip else (srv.host if srv else LOCAL_HOST)
-                        check_url = f"http://{host}{check_url}"
+                        host = srv.host if srv else LOCAL_HOST
+                        check_url = f"http://{srv.host}{check_url}"
                     resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
                     svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
                 except Exception:
@@ -249,16 +248,8 @@ def _run_health_check():
             # --- Check server reachability ---
             servers = db.query(Server).all()
             for srv in servers:
-                if srv.agent_type == "local":
-                    # Local server: check Agent port instead of SSH
-                    try:
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.settimeout(3)
-                        result = sock.connect_ex(("127.0.0.1", srv.agent_port or 19100))
-                        sock.close()
-                        srv.status = ServerStatus.online.value if result == 0 else ServerStatus.offline.value
-                    except Exception:
-                        srv.status = ServerStatus.offline.value
+                if srv.is_local:
+                    srv.status = ServerStatus.online.value
                     srv.last_seen = datetime.utcnow()
                     continue
                 try:
@@ -293,7 +284,7 @@ async def _agent_health_check_loop():
         try:
             with get_db() as db:
                 # Check local Agent status
-                local_srv = db.query(Server).filter(Server.agent_type == "local").first()
+                local_srv = db.query(Server).filter(Server.is_local == True).first()
                 if local_srv:
                     try:
                         local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
@@ -307,7 +298,7 @@ async def _agent_health_check_loop():
                         print(f"[AgentHealthCheck] Local Agent error: {e}")
                         local_srv.agent_status = "stopped"
 
-                remote_servers = db.query(Server).filter(Server.agent_type != "local").all()
+                remote_servers = db.query(Server).filter(Server.is_local == False).all()
                 for srv in remote_servers:
                     try:
                         if srv.agent_status in ("running", "error", "deploying"):
@@ -451,13 +442,13 @@ async def startup():
     
     # Auto-register local server and discover services
     with get_db() as db:
-        local = db.query(Server).filter((Server.is_local == True) | (Server.agent_type == "local")).first()
+        local = db.query(Server).filter(Server.is_local == True).first()
         if not local:
             local = Server(
-                name="MFA Server",
+                name="CI/CD 主机",
                 host=LOCAL_HOST,
                 ssh_port=22,
-                ssh_user="root",
+                ssh_user="ops",
                 status=ServerStatus.online.value,
                 docker_available=True,
                 is_local=True,
@@ -535,8 +526,7 @@ def list_servers():
                 "tags": s.tags or [],
                 "status": s.status,
                 "docker_available": s.docker_available,
-                "is_local": s.is_local,  # deprecated, use agent_type
-            "agent_type": s.agent_type,
+                "is_local": s.is_local,
                 "last_seen": s.last_seen.isoformat() if s.last_seen else None,
                 "service_count": svc_count,
                 "has_credentials": has_creds,
@@ -602,7 +592,7 @@ def get_server(server_id: str):
             "id": str(srv.id), "name": srv.name, "host": srv.host,
             "ssh_port": srv.ssh_port, "ssh_user": srv.ssh_user,
             "tags": srv.tags or [], "status": srv.status,
-            "docker_available": srv.docker_available, "is_local": srv.is_local, "agent_type": srv.agent_type,
+            "docker_available": srv.docker_available, "is_local": srv.is_local,
             "last_seen": srv.last_seen.isoformat() if srv.last_seen else None,
         }
 
@@ -624,72 +614,114 @@ def delete_server(server_id: str):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        # Uninstall Agent if running (both local and remote)
+        if srv.is_local:
+            raise HTTPException(400, "Cannot delete local server")
+        # Uninstall remote Agent before deleting
         agent_info = ""
-        if srv.agent_status in ("running", "error"):
+        if srv.agent_status in ("running", "error") and not srv.is_local:
             try:
                 from app.agent_manager import uninstall_agent
                 result = uninstall_agent(srv)
                 agent_info = f" Agent已卸载" if result.get("success") else f" Agent卸载失败: {result.get('message','')}"
             except Exception as e:
                 agent_info = f" Agent卸载异常: {e}"
-        server_name = srv.name
         db.delete(srv)
         db.commit()
-        # Clean up groups.json - remove deleted server's services
-        try:
-            groups_path = "/opt/opscenter/frontend/groups.json"
-            import json
-            with open(groups_path, 'r') as gf:
-                groups_data = json.load(gf)
-            if server_id in groups_data:
-                del groups_data[server_id]
-                with open(groups_path, 'w') as gf:
-                    json.dump(groups_data, gf, indent=2, ensure_ascii=False)
-                agent_info += " groups.json已清理"
-        except Exception as e:
-            print(f"[WARN] groups.json cleanup failed: {e}")
-        return {"ok": True, "message": f"服务器'{server_name}'已删除{agent_info}"}
+        return {"ok": True, "message": f"服务器已删除{agent_info}"}
 
 @app.post("/api/v2/servers/{server_id}/scan")
 def scan_server(server_id: str, password: Optional[str] = None):
-    """Scan services on a server using Agent (preferred) or SSH fallback. Unified for all servers."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
         
-        # Unified: All servers use Agent-first approach
-        agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
-        
-        # Try Agent if deployed and running
-        if srv.agent_status == "running" and srv.agent_port:
-            scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
-            if scan_data:
-                result = _sync_agent_scan_to_db(srv, db, scan_data)
-                _sync_port_driven_scan(srv, db, scan_data)
-                srv.status = ServerStatus.online.value
-                srv.last_seen = datetime.utcnow()
-                srv.docker_available = True
-                db.commit()
-                # Auto-assign groups for newly discovered services
-                for svc in db.query(Service).filter(Service.server_id == srv.id).all():
-                    _auto_assign_group(str(srv.id), str(svc.id), svc.category or "")
-                # Also discover nginx services
-                nginx_count = _sync_nginx_routes(srv, db)
-                return {"discovered": result["added"] + result["updated"] + result.get("port_added", 0) + nginx_count, "source": "agent", "nginx_added": nginx_count}
-        
-        # Fallback: Docker SDK (local) or SSH (remote)
-        if srv.agent_type == "local":
+        if srv.is_local:
+            # Try Agent first, fallback to Docker discovery
+            if srv.agent_status == "running" and srv.agent_port:
+                scan_data = trigger_agent_scan("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
+                if scan_data:
+                    result = _sync_agent_scan_to_db(srv, db, scan_data)
+                    _sync_agent_ports_and_systemd(srv, db, scan_data)
+                    srv.last_seen = datetime.utcnow()
+                    db.commit()
+                    # Auto-assign groups for newly discovered services
+                    for svc in db.query(Service).filter(Service.server_id == srv.id).all():
+                        _auto_assign_group(str(srv.id), str(svc.id), svc.category or "")
+                    # Also discover nginx services for local server
+                    nginx_count = 0
+                    try:
+                        nginx_routes = parse_nginx_config(host=srv.host)
+                        for route in nginx_routes:
+                            existing = db.query(Service).filter(
+                                Service.server_id == srv.id,
+                                Service.url == route["url"],
+                            ).first()
+                            if not existing:
+                                ns = Service(
+                                    server_id=srv.id,
+                                    name=route["name"],
+                                    url=route["url"],
+                                    source=ServiceSource.nginx.value,
+                                    category="网络与代理",
+                                    icon="fa-globe",
+                                    status=ServiceStatus.unknown.value,
+                                    last_scanned_at=datetime.utcnow(),
+                                )
+                                db.add(ns)
+                                nginx_count += 1
+                                _auto_assign_group(str(srv.id), str(ns.id), ns.category or "")
+                        db.commit()
+                    except Exception as e:
+                        print(f"[WARN] Local nginx parse failed: {e}")
+                    return {"discovered": result["added"] + result["updated"] + nginx_count, "source": "agent", "nginx_added": nginx_count}
+            # Fallback: Docker SDK + Nginx + stopped containers
             discovered = discover_docker_services(srv, db, srv.host)
             for d in discovered:
                 _auto_assign_group(str(srv.id), str(d.id), d.category or "")
-            nginx_count = _sync_nginx_routes(srv, db)
+            # Also discover nginx services for local server
+            nginx_count = 0
+            try:
+                nginx_routes = parse_nginx_config(host=srv.host)
+                for route in nginx_routes:
+                    existing = db.query(Service).filter(
+                        Service.server_id == srv.id,
+                        Service.url == route["url"],
+                    ).first()
+                    if not existing:
+                        ns = Service(
+                            server_id=srv.id,
+                            name=route["name"],
+                            url=route["url"],
+                            source=ServiceSource.nginx.value,
+                            category="网络与代理",
+                            icon="fa-globe",
+                            status=ServiceStatus.unknown.value,
+                            last_scanned_at=datetime.utcnow(),
+                        )
+                        db.add(ns)
+                        nginx_count += 1
+                        _auto_assign_group(str(srv.id), str(ns.id), ns.category)
+            except Exception as e:
+                print(f"[WARN] Local nginx parse failed: {e}")
             srv.last_seen = datetime.utcnow()
             db.commit()
             return {"discovered": len(discovered) + nginx_count, "source": "docker_local", "nginx_added": nginx_count}
         
-        # Remote SSH fallback
+        # Remote server: try Agent first, then SSH fallback
+        # Try Agent if deployed and running
+        if srv.agent_status == "running" and srv.agent_port:
+            scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+            if scan_data:
+                result = _sync_agent_scan_to_db(srv, db, scan_data)
+                _sync_agent_ports_and_systemd(srv, db, scan_data)
+                srv.status = ServerStatus.online.value
+                srv.last_seen = datetime.utcnow()
+                srv.docker_available = True
+                db.commit()
+                return {"discovered": result["added"] + result["updated"], "source": "agent"}
+        
+        # Agent not available, fallback to SSH
         client = get_ssh_client(srv, password=password)
         if not client:
             raise HTTPException(400, "Agent不可用且SSH连接失败，请检查凭证")
@@ -714,21 +746,11 @@ def test_server(server_id: str, password: Optional[str] = None):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type == "local":
-            # Local server: try Agent health check
-            try:
-                agent_data = fetch_agent_metrics("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
-                if agent_data:
-                    srv.status = ServerStatus.online.value
-                    srv.last_seen = datetime.utcnow()
-                    db.commit()
-                    return {"status": "online", "message": "本机Agent响应正常"}
-            except Exception:
-                pass
+        if srv.is_local:
             srv.status = ServerStatus.online.value
             srv.last_seen = datetime.utcnow()
             db.commit()
-            return {"status": "online", "message": "本机服务器在线"}
+            return {"status": "online", "message": "Local server is always accessible"}
         
         # Remote server: test SSH connection
         client = get_ssh_client(srv, password=password)
@@ -859,287 +881,6 @@ def _build_svc_url_for_remote(name, host, container):
     return svc_url
 
 
-
-def _sync_nginx_routes(srv, db):
-    """Discover and sync nginx routes for a server. Returns count of new nginx services."""
-    nginx_count = 0
-    try:
-        nginx_routes = parse_nginx_config(host=srv.host)
-        for route in nginx_routes:
-            existing = db.query(Service).filter(
-                Service.server_id == srv.id,
-                Service.url == route["url"],
-            ).first()
-            if not existing:
-                ns = Service(
-                    server_id=srv.id,
-                    name=route["name"],
-                    url=route["url"],
-                    source=ServiceSource.nginx.value,
-                    category="网络与代理",
-                    icon="fa-globe",
-                    status=ServiceStatus.unknown.value,
-                    last_scanned_at=datetime.utcnow(),
-                    host_ip=srv.host,
-                    host_domain=getattr(srv, 'host_domain', None),
-                )
-                db.add(ns)
-                nginx_count += 1
-                _auto_assign_group(str(srv.id), str(ns.id), ns.category or "")
-        db.commit()
-    except Exception as e:
-        print(f"[WARN] Nginx route sync failed: {e}")
-    return nginx_count
-
-
-def _sync_port_driven_scan(srv, db, scan_data):
-    """Port-driven scan: use (server_id, port, proto) as unique key.
-    
-    Replaces the old _sync_agent_ports_and_systemd which used container_name
-    as dedup key with various prefixes (port:, systemd:, etc.) causing duplicates.
-    Now: one logical service per (port, proto) combination.
-    """
-    from app.discovery import classify_image, get_icon, get_desc
-    
-    containers = scan_data.get("containers", [])
-    ports = scan_data.get("ports", [])
-    systemd_services = scan_data.get("systemd_services", [])
-    
-    print(f"[DEBUG] _sync_port_driven_scan: containers={len(containers)} ports={len(ports)} systemd={len(systemd_services)}")
-    
-    # Collect ports already covered by known containers
-    container_port_map = {}  # port -> container info
-    for c in containers:
-        for p in c.get("ports", []):
-            hp = p.get("host_port")
-            if hp and str(hp).isdigit():
-                container_port_map[int(hp)] = c
-    
-    added = 0
-    updated = 0
-    
-    # --- Process containers with port-driven dedup ---
-    # Each container gets a (server_id, port, proto) key
-    for c in containers:
-        name = c.get("name", "")
-        image = c.get("image", "")
-        is_running = c.get("status") == "running" or "Up" in c.get("status", "")
-        ports_display = c.get("port_summary", "") or ", ".join(_extract_public_ports(c))
-        
-        short_image = image.split(':')[0].split('/')[-1] if image else ''
-        svc_name = name.replace('-', ' ').replace('_', ' ').title()
-        svc_url = _build_svc_url_for_remote(name, srv.host, c) if '_build_svc_url_for_remote' in dir() else ""
-        svc_category = classify_image(short_image)
-        svc_icon = get_icon(short_image)
-        svc_desc = get_desc(short_image, name)
-        
-        if not svc_url:
-            continue
-        
-        # Get primary port from container
-        primary_port = None
-        for p in c.get("ports", []):
-            hp = p.get("host_port")
-            if hp and str(hp).isdigit():
-                primary_port = int(hp)
-                break
-        
-        if primary_port is None:
-            continue
-        
-        # Dedup by (server_id, port, proto)
-        existing = db.query(Service).filter(
-            Service.server_id == srv.id,
-            Service.port == primary_port,
-            Service.proto == "tcp",
-        ).first()
-        
-        if existing:
-            changed = False
-            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
-                               ("icon", svc_icon), ("description", svc_desc), ("image", image),
-                               ("ports", ports_display), ("source", ServiceSource.agent.value),
-                               ("container_name", name), ("host_ip", srv.host)]:
-                if val is not None and getattr(existing, field) != val:
-                    if field == 'url' and existing.url_overridden:
-                        continue
-                    setattr(existing, field, val)
-                    changed = True
-            existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
-            existing.last_scanned_at = datetime.utcnow()
-            if changed:
-                updated += 1
-        else:
-            svc = Service(
-                server_id=srv.id, name=svc_name, url=svc_url,
-                category=svc_category, icon=svc_icon, description=svc_desc,
-                source=ServiceSource.agent.value,
-                status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
-                container_name=name, image=image, ports=ports_display,
-                port=primary_port, proto="tcp",
-                host_ip=srv.host,
-                host_domain=getattr(srv, 'host_domain', None),
-                last_scanned_at=datetime.utcnow(),
-            )
-            db.add(svc)
-            added += 1
-            _auto_assign_group(str(srv.id), str(svc.id), svc_category)
-    
-    # --- Process listening ports not covered by containers ---
-    port_services = {}  # process -> list of port info
-    for p in ports:
-        port_num = p.get("port", 0)
-        proto = p.get("proto", "tcp")
-        bind_ip = p.get("bind_ip", "")
-        process = p.get("process", "unknown")
-        
-        if proto not in ('tcp', 'udp'):
-            continue
-        if port_num in _SKIP_PORTS or port_num > 60000:
-            continue
-        # Skip ports already covered by containers
-        if port_num in container_port_map:
-            continue
-        # Skip localhost-only docker-proxy ports
-        if bind_ip.startswith("127.0.0.1") and process == "docker-proxy":
-            continue
-        
-        if process not in port_services:
-            port_services[process] = []
-        port_services[process].append(p)
-    
-    for process, port_list in port_services.items():
-        public_ports = [p for p in port_list if p.get("bind_ip", "") == "0.0.0.0"]
-        if not public_ports:
-            local_ports = [p for p in port_list if p.get("bind_ip", "").startswith("127.0.0.1")]
-            if not local_ports:
-                continue
-            chosen = min(local_ports, key=lambda x: x.get("port", 99999))
-        else:
-            tcp_ports = [p for p in public_ports if p.get("proto", "tcp") == "tcp"]
-            chosen = min(tcp_ports if tcp_ports else public_ports, key=lambda x: x.get("port", 99999))
-        
-        port_num = chosen.get("port", 0)
-        bind_ip = chosen.get("bind_ip", "0.0.0.0")
-        proto = chosen.get("proto", "tcp")
-        
-        if proto == "udp":
-            udp_hint = _UDP_SERVICE_HINTS.get(port_num, {})
-            svc_name = udp_hint.get("name", f"{process.replace('-', ' ').replace('_', ' ').title()} (UDP)")
-            svc_category = udp_hint.get("category", "网络与代理")
-            svc_icon = "fa-network-wired"
-            svc_desc = f"UDP {port_num}/{process}"
-            svc_url = udp_hint.get("url", "")
-        else:
-            hint = _PORT_SERVICE_HINTS.get(port_num, {})
-            svc_name = hint.get("name", process.replace("-", " ").replace("_", " ").title())
-            svc_category = hint.get("category", classify_image(process))
-            svc_icon = hint.get("icon", get_icon(process))
-            svc_desc = hint.get("desc", get_desc(process, process))
-            if hint:
-                svc_url = hint["url_tpl"].format(host=srv.host)
-            else:
-                host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.agent_type == "local" else srv.host
-                svc_url = f"http://{host}:{port_num}/"
-        
-        if not svc_url:
-            continue
-        
-        # Dedup by (server_id, port, proto) - the new unique key
-        existing = db.query(Service).filter(
-            Service.server_id == srv.id,
-            Service.port == port_num,
-            Service.proto == proto,
-        ).first()
-        
-        if existing:
-            changed = False
-            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
-                               ("icon", svc_icon), ("description", svc_desc),
-                               ("ports", str(port_num)), ("source", ServiceSource.agent.value),
-                               ("container_name", f"port:{process}:{port_num}"), ("host_ip", srv.host)]:
-                if val is not None and getattr(existing, field) != val:
-                    if field == 'url' and existing.url_overridden:
-                        continue
-                    setattr(existing, field, val)
-                    changed = True
-            existing.status = ServiceStatus.up.value
-            existing.last_scanned_at = datetime.utcnow()
-            if changed:
-                updated += 1
-        else:
-            svc = Service(
-                server_id=srv.id, name=svc_name, url=svc_url,
-                category=svc_category, icon=svc_icon, description=svc_desc,
-                source=ServiceSource.agent.value,
-                status=ServiceStatus.up.value,
-                container_name=f"port:{process}:{port_num}",
-                ports=str(port_num),
-                port=port_num, proto=proto,
-                host_ip=srv.host,
-                host_domain=getattr(srv, 'host_domain', None),
-                last_scanned_at=datetime.utcnow(),
-            )
-            db.add(svc)
-            added += 1
-            _auto_assign_group(str(srv.id), str(svc.id), svc_category)
-    
-    # --- Process systemd services (no port, supplementary) ---
-    for svc_info in systemd_services:
-        name = svc_info.get("name", "")
-        if any(name.startswith(prefix) for prefix in _SKIP_SYSTEMD_PREFIXES):
-            continue
-        name = name.replace(".service", "")
-        desc = svc_info.get("description", "")
-        status_str = svc_info.get("status", "unknown")
-        
-        # Skip systemd if already covered by a port-based or container service
-        # Check by name similarity
-        name_lower = name.replace("-", " ").replace("_", " ").lower()
-        skip_keywords = ["nginx", "opsagent", "opscenter", "2fauth", "docker", "1panel"]
-        similar = None
-        for kw in skip_keywords:
-            if kw in name_lower:
-                similar = db.query(Service).filter(
-                    Service.server_id == srv.id,
-                    Service.name.ilike(f"%{kw}%"),
-                ).first()
-                if similar:
-                    break
-        if similar:
-            continue
-        
-        # Systemd services use container_name for dedup (no port)
-        dedup_key = f"systemd:{name}"
-        existing = db.query(Service).filter(
-            Service.server_id == srv.id,
-            Service.container_name == dedup_key,
-        ).first()
-        if existing:
-            existing.status = ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value
-            existing.last_scanned_at = datetime.utcnow()
-            continue
-        
-        svc_name = name.replace("-", " ").replace("_", " ").title()
-        svc_category = classify_image(name)
-        svc_icon = get_icon(name)
-        
-        svc = Service(
-            server_id=srv.id, name=svc_name, url=f"#systemd:{name}",
-            category=svc_category, icon=svc_icon, description=desc,
-            source=ServiceSource.agent.value,
-            status=ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value,
-            container_name=dedup_key,
-            host_ip=srv.host,
-            last_scanned_at=datetime.utcnow(),
-        )
-        db.add(svc)
-        added += 1
-        _auto_assign_group(str(srv.id), str(svc.id), svc_category)
-    
-    return {"added": added, "updated": updated}
-
-
 def _sync_agent_scan_to_db(srv, db, scan_data):
     """Sync Agent scan results (containers) into services table with source='agent'."""
     from app.discovery import classify_image, get_icon, get_desc
@@ -1186,22 +927,12 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                 if changed:
                     updated += 1
             else:
-                # Get primary port for port-driven dedup
-                _primary_port = None
-                for _p in c.get("ports", []):
-                    _hp = _p.get("host_port")
-                    if _hp and str(_hp).isdigit():
-                        _primary_port = int(_hp)
-                        break
                 svc = Service(
                     server_id=srv.id, name=svc_name, url=svc_url,
                     category=svc_category, icon=svc_icon, description=svc_desc,
                     source=ServiceSource.agent.value,
                     status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
                     container_name=name, image=image, ports=ports_display,
-                    port=_primary_port, proto="tcp",
-                    host_ip=srv.host,
-                    host_domain=getattr(srv, 'host_domain', None),
                     last_scanned_at=datetime.utcnow(),
                 )
                 db.add(svc)
@@ -1271,7 +1002,7 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
     return {"added": synced, "updated": updated, "errors": errors}
 
 
-def _sync_port_driven_scan(srv, db, scan_data):
+def _sync_agent_ports_and_systemd(srv, db, scan_data):
     """Sync Agent ports and systemd_services into services table."""
     try:
         return _do_sync_ports_systemd(srv, db, scan_data)
@@ -1392,7 +1123,7 @@ def _do_sync_ports_systemd(srv, db, scan_data):
             if hint:
                 svc_url = hint["url_tpl"].format(host=srv.host)
             else:
-                host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.agent_type == "local" else srv.host
+                host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.is_local else srv.host
                 svc_url = f"http://{host}:{port_num}/"
 
         # Skip if no meaningful URL
@@ -1550,20 +1281,67 @@ def _sync_ssh_containers_to_db(srv, db, client):
 
 @app.post("/api/v2/servers/{server_id}/scan-services")
 def scan_server_services(server_id: str, password: Optional[str] = None):
-    """Scan services on a server using Agent (preferred) or SSH fallback, and sync to DB. Unified for all servers."""
+    """Scan services on a server using Agent (preferred) or SSH fallback, and sync to DB."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
         
-        agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        if srv.is_local:
+            # Local server: try Agent first, fallback to Docker discovery
+            if srv.agent_status == "running" and srv.agent_port:
+                scan_data = trigger_agent_scan("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
+                if scan_data:
+                    result = _sync_agent_scan_to_db(srv, db, scan_data)
+                    port_result = _sync_agent_ports_and_systemd(srv, db, scan_data)
+                    srv.last_seen = datetime.utcnow()
+                    db.commit()
+                    return {
+                        "discovered": result["added"] + result["updated"] + port_result["added"] + port_result["updated"],
+                        "added": result["added"] + port_result["added"],
+                        "updated": result["updated"] + port_result["updated"],
+                        "source": "agent",
+                        "containers": len(scan_data.get("containers", [])),
+                    }
+            # Fallback: Docker SDK + Nginx + stopped containers
+            discovered = discover_docker_services(srv, db, srv.host)
+            for d in discovered:
+                _auto_assign_group(str(srv.id), str(d.id), d.category or "")
+            nginx_added = 0
+            try:
+                nginx_routes = parse_nginx_config(host=srv.host)
+                for route in nginx_routes:
+                    existing = db.query(Service).filter(
+                        Service.server_id == srv.id,
+                        Service.url == route["url"],
+                    ).first()
+                    if not existing:
+                        ns = Service(
+                            server_id=srv.id,
+                            name=route["name"],
+                            url=route["url"],
+                            source=ServiceSource.nginx.value,
+                            category="网络与代理",
+                            icon="fa-globe",
+                            status=ServiceStatus.unknown.value,
+                            last_scanned_at=datetime.utcnow(),
+                        )
+                        db.add(ns)
+                        nginx_added += 1
+                        _auto_assign_group(str(srv.id), str(ns.id), ns.category)
+            except Exception as e:
+                print(f"[WARN] Local nginx parse in scan-services: {e}")
+            srv.last_seen = datetime.utcnow()
+            db.commit()
+            result_count = len(discovered) + nginx_added
+            return {"discovered": result_count, "source": "docker_local", "added": result_count, "updated": 0, "nginx_added": nginx_added}
         
-        # Unified: all servers use Agent-first approach
+        # Remote server: try Agent first
         if srv.agent_status == "running" and srv.agent_port:
-            scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+            scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
             if scan_data:
                 result = _sync_agent_scan_to_db(srv, db, scan_data)
-                port_result = _sync_port_driven_scan(srv, db, scan_data)
+                port_result = _sync_agent_ports_and_systemd(srv, db, scan_data)
                 srv.status = ServerStatus.online.value
                 srv.last_seen = datetime.utcnow()
                 srv.docker_available = True
@@ -1576,18 +1354,7 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
                     "containers": len(scan_data.get("containers", [])),
                 }
         
-        # Fallback: Docker SDK (local) or SSH (remote)
-        if srv.agent_type == "local":
-            discovered = discover_docker_services(srv, db, srv.host)
-            for d in discovered:
-                _auto_assign_group(str(srv.id), str(d.id), d.category or "")
-            nginx_added = _sync_nginx_routes(srv, db)
-            srv.last_seen = datetime.utcnow()
-            db.commit()
-            result_count = len(discovered) + nginx_added
-            return {"discovered": result_count, "source": "docker_local", "added": result_count, "updated": 0, "nginx_added": nginx_added}
-        
-        # Remote SSH fallback
+        # Agent not available, fallback to SSH
         client = get_ssh_client(srv, password=password)
         if not client:
             raise HTTPException(400, "Agent不可用且SSH连接失败，请检查凭证")
@@ -1641,10 +1408,6 @@ def list_services(server_id: Optional[str] = None, category: Optional[str] = Non
                 "account": s.account or "",
                 "password": s.password or "",
                 "url_overridden": s.url_overridden or False,
-                "port": s.port,
-                "proto": s.proto or "tcp",
-                "host_ip": s.host_ip,
-                "host_domain": s.host_domain,
             })
         return result
 
@@ -1749,7 +1512,7 @@ def trigger_health_check():
                     if not base:
                         srv = db.query(Server).filter(Server.id == svc.server_id).first()
                         host = srv.host if srv else LOCAL_HOST
-                        base = f"http://{host}"
+                        base = f"http://{srv.host}"
                     check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
                 elif check_url.startswith("/"):
                     srv = db.query(Server).filter(Server.id == svc.server_id).first()
@@ -1772,8 +1535,8 @@ def ssh_test(server_id: str, password: Optional[str] = None):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type == "local":
-            return {"success": True, "message": "本机服务器无需SSH"}
+        if srv.is_local:
+            return {"success": True, "message": "Local server, no SSH needed"}
         
         client = get_ssh_client(srv, password=password)
         if not client:
@@ -1838,7 +1601,7 @@ def scan_all():
         total_updated = 0
         server_results = []
         # Local servers
-        servers = db.query(Server).filter(Server.agent_type == "local").all()
+        servers = db.query(Server).filter(Server.is_local == True).all()
         for srv in servers:
             sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "docker_local", "added": 0, "updated": 0, "status": "ok"}
             if srv.docker_available:
@@ -1876,7 +1639,7 @@ def scan_all():
             server_results.append(sr_detail)
         # Remote servers: try Agent first, then SSH fallback
             # Check local Agent status too
-            local_srv = db.query(Server).filter(Server.agent_type == "local").first()
+            local_srv = db.query(Server).filter(Server.is_local == True).first()
             if local_srv:
                 try:
                     local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
@@ -1890,7 +1653,7 @@ def scan_all():
                     print(f"[AgentHealthCheck] Local Agent error: {e}")
                     local_srv.agent_status = "stopped"
 
-        remote_servers = db.query(Server).filter(Server.agent_type != "local").all()
+        remote_servers = db.query(Server).filter(Server.is_local == False).all()
         for srv in remote_servers:
             sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "", "added": 0, "updated": 0, "status": "ok"}
             try:
@@ -1899,7 +1662,7 @@ def scan_all():
                     scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
                     if scan_data:
                         result = _sync_agent_scan_to_db(srv, db, scan_data)
-                        _sync_port_driven_scan(srv, db, scan_data)
+                        _sync_agent_ports_and_systemd(srv, db, scan_data)
                         srv.status = ServerStatus.online.value
                         srv.last_seen = datetime.utcnow()
                         srv.docker_available = True
@@ -1955,7 +1718,7 @@ def get_monitor(server_id: str):
     
     # All servers: try Agent first
     if srv.agent_status == "running" and srv.agent_port:
-        agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        agent_host = "127.0.0.1" if srv.is_local else srv.host
         agent_data = fetch_agent_metrics(agent_host, srv.agent_port or 19100, srv.agent_token or "")
         if agent_data:
             containers = agent_data.get("containers", [])
@@ -2019,7 +1782,7 @@ def get_monitor(server_id: str):
             }
     
     # Agent unreachable or not deployed: try SSH fallback for remote servers
-    if srv.agent_type != 'local':
+    if not srv.is_local:
         password = None
         if srv.ssh_key and srv.ssh_key.startswith("__password__"):
             password = srv.ssh_key[len("__password__"):]
@@ -2151,7 +1914,7 @@ def get_monitor_history(server_id: str, metric: str = "cpu", hours: int = 24):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type != 'local':
+        if not srv.is_local:
             # Try Agent-collected history
             from datetime import timedelta
             cutoff = datetime.utcnow() - timedelta(hours=hours)
@@ -2214,7 +1977,7 @@ def deploy_agent_api(server_id: str):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type == "local":
+        if srv.is_local:
             # 本机Agent升级：复制源码 + systemctl restart
             from app.agent_manager import upgrade_local_agent
             result = upgrade_local_agent()
@@ -2277,7 +2040,7 @@ def agent_status_api(server_id: str):
         if not srv:
             raise HTTPException(404, "Server not found")
     
-    if srv.agent_type == "local":
+    if srv.is_local:
         import subprocess
         try:
             result = subprocess.run(['systemctl', 'is-active', 'opsagent'], capture_output=True, text=True, timeout=5)
@@ -2319,8 +2082,8 @@ def uninstall_agent_api(server_id: str):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type == "local":
-            return {"success": False, "message": "本机内置Agent无需卸载，但可重启"}
+        if srv.is_local:
+            return {"success": False, "message": "本机无需卸载Agent"}
     
     result = uninstall_agent(srv)
     if result.get("success"):
@@ -2350,7 +2113,7 @@ def _collect_agent_metrics():
             
             for srv in servers:
                 try:
-                    data = fetch_agent_metrics("127.0.0.1" if srv.agent_type == "local" else srv.host, srv.agent_port or 19100, srv.agent_token or "")
+                    data = fetch_agent_metrics("127.0.0.1" if srv.is_local else srv.host, srv.agent_port or 19100, srv.agent_token or "")
                     if not data:
                         # Agent unreachable
                         srv.agent_status = "stopped"
@@ -2459,14 +2222,13 @@ def get_agent_metrics_api(server_id: str):
         if not srv:
             raise HTTPException(404, "Server not found")
     
-    if srv.agent_type == "local":
-        # Local agent metrics are available like any other agent
-        pass  # Fall through to the normal metrics collection below
+    if srv.is_local:
+        return {"error": "本机Agent已内置运行，无需手动部署"}
     
     if srv.agent_status != "running":
         return {"error": "Agent未运行", "agent_status": srv.agent_status}
     
-    data = fetch_agent_metrics("127.0.0.1" if srv.agent_type == "local" else srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    data = fetch_agent_metrics("127.0.0.1" if srv.is_local else srv.host, srv.agent_port or 19100, srv.agent_token or "")
     if not data:
         # Update status
         with get_db() as db:
@@ -2544,8 +2306,8 @@ def get_agent_history_api(server_id: str, metric: str = "cpu", hours: int = 24):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type == "local":
-            pass  # Local agent history is available like any other server
+        if srv.is_local:
+            return {"metric": metric, "values": [], "note": "本机请使用 /history 端点"}
         
         from datetime import timedelta
         cutoff = datetime.utcnow() - timedelta(hours=hours)
@@ -2862,7 +2624,7 @@ def list_services_with_status(server_id: Optional[str] = None):
         for sid in server_ids:
             srv = db.query(Server).filter(Server.id == sid).first()
             if srv:
-                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local, "agent_type": srv.agent_type}
+                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local}
         
         result = []
         for s in services:
@@ -2879,10 +2641,6 @@ def list_services_with_status(server_id: Optional[str] = None):
                 "server_status": srv_info.get("status", "unknown"),
                 "server_is_local": srv_info.get("is_local", False),
                 "url_overridden": s.url_overridden or False,
-                "port": s.port,
-                "proto": s.proto or "tcp",
-                "host_ip": s.host_ip,
-                "host_domain": s.host_domain,
             })
         return result
 
@@ -2901,7 +2659,7 @@ def list_all_services(server_id: Optional[str] = None):
         for sid in server_ids:
             srv = db.query(Server).filter(Server.id == sid).first()
             if srv:
-                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local, "agent_type": srv.agent_type}
+                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local}
         result = []
         for s in services:
             si = servers_map.get(str(s.server_id), {})
@@ -2920,10 +2678,6 @@ def list_all_services(server_id: Optional[str] = None):
                 "server_status": si.get("status", "unknown"),
                 "server_is_local": si.get("is_local", False),
                 "url_overridden": s.url_overridden or False,
-                "port": s.port,
-                "proto": s.proto or "tcp",
-                "host_ip": s.host_ip,
-                "host_domain": s.host_domain,
             })
         return result
 
@@ -2941,7 +2695,7 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         srv_id = str(srv.id)
         srv_name = srv.name
         # Local server: use 127.0.0.1 instead of public IP (cannot loopback via public IP on cloud)
-        srv_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        srv_host = "127.0.0.1" if srv.is_local else srv.host
         srv_port = srv.ssh_port or 22
         srv_user = srv.ssh_user or "root"
         # ssh_key field stores either a real key or __password__<password>

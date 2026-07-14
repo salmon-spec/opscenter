@@ -205,7 +205,6 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .sc-info-val{color:var(--text1);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sc-badge{font-size:10px;padding:2px 7px;border-radius:6px;font-weight:500;white-space:nowrap}
 .sc-badge.online{background:rgba(34,197,94,.12);color:var(--green)}
-.sc-badge.local { background: #6366f1; color: #fff; }
 .sc-badge.offline{background:rgba(239,68,68,.12);color:var(--red)}
 .sc-badge.ok{background:rgba(34,197,94,.08);color:var(--green)}
 .sc-badge.warn{background:rgba(245,158,11,.08);color:var(--orange)}
@@ -582,7 +581,6 @@ createApp({
           image: s.image, ports: s.ports,
           serverName: s.server_name, serverHost: s.server_host,
           serverStatus: s.server_status, serverIsLocal: s.server_is_local,
-          serverAgentType: s.server_agent_type || (s.server_is_local ? 'local' : 'remote'),
           origin: 'auto',
           serviceKey: `auto:${s.server_id}:${s.id}`,
           groupId: (groupConfig.servers[s.server_id]?.serviceGroupMap || groupConfig.serviceGroupMap || {})[`auto:${s.server_id}:${s.id}`] || null,
@@ -1014,7 +1012,6 @@ createApp({
           ssh_port: newServer.ssh_port,
           ssh_user: newServer.ssh_user,
           is_local: false,
-          agent_type: 'remote',
         };
         if (newServer.auth_type === 'password') {
           body.ssh_password = newServer.ssh_password;
@@ -1929,9 +1926,9 @@ createApp({
             <div class="sc-title">
               <span class="status-dot" :class="srv.status==='online'?'online':'offline'" style="width:10px;height:10px"></span>
               <h4>{{srv.name}}</h4>
-              <span v-if="srv.agent_type === 'local'" class="sc-badge local">内置</span>
+              <span v-if="srv.is_local" class="sc-badge online">本机</span>
               <span v-if="srv.agent_status==='running' && srv.agent_version" style="font-size:11px;color:#64748b;margin-left:4px;">v{{srv.agent_version}}</span>
-              <span v-if="srv.agent_status && srv.agent_type !== 'local'" class="agent-tag" :class="srv.agent_status">
+              <span v-if="srv.agent_status && !srv.is_local" class="agent-tag" :class="srv.agent_status">
                 {{srv.agent_status === 'running' ? 'Agent运行中' : srv.agent_status === 'not_deployed' ? '未部署Agent' : srv.agent_status === 'deploying' ? '部署中...' : srv.agent_status === 'stopped' ? 'Agent已停止' : 'Agent异常'}}
               </span>
             </div>
@@ -1968,12 +1965,12 @@ createApp({
               <button class="btn-sm primary" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
               <button class="btn-sm" @click="termConnect(srv.id)" style="color:var(--accent)">终端</button>
               <button class="btn-sm" :disabled="scanningServerId===srv.id" @click="triggerScan(srv.id)">{{scanningServerId===srv.id ? "扫描中..." : "扫描"}}</button>
-              <button class="btn-deploy-agent" v-if="srv.agent_type !== 'local' && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
-              <button class="btn-deploy-agent" v-if="srv.agent_status==='running'" @click="deployAgent(srv.id)">升级Agent</button>
+              <button class="btn-deploy-agent" v-if="!srv.is_local && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
+              <button class="btn-deploy-agent" v-if="srv.agent_status==='running'" @click="deployAgent(srv.id)">{{ srv.is_local ? '升级Agent' : '升级Agent' }}</button>
               <button class="btn-sm" v-if="srv.agent_status==='running'" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">检查Agent</button>
               <button class="btn-sm" @click="openEditServer(srv)" style="color:var(--accent2)">编辑</button>
               <div style="flex:1"></div>
-              <button class="btn-sm danger" @click="deleteServer(srv.id)">删除</button>
+              <button class="btn-sm danger" v-if="!srv.is_local" @click="deleteServer(srv.id)">删除</button>
             </div>
             <!-- Service list -->
             <div class="svc-list" v-if="(serverServices[srv.id]||[]).length">
