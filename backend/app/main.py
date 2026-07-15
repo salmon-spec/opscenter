@@ -1,5 +1,5 @@
 import os
-import calendar, uuid, asyncio, re
+import calendar, uuid, asyncio, re, socket
 from datetime import datetime
 from typing import Optional, List
 from contextlib import contextmanager
@@ -65,18 +65,34 @@ DEFAULT_GROUPS = [
 
 # Systemd service name prefixes to skip (OS-level, not user-facing)
 _SKIP_SYSTEMD_PREFIXES = (
-    'systemd-', 'dbus-', 'user-', 'session-', 'getty@',
-    'serial-', 'multi-user-', 'graphical-', 'networkd-',
+    'systemd-', 'dbus-', 'dbus.', 'user-', 'user@', 'session-',
+    'getty@', 'serial-', 'multi-user-', 'graphical-', 'networkd-',
     'polkit', 'udisks', 'accounts-daemon', 'irqbalance',
     'thermald', 'powerd', 'fwupd', 'packagekit', 'snapd.',
     'ModemManager', 'NetworkManager', 'wpa_supplicant',
     'cron', 'atd', 'rsyslog', 'logrotate',
-    'lvm2-', 'dm-event', 'multipathd', 'iscsi-',
-    'boot-', 'swap-', 'dev-', 'run-',
-    'aliyun', 'aegis', 'hbrclient', 'containerd', 'docker',
-    'ssh', 'sshd', 'auditd', 'chrony', 'fail2ban',
-    'unattended-upgrades', 'tuned', 'apparmor', 'ufw',
-    'blk-availability', 'modprobe@', 'cronie',
+    'rsync', 'chrony', 'emergency', 'rescue',
+    'kmod', 'lvm2', 'dm-event', 'multipathd', 'mdmonitor',
+    'cloud-', 'snapd', 'unattended', 'apt-daily', 'dpkg-',
+    'keyboard', 'console', 'plymouth', 'ufw',
+    # v3.20.0 补充：根据实际扫描结果添加
+    'aliyun', 'aegis', 'hbrclient', 'ssh', 'sshd',
+    'containerd', 'docker', 'tuned', 'auditd', 'fail2ban',
+    'opsagent', 'opscenter-backend',
+    'acpid', 'apcupsd', 'autofs', 'avahi',
+    'blk-availability', 'brandbot', 'cpupower',
+    'dbus', 'dmraid', 'dracut', 'ebtables',
+    'fstrim', 'gpm', 'halt', 'init', 'ip6tables', 'iptables',
+    'kdump', 'killproc', 'kexec', 'libvirtd',
+    'mcstrans', 'messagebus', 'microcode',
+    'netconsole', 'netfs', 'nfs', 'nfslock', 'nscd',
+    'portreserve', 'postfix', 'procps', ' quota_nld',
+    'rc', 'rc-local', 'rdisc', 'restorecond',
+    'rngd', 'rpcbind', 'rpcidmapd', 'saslauthd',
+    'smartd', 'snmpd', 'spice-vdagentd', 'ssext',
+    'sysstat', 'system-setup', 'tcsd', 'vboxadd',
+    'vboxdracf', 'vgauthd', 'vmtoolsd', 'vmware',
+    'wpa_supplicant', 'xen', 'yum', 'zfs',
 )
 
 # Port-based service name/URL hints for known services
@@ -119,8 +135,8 @@ _UDP_SERVICE_HINTS = {
 }
 
 # Ports to always skip (system/ephemeral)
-_SKIP_PORTS = {22, 25, 53, 68, 323, 9323}
-_SKIP_PROCESSES = {"hbrclient", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
+_SKIP_PORTS = {22, 25, 53, 68, 80, 323, 9323}
+_SKIP_PROCESSES = {"hbrclient", "hbrclientupdater", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
 
 
 # === Database ===
@@ -218,7 +234,6 @@ app.add_middleware(
 def _run_health_check():
     """Synchronous health check - runs in thread to avoid blocking event loop."""
     import requests as req
-    import socket
     try:
         with get_db() as db:
             # --- Check service health ---
@@ -228,17 +243,42 @@ def _run_health_check():
                     continue
                 try:
                     check_url = svc.url
+
+                    # --- Fix 1: Skip placeholder URLs (#systemd:xxx, #none, etc.) ---
+                    if check_url.startswith('#'):
+                        continue
+
+                    # --- Fix 2: Non-HTTP protocols use TCP socket detection ---
+                    if not check_url.startswith(('http://', 'https://')):
+                        m = re.match(r'\w+://([^:/]+)(?::(\d+))', check_url)
+                        if m:
+                            h = m.group(1)
+
+                            # 优先使用 svc.port（宿主机映射端口），而非 URL 中解析的端口
+
+                            p = svc.port if svc.port else (int(m.group(2)) if m.group(2) else None)
+                            if p:
+                                try:
+                                    with socket.create_connection((h, p), timeout=3):
+                                        svc.status = ServiceStatus.up.value
+                                except Exception:
+                                    svc.status = ServiceStatus.down.value
+                        continue
+
+                    # --- Fix 3: Local server public IP → 127.0.0.1 ---
+                    server = db.query(Server).filter(Server.id == svc.server_id).first()
+                    if server and server.agent_type == "local" and server.host:
+                        check_url = check_url.replace(server.host, "127.0.0.1")
+
                     # Use health_path for actual health check if available
                     if svc.health_path:
                         base = svc.url if svc.url.startswith("http") else ""
                         if not base:
-                            srv = db.query(Server).filter(Server.id == svc.server_id).first()
-                            host = srv.host if srv else LOCAL_HOST
-                            base = f"http://{srv.host}"
+                            host = server.host if server else LOCAL_HOST
+                            base = f"http://{host}"
                         check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
                     elif check_url.startswith("/"):
-                        srv = db.query(Server).filter(Server.id == svc.server_id).first()
-                        host = srv.host_ip if hasattr(srv, 'host_ip') and srv.host_ip else (srv.host if srv else LOCAL_HOST)
+                        host = server.host_ip if hasattr(server, 'host_ip') and server.host_ip else (server.host if server else LOCAL_HOST)
                         check_url = f"http://{host}{check_url}"
                     resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
                     svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
@@ -676,7 +716,8 @@ def scan_server(server_id: str, password: Optional[str] = None):
                 for svc in db.query(Service).filter(Service.server_id == srv.id).all():
                     _auto_assign_group(str(srv.id), str(svc.id), svc.category or "")
                 # Also discover nginx services
-                nginx_count = _sync_nginx_routes(srv, db)
+                nginx_result = _sync_nginx_routes(srv, db)
+                nginx_count = nginx_result["added"] + nginx_result["updated"]
                 return {"discovered": result["added"] + result["updated"] + result.get("port_added", 0) + nginx_count, "source": "agent", "nginx_added": nginx_count}
         
         # Fallback: Docker SDK (local) or SSH (remote)
@@ -684,7 +725,8 @@ def scan_server(server_id: str, password: Optional[str] = None):
             discovered = discover_docker_services(srv, db, srv.host)
             for d in discovered:
                 _auto_assign_group(str(srv.id), str(d.id), d.category or "")
-            nginx_count = _sync_nginx_routes(srv, db)
+            nginx_result = _sync_nginx_routes(srv, db)
+            nginx_count = nginx_result["added"] + nginx_result["updated"]
             srv.last_seen = datetime.utcnow()
             db.commit()
             return {"discovered": len(discovered) + nginx_count, "source": "docker_local", "nginx_added": nginx_count}
@@ -860,36 +902,100 @@ def _build_svc_url_for_remote(name, host, container):
 
 
 
+def _extract_port_from_url(url):
+    """Extract port number from a URL like http://127.0.0.1:9091/api/"""
+    m = re.search(r':(\d+)(?:/|$)', url)
+    if m:
+        return int(m.group(1))
+    if url.startswith('https://'):
+        return 443
+    if url.startswith('http://'):
+        return 80
+    return None
+
+
 def _sync_nginx_routes(srv, db):
-    """Discover and sync nginx routes for a server. Returns count of new nginx services."""
-    nginx_count = 0
+    """Discover and sync nginx routes with port-aware dedup.
+    Returns dict {"added": int, "updated": int}.
+    """
+    added = 0
+    updated = 0
     try:
         nginx_routes = parse_nginx_config(host=srv.host)
         for route in nginx_routes:
-            existing = db.query(Service).filter(
-                Service.server_id == srv.id,
-                Service.url == route["url"],
-            ).first()
+            ng_name = route.get("name", "")
+            ng_url = route.get("url", "")
+            proxy_pass = route.get("proxy_pass", "")
+            if not ng_url:
+                continue
+            # Extract backend port from proxy_pass URL
+            backend_port = _extract_port_from_url(proxy_pass) if proxy_pass else None
+            # Extract domain from nginx URL
+            ng_domain = ""
+            dm = re.match(r'https?://([^/:]+)', ng_url)
+            if dm:
+                ng_domain = dm.group(1)
+            # Dedup check 1: same port (cross-path dedup with port scan)
+            existing = None
+            if backend_port:
+                existing = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.port == backend_port,
+                ).first()
+            # Dedup check 2: same URL
             if not existing:
-                ns = Service(
-                    server_id=srv.id,
-                    name=route["name"],
-                    url=route["url"],
-                    source=ServiceSource.nginx.value,
-                    category="网络与代理",
-                    icon="fa-globe",
-                    status=ServiceStatus.unknown.value,
-                    last_scanned_at=datetime.utcnow(),
-                    host_ip=srv.host,
-                    host_domain=getattr(srv, 'host_domain', None),
-                )
-                db.add(ns)
-                nginx_count += 1
-                _auto_assign_group(str(srv.id), str(ns.id), ns.category or "")
+                existing = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.url == ng_url,
+                ).first()
+            # Dedup check 3: same container_name (backward compat)
+            cname = f"nginx:{ng_name}"
+            if not existing:
+                existing = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.container_name == cname,
+                ).first()
+            if existing:
+                # Already exists - enrich with nginx domain info
+                changed = False
+                if ng_domain and not existing.host_domain:
+                    existing.host_domain = ng_domain
+                    changed = True
+                # Upgrade IP:port URL to domain URL
+                if ng_url and srv.host and srv.host in (existing.url or "") and ng_domain:
+                    if not getattr(existing, 'url_overridden', False):
+                        existing.url = ng_url
+                        changed = True
+                if backend_port and not existing.port:
+                    existing.port = backend_port
+                    existing.proto = "tcp"
+                    changed = True
+                if changed:
+                    updated += 1
+                continue
+            # Create new service
+            svc = Service(
+                server_id=srv.id,
+                name=ng_name,
+                url=ng_url,
+                source=ServiceSource.nginx.value,
+                category="网络与代理",
+                icon="fa-globe",
+                container_name=cname,
+                port=backend_port,
+                proto="tcp" if backend_port else None,
+                status=ServiceStatus.unknown.value,
+                last_scanned_at=datetime.utcnow(),
+                host_ip=srv.host,
+                host_domain=ng_domain or getattr(srv, 'host_domain', None),
+            )
+            db.add(svc)
+            added += 1
+            _auto_assign_group(str(srv.id), str(svc.id), svc.category or "")
         db.commit()
     except Exception as e:
         print(f"[WARN] Nginx route sync failed: {e}")
-    return nginx_count
+    return {"added": added, "updated": updated}
 
 
 def _sync_port_driven_scan(srv, db, scan_data):
@@ -904,7 +1010,27 @@ def _sync_port_driven_scan(srv, db, scan_data):
     containers = scan_data.get("containers", [])
     ports = scan_data.get("ports", [])
     systemd_services = scan_data.get("systemd_services", [])
-    
+
+    # Build nginx port -> domain mapping for URL enrichment
+    nginx_port_map = {}
+    try:
+        nginx_svcs = scan_data.get('nginx_services', [])
+        if not nginx_svcs:
+            nginx_svcs = parse_nginx_config(host=srv.host)
+        for ng in nginx_svcs:
+            ng_url = ng.get('url', '')
+            proxy_pass = ng.get('proxy_pass', '')
+            bp = _extract_port_from_url(proxy_pass) if proxy_pass else _extract_port_from_url(ng_url)
+            if bp:
+                dm = re.match(r'https?://([^/:]+)', ng_url)
+                nginx_port_map[bp] = {
+                    'domain': dm.group(1) if dm else '',
+                    'url': ng_url,
+                    'name': ng.get('name', ''),
+                }
+    except Exception as e:
+        print(f"[DEBUG] nginx_port_map build failed: {e}")
+
     print(f"[DEBUG] _sync_port_driven_scan: containers={len(containers)} ports={len(ports)} systemd={len(systemd_services)}")
     
     # Collect ports already covered by known containers
@@ -993,6 +1119,8 @@ def _sync_port_driven_scan(srv, db, scan_data):
         bind_ip = p.get("bind_ip", "")
         process = p.get("process", "unknown")
         
+        if process in _SKIP_PROCESSES:
+            continue
         if proto not in ('tcp', 'udp'):
             continue
         if port_num in _SKIP_PORTS or port_num > 60000:
@@ -1041,7 +1169,17 @@ def _sync_port_driven_scan(srv, db, scan_data):
             else:
                 host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.agent_type == "local" else srv.host
                 svc_url = f"http://{host}:{port_num}/"
-        
+
+        # If port is in nginx mapping, use domain URL instead of IP:port
+        if port_num in nginx_port_map:
+            ng_info = nginx_port_map[port_num]
+            if ng_info['domain'] and ng_info['domain'] != srv.host:
+                ng_url = ng_info['url']
+                if ng_url.startswith('http://'):
+                    ng_url = ng_url.replace('http://', 'https://', 1)
+                if not hint:
+                    svc_url = ng_url
+
         if not svc_url:
             continue
         
@@ -1240,33 +1378,78 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                 synced += 1
                 _auto_assign_group(str(srv.id), str(new_svc.id), new_svc.category)
 
-    # Sync Nginx-discovered services
+    # Sync Nginx-discovered services with port-aware dedup
     nginx_data = scan_data.get('nginx_services') or scan_data.get('nginx', [])
     if nginx_data:
         for ng in nginx_data:
-            cname = ng.get('container_name', f"nginx:{ng.get('name', '')}")
-            existing = db.query(Service).filter(
-                Service.server_id == srv.id,
-                Service.container_name == cname
-            ).first()
+            ng_name = ng.get('name', '')
+            ng_url = ng.get('url', '')
+            proxy_pass = ng.get('proxy_pass', '')
+            if not ng_url:
+                continue
+            # Extract backend port from proxy_pass
+            backend_port = _extract_port_from_url(proxy_pass) if proxy_pass else None
+            # Extract domain
+            ng_domain = ''
+            dm = re.match(r'https?://([^/:]+)', ng_url)
+            if dm:
+                ng_domain = dm.group(1)
+            cname = ng.get('container_name', f"nginx:{ng_name}")
+            # Dedup check 1: same port
+            existing = None
+            if backend_port:
+                existing = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.port == backend_port,
+                ).first()
+            # Dedup check 2: same URL
             if not existing:
+                existing = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.url == ng_url,
+                ).first()
+            # Dedup check 3: same container_name
+            if not existing:
+                existing = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.container_name == cname,
+                ).first()
+            if existing:
+                changed = False
+                if ng_domain and not existing.host_domain:
+                    existing.host_domain = ng_domain
+                    changed = True
+                if ng_url and srv.host and srv.host in (existing.url or '') and ng_domain:
+                    if not getattr(existing, 'url_overridden', False):
+                        existing.url = ng_url
+                        changed = True
+                if backend_port and not existing.port:
+                    existing.port = backend_port
+                    existing.proto = "tcp"
+                    changed = True
+                for field, val in [('name', ng_name), ('category', ng.get('category'))]:
+                    if val and getattr(existing, field) != val:
+                        setattr(existing, field, val)
+                        changed = True
+                if changed:
+                    updated += 1
+            else:
                 new_svc = Service(
                     server_id=srv.id,
-                    name=ng.get('name', ''),
-                    url=ng.get('url', ''),
+                    name=ng_name,
+                    url=ng_url,
                     category=ng.get('category', '网络与代理'),
                     source=ServiceSource.nginx.value,
                     container_name=cname,
+                    port=backend_port,
+                    proto="tcp" if backend_port else None,
+                    host_ip=srv.host,
+                    host_domain=ng_domain or None,
                     last_scanned_at=datetime.utcnow(),
                 )
                 db.add(new_svc)
                 synced += 1
                 _auto_assign_group(str(srv.id), str(new_svc.id), new_svc.category)
-            else:
-                for field, val in [('name', ng.get('name')), ('category', ng.get('category'))]:
-                    if val and getattr(existing, field) != val:
-                        setattr(existing, field, val)
-                updated += 1
 
     return {"added": synced, "updated": updated, "errors": errors}
 
@@ -1290,7 +1473,27 @@ def _do_sync_ports_systemd(srv, db, scan_data):
     containers = scan_data.get("containers", [])
     ports = scan_data.get("ports", [])
     systemd_services = scan_data.get("systemd_services", [])
-    
+
+    # Build nginx port -> domain mapping for URL enrichment
+    nginx_port_map = {}  # port -> {'domain': str, 'url': str, 'name': str}
+    try:
+        nginx_svcs = scan_data.get('nginx_services', [])
+        if not nginx_svcs:
+            nginx_svcs = parse_nginx_config(host=srv.host)
+        for ng in nginx_svcs:
+            ng_url = ng.get('url', '')
+            proxy_pass = ng.get('proxy_pass', '')
+            bp = _extract_port_from_url(proxy_pass) if proxy_pass else _extract_port_from_url(ng_url)
+            if bp:
+                dm = re.match(r'https?://([^/:]+)', ng_url)
+                nginx_port_map[bp] = {
+                    'domain': dm.group(1) if dm else '',
+                    'url': ng_url,
+                    'name': ng.get('name', ''),
+                }
+    except Exception as e:
+        print(f"[DEBUG] nginx_port_map build failed: {e}")
+
     # Collect ports already covered by known containers
     container_ports = set()
     for c in containers:
@@ -1333,6 +1536,8 @@ def _do_sync_ports_systemd(srv, db, scan_data):
         process = p.get("process", "unknown")
         
         # Process both TCP and UDP ports
+        if process in _SKIP_PROCESSES:
+            continue
         if proto not in ('tcp', 'udp'):
             continue
         # Skip system/ephemeral ports
@@ -1394,6 +1599,16 @@ def _do_sync_ports_systemd(srv, db, scan_data):
             else:
                 host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.agent_type == "local" else srv.host
                 svc_url = f"http://{host}:{port_num}/"
+
+        # If port is in nginx mapping, use domain URL instead of IP:port
+        if port_num in nginx_port_map:
+            ng_info = nginx_port_map[port_num]
+            if ng_info['domain'] and ng_info['domain'] != srv.host:
+                ng_url = ng_info['url']
+                if ng_url.startswith('http://'):
+                    ng_url = ng_url.replace('http://', 'https://', 1)
+                if not hint:  # Don't override port hints
+                    svc_url = ng_url
 
         # Skip if no meaningful URL
         if not svc_url:
@@ -1581,7 +1796,8 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
             discovered = discover_docker_services(srv, db, srv.host)
             for d in discovered:
                 _auto_assign_group(str(srv.id), str(d.id), d.category or "")
-            nginx_added = _sync_nginx_routes(srv, db)
+            nginx_result = _sync_nginx_routes(srv, db)
+            nginx_added = nginx_result["added"] + nginx_result["updated"]
             srv.last_seen = datetime.utcnow()
             db.commit()
             result_count = len(discovered) + nginx_added
@@ -1744,17 +1960,42 @@ def trigger_health_check():
                 continue
             try:
                 check_url = svc.url
+
+                # --- Fix 1: Skip placeholder URLs ---
+                if check_url.startswith('#'):
+                    continue
+
+                # --- Fix 2: Non-HTTP protocols use TCP socket detection ---
+                if not check_url.startswith(('http://', 'https://')):
+                    m = re.match(r'\w+://([^:/]+)(?::(\d+))', check_url)
+                    if m:
+                        h = m.group(1)
+
+                        # 优先使用 svc.port（宿主机映射端口），而非 URL 中解析的端口
+
+                        p = svc.port if svc.port else (int(m.group(2)) if m.group(2) else None)
+                        if p:
+                            try:
+                                with socket.create_connection((h, p), timeout=3):
+                                    svc.status = ServiceStatus.up.value
+                            except Exception:
+                                svc.status = ServiceStatus.down.value
+                    continue
+
+                # --- Fix 3: Local server public IP → 127.0.0.1 ---
+                srv = db.query(Server).filter(Server.id == svc.server_id).first()
+                if srv and srv.agent_type == "local" and srv.host:
+                    check_url = check_url.replace(srv.host, "127.0.0.1")
+
                 if svc.health_path:
                     base = svc.url if svc.url.startswith("http") else ""
                     if not base:
-                        srv = db.query(Server).filter(Server.id == svc.server_id).first()
                         host = srv.host if srv else LOCAL_HOST
                         base = f"http://{host}"
                     check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
                 elif check_url.startswith("/"):
-                    srv = db.query(Server).filter(Server.id == svc.server_id).first()
-                    host = srv.host if srv else LOCAL_HOST
-                    check_url = f"http://{srv.host}{check_url}"
+                    host = srv.host_ip if hasattr(srv, 'host_ip') and srv.host_ip else (srv.host if srv else LOCAL_HOST)
+                    check_url = f"http://{host}{check_url}"
                 resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
                 svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
             except Exception:

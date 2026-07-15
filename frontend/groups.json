@@ -146,18 +146,11 @@
         }
       ],
       "serviceGroupMap": {
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:6f229d26-0108-4e7c-8315-faaac395386a": "ungrouped",
         "auto:aadfc37a-f8b4-4833-bc77-756954434f43:59a90e69-7808-4343-a232-c2efab30426c": "ops",
         "auto:aadfc37a-f8b4-4833-bc77-756954434f43:5d75e9da-4d05-421e-8a77-f26775a567ef": "ops",
         "auto:aadfc37a-f8b4-4833-bc77-756954434f43:70d75b75-eb64-4c90-8cc2-74c0ed662627": "security",
         "auto:aadfc37a-f8b4-4833-bc77-756954434f43:21a7084a-1cdd-454b-a427-d312aab0fcf2": "database",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:47c73478-9def-4c65-9e81-6800d33b8503": "network",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:def9e8ee-5a92-4cb2-8e20-06e81b80a6ea": "ungrouped",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:9feac28d-9db3-4471-ac6b-1ea4b0128dc1": "ungrouped",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:7e2dc1f2-b511-4af3-8424-31ccb850b5a8": "ungrouped",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:9573f90b-d523-4397-847d-8830880c74ac": "network",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:52f3eb11-b55f-454e-9fef-be5c10f0844e": "ops",
-        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:3eda9b7f-2e69-4aac-8c47-dfb8ba66973f": "ops"
+        "auto:aadfc37a-f8b4-4833-bc77-756954434f43:9573f90b-d523-4397-847d-8830880c74ac": "network"
       }
     },
     "bcc879d2-e2ee-4f11-8fef-b6daa2fa761d": {

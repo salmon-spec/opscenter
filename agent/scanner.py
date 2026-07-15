@@ -247,6 +247,11 @@ def scan_listening_ports():
         except ValueError:
             continue
 
+        _SKIP_PROCS = {'hbrclient', 'hbrclientupdater', 'snapd', 'packagekitd', 'polkitd', 'rtkit-daemon',
+                       'containerd', 'dockerd', 'docker-proxy', 'containerd-shim'}
+        if process_name in _SKIP_PROCS:
+            continue
+
         ports.append({
             'port': port_int,
             'proto': proto.replace('6', ''),
@@ -268,6 +273,36 @@ def scan_listening_ports():
 
 def scan_systemd_services():
     """Scan running systemd services."""
+    _SKIP_PREFIXES = (
+        'systemd-', 'dbus-', 'dbus.', 'user-', 'user@', 'session-',
+        'getty@', 'serial-', 'multi-user-', 'graphical-', 'networkd-',
+        'polkit', 'udisks', 'accounts-daemon', 'irqbalance',
+        'thermald', 'powerd', 'fwupd', 'packagekit', 'snapd.',
+        'ModemManager', 'NetworkManager', 'wpa_supplicant',
+        'cron', 'atd', 'rsyslog', 'logrotate',
+        'rsync', 'chrony', 'emergency', 'rescue',
+        'kmod', 'lvm2', 'dm-event', 'multipathd', 'mdmonitor',
+        'cloud-', 'snapd', 'unattended', 'apt-daily', 'dpkg-',
+        'keyboard', 'console', 'plymouth', 'ufw',
+        # v3.20.0 补充：根据实际扫描结果添加
+        'aliyun', 'aegis', 'hbrclient', 'ssh', 'sshd',
+        'containerd', 'docker', 'tuned', 'auditd', 'fail2ban',
+        'opsagent', 'opscenter-backend',
+        'acpid', 'apcupsd', 'autofs', 'avahi',
+        'blk-availability', 'brandbot', 'cpupower',
+        'dbus', 'dmraid', 'dracut', 'ebtables',
+        'fstrim', 'gpm', 'halt', 'init', 'ip6tables', 'iptables',
+        'kdump', 'killproc', 'kexec', 'libvirtd',
+        'mcstrans', 'messagebus', 'microcode',
+        'netconsole', 'netfs', 'nfs', 'nfslock', 'nscd',
+        'portreserve', 'postfix', 'procps', ' quota_nld',
+        'rc', 'rc-local', 'rdisc', 'restorecond',
+        'rngd', 'rpcbind', 'rpcidmapd', 'saslauthd',
+        'smartd', 'snmpd', 'spice-vdagentd', 'ssext',
+        'sysstat', 'system-setup', 'tcsd', 'vboxadd',
+        'vboxdracf', 'vgauthd', 'vmtoolsd', 'vmware',
+        'wpa_supplicant', 'xen', 'yum', 'zfs',
+    )
     services = []
     output = run_cmd(['systemctl', 'list-units', '--type=service', '--state=running',
                       '--no-pager', '--no-legend'], timeout=5)
@@ -280,6 +315,8 @@ def scan_systemd_services():
         if len(parts) < 4:
             continue
         name = parts[0]
+        if any(name.startswith(prefix) for prefix in _SKIP_PREFIXES):
+            continue
         description = ' '.join(parts[4:]) if len(parts) > 4 else ''
         services.append({
             'name': name,
