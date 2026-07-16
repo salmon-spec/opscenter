@@ -52,19 +52,6 @@ class Server(Base):
     agent_type = Column(String(20), default="remote")  # remote=SSH部署, local=本机内置
     services = relationship("Service", back_populates="server", cascade="all, delete-orphan")
 
-    # ── is_local / agent_type 一致性约束 ──
-    # is_local=True  必须对应 agent_type='local'  (本机内置)
-    # is_local=False 必须对应 agent_type='remote' (SSH远程部署)
-    # 修改任一字段后调用 sync_local_state() 同步，或使用 effective_is_local 属性获取权威值
-    @property
-    def effective_is_local(self) -> bool:
-        """从 agent_type 推导的权威 is_local 值，用于运行时判断。"""
-        return self.agent_type == 'local'
-
-    def sync_local_state(self):
-        """同步 is_local 与 agent_type，修改任一字段后调用此方法。"""
-        self.is_local = (self.agent_type == 'local')
-
 class Service(Base):
     __tablename__ = "services"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

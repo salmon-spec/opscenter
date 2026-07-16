@@ -51,14 +51,14 @@ CATEGORY_TO_GROUP = {
 
 DEFAULT_GROUPS = [
     {"id": "cicd", "name": "代码与CI/CD", "order": 10, "color": "#2dd4bf", "icon": "code"},
-    {"id": "security", "name": "安全与认证", "order": 15, "color": "#ef4444", "icon": "shield"},
     {"id": "monitor", "name": "监控与日志", "order": 20, "color": "#3b82f6", "icon": "chart"},
     {"id": "network", "name": "网络与代理", "order": 30, "color": "#64748b", "icon": "globe"},
-    {"id": "database", "name": "数据存储", "order": 35, "color": "#a855f7", "icon": "database"},
-    {"id": "app", "name": "应用服务", "order": 40, "color": "#f59e0b", "icon": "box"},
-    {"id": "ops", "name": "运维管理", "order": 45, "color": "#10b981", "icon": "tool"},
+    {"id": "database", "name": "数据存储", "order": 40, "color": "#a855f7", "icon": "database"},
     {"id": "middleware", "name": "消息与注册", "order": 50, "color": "#f97316", "icon": "cube"},
     {"id": "auto_workflow", "name": "自动化工作流", "order": 60, "color": "#ec4899", "icon": "bolt"},
+    {"id": "ops", "name": "运维管理", "order": 70, "color": "#8b5cf6", "icon": "tool"},
+    {"id": "app", "name": "应用服务", "order": 80, "color": "#f59e0b", "icon": "box"},
+    {"id": "security", "name": "安全与认证", "order": 90, "color": "#ef4444", "icon": "shield"},
     {"id": "ungrouped", "name": "未分组", "order": 999, "color": "#475569", "icon": "inbox"},
 ]
 
@@ -123,8 +123,6 @@ _PORT_SERVICE_HINTS = {
            "url_tpl": "http://{host}:8101/", "desc": "Spring Boot监控"},
     9999: {"name": "1Panel", "category": "运维面板", "icon": "tool",
            "url_tpl": "http://{host}:9999/", "desc": "Linux运维面板"},
-    5433: {"name": "PostgreSQL", "category": "数据存储", "icon": "database",
-           "url_tpl": "postgresql://{host}:5433", "desc": "OpsCenter数据库(备用端口)"},
 }
 
 # UDP port service hints for well-known UDP services
@@ -206,7 +204,7 @@ class PinToggle(BaseModel):
     pinned: bool
 
 # === App ===
-app = FastAPI(title="OpsCenter API", version="3.21.0")
+app = FastAPI(title="OpsCenter API", version="2.0")
 
 
 # Category metadata for enhanced UI
@@ -414,9 +412,6 @@ def _migrate_groups_json():
 
 def _auto_assign_group(server_id: str, service_id: str, category: str):
     """Auto-assign a service to a group based on its category (per-server)."""
-    # M5 fix: skip if service_id is None or "None" string
-    if not service_id or service_id == "None":
-        return "ungrouped"
     group_id = CATEGORY_TO_GROUP.get(category, "ungrouped")
     config = _read_groups_json()
     if server_id not in config.get("servers", {}):
@@ -581,13 +576,14 @@ def list_servers():
                 "status": s.status,
                 "docker_available": s.docker_available,
                 "is_local": s.is_local,  # deprecated, use agent_type
-                "agent_type": s.agent_type or "remote",
+            "agent_type": s.agent_type,
                 "last_seen": s.last_seen.isoformat() if s.last_seen else None,
                 "service_count": svc_count,
                 "has_credentials": has_creds,
                 "agent_status": s.agent_status or "not_deployed",
                 "agent_port": s.agent_port or 19100,
                 "agent_version": s.agent_version or "",
+                "agent_type": s.agent_type or "remote",
             })
         return result
 
@@ -686,9 +682,8 @@ def delete_server(server_id: str):
             import json
             with open(groups_path, 'r') as gf:
                 groups_data = json.load(gf)
-            # E1 fix: check inside servers dict, not top-level
-            if server_id in groups_data.get("servers", {}):
-                del groups_data["servers"][server_id]
+            if server_id in groups_data:
+                del groups_data[server_id]
                 with open(groups_path, 'w') as gf:
                     json.dump(groups_data, gf, indent=2, ensure_ascii=False)
                 agent_info += " groups.json已清理"
@@ -966,9 +961,9 @@ def _sync_nginx_routes(srv, db):
                 if ng_domain and not existing.host_domain:
                     existing.host_domain = ng_domain
                     changed = True
-                # Upgrade IP:port URL to domain URL (also handle localhost/127.0.0.1)
-                if ng_url and ng_domain and not getattr(existing, 'url_overridden', False):
-                    if srv.host in (existing.url or "") or "localhost" in (existing.url or "") or "127.0.0.1" in (existing.url or ""):
+                # Upgrade IP:port URL to domain URL
+                if ng_url and srv.host and srv.host in (existing.url or "") and ng_domain:
+                    if not getattr(existing, 'url_overridden', False):
                         existing.url = ng_url
                         changed = True
                 if backend_port and not existing.port:
@@ -1003,9 +998,284 @@ def _sync_nginx_routes(srv, db):
     return {"added": added, "updated": updated}
 
 
+def _sync_port_driven_scan(srv, db, scan_data):
+    """Port-driven scan: use (server_id, port, proto) as unique key.
+    
+    Replaces the old _sync_agent_ports_and_systemd which used container_name
+    as dedup key with various prefixes (port:, systemd:, etc.) causing duplicates.
+    Now: one logical service per (port, proto) combination.
+    """
+    from app.discovery import classify_image, get_icon, get_desc
+    
+    containers = scan_data.get("containers", [])
+    ports = scan_data.get("ports", [])
+    systemd_services = scan_data.get("systemd_services", [])
 
-# E2 fix: removed first duplicate _sync_port_driven_scan definition (was lines 1001-1278)
-# The second definition at line ~1457 (now earlier) is the active one that calls _do_sync_ports_systemd
+    # Build nginx port -> domain mapping for URL enrichment
+    nginx_port_map = {}
+    try:
+        nginx_svcs = scan_data.get('nginx_services', [])
+        if not nginx_svcs:
+            nginx_svcs = parse_nginx_config(host=srv.host)
+        for ng in nginx_svcs:
+            ng_url = ng.get('url', '')
+            proxy_pass = ng.get('proxy_pass', '')
+            bp = _extract_port_from_url(proxy_pass) if proxy_pass else _extract_port_from_url(ng_url)
+            if bp:
+                dm = re.match(r'https?://([^/:]+)', ng_url)
+                nginx_port_map[bp] = {
+                    'domain': dm.group(1) if dm else '',
+                    'url': ng_url,
+                    'name': ng.get('name', ''),
+                }
+    except Exception as e:
+        print(f"[DEBUG] nginx_port_map build failed: {e}")
+
+    print(f"[DEBUG] _sync_port_driven_scan: containers={len(containers)} ports={len(ports)} systemd={len(systemd_services)}")
+    
+    # Collect ports already covered by known containers
+    container_port_map = {}  # port -> container info
+    for c in containers:
+        for p in c.get("ports", []):
+            hp = p.get("host_port")
+            if hp and str(hp).isdigit():
+                container_port_map[int(hp)] = c
+    
+    added = 0
+    updated = 0
+    
+    # --- Process containers with port-driven dedup ---
+    # Each container gets a (server_id, port, proto) key
+    for c in containers:
+        name = c.get("name", "")
+        image = c.get("image", "")
+        is_running = c.get("status") == "running" or "Up" in c.get("status", "")
+        ports_display = c.get("port_summary", "") or ", ".join(_extract_public_ports(c))
+        
+        short_image = image.split(':')[0].split('/')[-1] if image else ''
+        svc_name = name.replace('-', ' ').replace('_', ' ').title()
+        svc_url = _build_svc_url_for_remote(name, srv.host, c) if '_build_svc_url_for_remote' in dir() else ""
+        svc_category = classify_image(short_image)
+        svc_icon = get_icon(short_image)
+        svc_desc = get_desc(short_image, name)
+        
+        if not svc_url:
+            continue
+        
+        # Get primary port from container
+        primary_port = None
+        for p in c.get("ports", []):
+            hp = p.get("host_port")
+            if hp and str(hp).isdigit():
+                primary_port = int(hp)
+                break
+        
+        if primary_port is None:
+            continue
+        
+        # Dedup by (server_id, port, proto)
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.port == primary_port,
+            Service.proto == "tcp",
+        ).first()
+        
+        if existing:
+            changed = False
+            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                               ("icon", svc_icon), ("description", svc_desc), ("image", image),
+                               ("ports", ports_display), ("source", ServiceSource.agent.value),
+                               ("container_name", name), ("host_ip", srv.host)]:
+                if val is not None and getattr(existing, field) != val:
+                    if field == 'url' and existing.url_overridden:
+                        continue
+                    setattr(existing, field, val)
+                    changed = True
+            existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
+            existing.last_scanned_at = datetime.utcnow()
+            if changed:
+                updated += 1
+        else:
+            svc = Service(
+                server_id=srv.id, name=svc_name, url=svc_url,
+                category=svc_category, icon=svc_icon, description=svc_desc,
+                source=ServiceSource.agent.value,
+                status=ServiceStatus.up.value if is_running else ServiceStatus.down.value,
+                container_name=name, image=image, ports=ports_display,
+                port=primary_port, proto="tcp",
+                host_ip=srv.host,
+                host_domain=getattr(srv, 'host_domain', None),
+                last_scanned_at=datetime.utcnow(),
+            )
+            db.add(svc)
+            added += 1
+            _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+    
+    # --- Process listening ports not covered by containers ---
+    port_services = {}  # process -> list of port info
+    for p in ports:
+        port_num = p.get("port", 0)
+        proto = p.get("proto", "tcp")
+        bind_ip = p.get("bind_ip", "")
+        process = p.get("process", "unknown")
+        
+        if process in _SKIP_PROCESSES:
+            continue
+        if proto not in ('tcp', 'udp'):
+            continue
+        if port_num in _SKIP_PORTS or port_num > 60000:
+            continue
+        # Skip ports already covered by containers
+        if port_num in container_port_map:
+            continue
+        # Skip localhost-only docker-proxy ports
+        if bind_ip.startswith("127.0.0.1") and process == "docker-proxy":
+            continue
+        
+        if process not in port_services:
+            port_services[process] = []
+        port_services[process].append(p)
+    
+    for process, port_list in port_services.items():
+        public_ports = [p for p in port_list if p.get("bind_ip", "") == "0.0.0.0"]
+        if not public_ports:
+            local_ports = [p for p in port_list if p.get("bind_ip", "").startswith("127.0.0.1")]
+            if not local_ports:
+                continue
+            chosen = min(local_ports, key=lambda x: x.get("port", 99999))
+        else:
+            tcp_ports = [p for p in public_ports if p.get("proto", "tcp") == "tcp"]
+            chosen = min(tcp_ports if tcp_ports else public_ports, key=lambda x: x.get("port", 99999))
+        
+        port_num = chosen.get("port", 0)
+        bind_ip = chosen.get("bind_ip", "0.0.0.0")
+        proto = chosen.get("proto", "tcp")
+        
+        if proto == "udp":
+            udp_hint = _UDP_SERVICE_HINTS.get(port_num, {})
+            svc_name = udp_hint.get("name", f"{process.replace('-', ' ').replace('_', ' ').title()} (UDP)")
+            svc_category = udp_hint.get("category", "网络与代理")
+            svc_icon = "fa-network-wired"
+            svc_desc = f"UDP {port_num}/{process}"
+            svc_url = udp_hint.get("url", "")
+        else:
+            hint = _PORT_SERVICE_HINTS.get(port_num, {})
+            svc_name = hint.get("name", process.replace("-", " ").replace("_", " ").title())
+            svc_category = hint.get("category", classify_image(process))
+            svc_icon = hint.get("icon", get_icon(process))
+            svc_desc = hint.get("desc", get_desc(process, process))
+            if hint:
+                svc_url = hint["url_tpl"].format(host=srv.host)
+            else:
+                host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.agent_type == "local" else srv.host
+                svc_url = f"http://{host}:{port_num}/"
+
+        # If port is in nginx mapping, use domain URL instead of IP:port
+        if port_num in nginx_port_map:
+            ng_info = nginx_port_map[port_num]
+            if ng_info['domain'] and ng_info['domain'] != srv.host:
+                ng_url = ng_info['url']
+                if ng_url.startswith('http://'):
+                    ng_url = ng_url.replace('http://', 'https://', 1)
+                if not hint:
+                    svc_url = ng_url
+
+        if not svc_url:
+            continue
+        
+        # Dedup by (server_id, port, proto) - the new unique key
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.port == port_num,
+            Service.proto == proto,
+        ).first()
+        
+        if existing:
+            changed = False
+            for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
+                               ("icon", svc_icon), ("description", svc_desc),
+                               ("ports", str(port_num)), ("source", ServiceSource.agent.value),
+                               ("container_name", f"port:{process}:{port_num}"), ("host_ip", srv.host)]:
+                if val is not None and getattr(existing, field) != val:
+                    if field == 'url' and existing.url_overridden:
+                        continue
+                    setattr(existing, field, val)
+                    changed = True
+            existing.status = ServiceStatus.up.value
+            existing.last_scanned_at = datetime.utcnow()
+            if changed:
+                updated += 1
+        else:
+            svc = Service(
+                server_id=srv.id, name=svc_name, url=svc_url,
+                category=svc_category, icon=svc_icon, description=svc_desc,
+                source=ServiceSource.agent.value,
+                status=ServiceStatus.up.value,
+                container_name=f"port:{process}:{port_num}",
+                ports=str(port_num),
+                port=port_num, proto=proto,
+                host_ip=srv.host,
+                host_domain=getattr(srv, 'host_domain', None),
+                last_scanned_at=datetime.utcnow(),
+            )
+            db.add(svc)
+            added += 1
+            _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+    
+    # --- Process systemd services (no port, supplementary) ---
+    for svc_info in systemd_services:
+        name = svc_info.get("name", "")
+        if any(name.startswith(prefix) for prefix in _SKIP_SYSTEMD_PREFIXES):
+            continue
+        name = name.replace(".service", "")
+        desc = svc_info.get("description", "")
+        status_str = svc_info.get("status", "unknown")
+        
+        # Skip systemd if already covered by a port-based or container service
+        # Check by name similarity
+        name_lower = name.replace("-", " ").replace("_", " ").lower()
+        skip_keywords = ["nginx", "opsagent", "opscenter", "2fauth", "docker", "1panel"]
+        similar = None
+        for kw in skip_keywords:
+            if kw in name_lower:
+                similar = db.query(Service).filter(
+                    Service.server_id == srv.id,
+                    Service.name.ilike(f"%{kw}%"),
+                ).first()
+                if similar:
+                    break
+        if similar:
+            continue
+        
+        # Systemd services use container_name for dedup (no port)
+        dedup_key = f"systemd:{name}"
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.container_name == dedup_key,
+        ).first()
+        if existing:
+            existing.status = ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value
+            existing.last_scanned_at = datetime.utcnow()
+            continue
+        
+        svc_name = name.replace("-", " ").replace("_", " ").title()
+        svc_category = classify_image(name)
+        svc_icon = get_icon(name)
+        
+        svc = Service(
+            server_id=srv.id, name=svc_name, url=f"#systemd:{name}",
+            category=svc_category, icon=svc_icon, description=desc,
+            source=ServiceSource.agent.value,
+            status=ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value,
+            container_name=dedup_key,
+            host_ip=srv.host,
+            last_scanned_at=datetime.utcnow(),
+        )
+        db.add(svc)
+        added += 1
+        _auto_assign_group(str(srv.id), str(svc.id), svc_category)
+    
+    return {"added": added, "updated": updated}
 
 
 def _sync_agent_scan_to_db(srv, db, scan_data):
@@ -1324,24 +1594,20 @@ def _do_sync_ports_systemd(srv, db, scan_data):
             svc_icon = hint.get("icon", get_icon(process))
             svc_desc = hint.get("desc", get_desc(process, process))
 
-            # v3.21.0: Protocol-aware URL generation (C3 fix)
             if hint:
                 svc_url = hint["url_tpl"].format(host=srv.host)
             else:
-                host = srv.host
-                # Determine protocol by port
-                proto_scheme = "https" if port_num in (443, 8443) else "http"
-                svc_url = f"{proto_scheme}://{host}:{port_num}/"
+                host = "127.0.0.1" if bind_ip.startswith("127.0.0.1") and srv.agent_type == "local" else srv.host
+                svc_url = f"http://{host}:{port_num}/"
 
-        # Upgrade localhost/127.0.0.1 URLs to nginx domain URLs (C4 fix)
+        # If port is in nginx mapping, use domain URL instead of IP:port
         if port_num in nginx_port_map:
             ng_info = nginx_port_map[port_num]
             if ng_info['domain'] and ng_info['domain'] != srv.host:
                 ng_url = ng_info['url']
                 if ng_url.startswith('http://'):
                     ng_url = ng_url.replace('http://', 'https://', 1)
-                # Replace IP:port or localhost URLs with domain URL
-                if not hint:
+                if not hint:  # Don't override port hints
                     svc_url = ng_url
 
         # Skip if no meaningful URL

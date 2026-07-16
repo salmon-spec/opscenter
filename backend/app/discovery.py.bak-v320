@@ -74,8 +74,7 @@ NAME_URLS = {
     "2fauth": "http://{host}",
     "vaultwarden": "http://{host}:8090",
     "hbbs": "http://{host}:21115",
-    "hbbr": "http://{host}:21117",
-    "ops-db": "postgresql://{host}:5432"
+    "hbbr": "http://{host}:21117"
 }
 
 # 镜像名前缀映射
@@ -94,7 +93,7 @@ IMAGE_PREFIX_URLS = {
 PORT_PROTOCOL_HINTS = {
     80: 'http', 443: 'https', 8080: 'http', 8443: 'https',
     3000: 'http', 5000: 'http', 9000: 'http', 9090: 'http',
-    3306: 'mysql', 5432: 'postgresql', 5433: 'postgresql', 6379: 'redis',
+    3306: 'mysql', 5432: 'postgresql', 6379: 'redis',
     27017: 'mongodb', 9200: 'http', 15672: 'http',
 }
 
@@ -140,35 +139,12 @@ def get_url(container_name: str, host: str) -> Optional[str]:
     # Exact name match first
     if container_name in NAME_URLS:
         url = NAME_URLS[container_name]
-        return url.replace("{host}", _normalize_host(host))
+        return url.replace("{host}", host)
     # Prefix match
     for name, url in NAME_URLS.items():
         if container_name.startswith(name):
-            return url.replace("{host}", _normalize_host(host))
+            return url.replace("{host}", host)
     return None
-
-
-def _normalize_host(host: str) -> str:
-    """Normalize loopback addresses for URL generation.
-
-    Both 'localhost' and '127.0.0.1' are loopback addresses that produce
-    URLs inaccessible from remote browsers. This function attempts to
-    resolve them to the machine's externally reachable IP so that
-    generated service URLs work from any client.
-    """
-    if host not in ('localhost', '127.0.0.1', '0.0.0.0'):
-        return host
-    import socket
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        ip = s.getsockname()[0]
-        s.close()
-        if ip and ip not in ('127.0.0.1', '0.0.0.0'):
-            return ip
-    except Exception:
-        pass
-    return host
 
 
 def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
@@ -268,8 +244,6 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
     """Discover services from Docker containers. Returns list of new/updated services."""
     if host is None:
         host = server.host
-    # Normalize loopback addresses so generated URLs are externally accessible
-    host = _normalize_host(host)
     try:
         client = docker.from_env() if server.is_local else None
         if not client:
@@ -332,7 +306,7 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
             if not svc_url and image_name:
                 for prefix, info in IMAGE_PREFIX_URLS.items():
                     if image_name.split('/')[-1].split(':')[0].lower().startswith(prefix):
-                        svc_url = info['url'].format(host=host)
+                        svc_url = info['url'].format(host=host if not server.is_local else '127.0.0.1')
                         if not svc_category or svc_category == '未分类':
                             svc_category = info['category']
                         break
@@ -352,7 +326,7 @@ def discover_docker_services(server: Server, db: Session, host: str = None) -> L
                 if port_num:
                     proto = PORT_PROTOCOL_HINTS.get(port_num, 'http')
                     if proto in ('http', 'https'):
-                        svc_url = f"{proto}://{host}:{port_num}/"
+                        svc_url = f"{proto}://{host if not server.is_local else '127.0.0.1'}:{port_num}/"
 
             if not svc_url:
                 svc_url = "#none"  # 无URL服务保留为纯信息卡片

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.21.0 运维工作台</title>
+<title>OpsCenter v3.18.0 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <link rel="stylesheet" href="/assets/xterm/xterm.min.css">
@@ -405,7 +405,6 @@ createApp({
 
     // ========== Resource: Server Tab ==========
     const scanningServerId = ref(null);
-    const checkingAgentServerId = ref(null);
 
     // ========== Terminal ==========
     const termTabs = ref([]);
@@ -546,7 +545,6 @@ createApp({
     }
 
     async function checkAgentStatus(serverId) {
-      checkingAgentServerId.value = serverId;
       try {
         const data = await apiGet(`${API}/servers/${serverId}/agent-status`);
         if (data.status === 'running') {
@@ -556,7 +554,6 @@ createApp({
         }
         await loadServers();
       } catch(e) { showToast('检查失败: ' + e.message, 'err'); }
-      finally { checkingAgentServerId.value = null; }
     }
 
     // ========== Load groups.json via backend API ==========
@@ -595,7 +592,7 @@ createApp({
         const proto = location.protocol;
         const Host = location.host;
         for (const s of svcs) {
-          if (!s.url || s.url.startsWith('#')) { s.fullUrl = ''; continue; }
+          if (!s.url) { s.fullUrl = ''; continue; }
           if (s.url.startsWith('http')) { s.fullUrl = s.url; }
           else if (s.url.startsWith('/')) { s.fullUrl = `${proto}//${Host}${s.url}`; }
           else if (s.url.startsWith(':')) { s.fullUrl = `${proto}//${Host}${s.url}`; }
@@ -1210,13 +1207,6 @@ createApp({
     // Persist current page to localStorage
     watch(currentPage, (val) => { localStorage.setItem('ops_page', val); });
 
-    // ========== Group Modal: auto-select single server ==========
-    watch(showGroupModal, (val) => {
-      if (val && !groupManageServerId.value && servers.value.length === 1) {
-        groupManageServerId.value = servers.value[0].id;
-      }
-    });
-
     // ========== Template data ==========
       // ========== Terminal Methods ==========
     const fmShow = ref(false);
@@ -1597,7 +1587,6 @@ createApp({
       getMetric, loadMonitor, loadHistory, formatBytes, formatUptime, formatContainerPorts,
 
       scanningServerId,
-      checkingAgentServerId,
       triggerScan,
       deployAgent, checkAgentStatus,
       serverServices, getSvcCount, toggleSvcHidden, openEditSvc,
@@ -1616,7 +1605,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.21.0</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.12.1</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -1709,7 +1698,7 @@ createApp({
           </span>
         </div>
         <div class="svc-grid">
-            <div class="svc-card" v-for="s in g.services" :key="s.serviceKey" :style="effectiveStatus(s)!=='online' ? {cursor:'default'} : {}" @click="effectiveStatus(s)==='online' && openService(s.fullUrl)">
+          <div class="svc-card" v-for="s in g.services" :key="s.serviceKey" @click="openService(s.fullUrl)">
             <div class="svc-card-top">
               <div class="svc-name">
                 <span class="status-dot" :class="effectiveStatus(s)"></span>
@@ -1729,13 +1718,8 @@ createApp({
             <div class="svc-server-info" v-else-if="s.containerName">
               {{s.containerName}}
             </div>
-            <div class="svc-url" v-if="s.fullUrl && effectiveStatus(s)==='online'">
+            <div class="svc-url" v-if="s.fullUrl">
               <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
-              <span v-if="s.url_overridden" style="margin-left:4px;color:#ea580c;font-size:12px;cursor:help;" title="此地址已被手动修改，扫描时不会被覆盖">✎</span>
-            </div>
-            <div class="svc-url" v-else-if="s.fullUrl" style="opacity:.5">
-              <span style="cursor:default">{{s.fullUrl}}</span>
-              <span style="margin-left:4px;font-size:10px;color:var(--red)">（未运行）</span>
               <span v-if="s.url_overridden" style="margin-left:4px;color:#ea580c;font-size:12px;cursor:help;" title="此地址已被手动修改，扫描时不会被覆盖">✎</span>
             </div>
 
@@ -1986,7 +1970,7 @@ createApp({
               <button class="btn-sm" :disabled="scanningServerId===srv.id" @click="triggerScan(srv.id)">{{scanningServerId===srv.id ? "扫描中..." : "扫描"}}</button>
               <button class="btn-deploy-agent" v-if="srv.agent_type !== 'local' && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
               <button class="btn-deploy-agent" v-if="srv.agent_status==='running'" @click="deployAgent(srv.id)">升级Agent</button>
-              <button class="btn-sm" v-if="srv.agent_status==='running'" :disabled="checkingAgentServerId===srv.id" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">{{checkingAgentServerId===srv.id ? '检查中...' : '检查Agent'}}</button>
+              <button class="btn-sm" v-if="srv.agent_status==='running'" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">检查Agent</button>
               <button class="btn-sm" @click="openEditServer(srv)" style="color:var(--accent2)">编辑</button>
               <div style="flex:1"></div>
               <button class="btn-sm danger" @click="deleteServer(srv.id)">删除</button>
