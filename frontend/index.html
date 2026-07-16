@@ -435,7 +435,7 @@ createApp({
     // ========== Resource: Service Management ==========
     const serverServices = ref({});   // { serverId: [services] }
     const showEditSvcModal = ref(false);
-    const editSvcForm = reactive({ id:'', name:'', url:'', description:'', hidden:false, account:'', password:'', url_overridden:false });
+    const editSvcForm = reactive({ id:'', name:'', url:'', description:'', hidden:false, account:'', password:'' });
 
     async function loadServerServices(sid) {
       try {
@@ -468,7 +468,6 @@ createApp({
       editSvcForm.hidden = svc.hidden;
       editSvcForm.account = svc.account || '';
       editSvcForm.password = svc.password || '';
-      editSvcForm.url_overridden = svc.url_overridden || false;
       showEditSvcModal.value = true;
     }
     async function saveEditSvc() {
@@ -486,21 +485,6 @@ createApp({
         await loadAllServerServices();
         await loadAutoServices();
       } catch(e) { alert('保存失败: ' + e.message); }
-    }
-
-    async function resetSvcUrl(svc) {
-      if (!confirm('确定要恢复自动检测的访问地址吗？')) return;
-      try {
-        const res = await fetch(API + '/services/' + svc.id + '/reset-url', {method:'PATCH'});
-        const data = await res.json();
-        if (data.ok) {
-          showToast('已恢复自动地址');
-          await loadAllServerServices();
-          await loadAutoServices();
-        }
-      } catch(e) {
-        showToast('恢复失败: ' + e.message);
-      }
     }
 
     // ========== Add Server Modal ==========
@@ -578,7 +562,7 @@ createApp({
         const data = await apiGet(`${API}/services-with-status`);
         const svcs = data.map(s => ({
           id: s.id, serverId: s.server_id, name: s.name,
-          url: s.url, url_overridden: s.url_overridden || false, category: s.category, icon: s.icon,
+          url: s.url, category: s.category, icon: s.icon,
           description: s.description, source: s.source,
           status: s.status === 'up' ? 'online' : s.status === 'down' ? 'offline' : 'unknown',
           pinned: s.pinned, containerName: s.container_name,
@@ -1731,12 +1715,10 @@ createApp({
             </div>
             <div class="svc-url" v-if="s.fullUrl && effectiveStatus(s)==='online'">
               <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
-              <span v-if="s.url_overridden" style="margin-left:4px;color:#ea580c;font-size:12px;cursor:help;" title="此地址已被手动修改，扫描时不会被覆盖">✎</span>
             </div>
             <div class="svc-url" v-else-if="s.fullUrl" style="opacity:.5">
               <span style="cursor:default">{{s.fullUrl}}</span>
               <span style="margin-left:4px;font-size:10px;color:var(--red)">（未运行）</span>
-              <span v-if="s.url_overridden" style="margin-left:4px;color:#ea580c;font-size:12px;cursor:help;" title="此地址已被手动修改，扫描时不会被覆盖">✎</span>
             </div>
 
           </div>
@@ -2101,10 +2083,6 @@ createApp({
           <label>访问地址</label>
           <div style="flex:1;display:flex;flex-direction:column">
             <input v-model="editSvcForm.url" placeholder="http://host:port/path" style="width:100%">
-            <div v-if="editSvcForm.url_overridden" style="margin-top:4px;display:flex;align-items:center;gap:8px;">
-              <span style="font-size:12px;color:#ea580c;background:#fff7ed;padding:2px 8px;border-radius:4px;">已手动修改</span>
-              <button @click="resetSvcUrl(editSvcForm)" style="font-size:12px;color:#2563eb;background:none;border:1px solid #2563eb;padding:2px 8px;border-radius:4px;cursor:pointer;">恢复自动地址</button>
-            </div>
           </div>
         </div>
         <div class="modal-row">

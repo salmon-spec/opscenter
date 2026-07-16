@@ -152,7 +152,8 @@
         "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:80aff60d-6577-447e-bec3-0d0aa69eb88b": "network",
         "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:3e9c4a45-caf5-4084-8ed1-45ecf46f7c95": "security",
         "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:d75a740c-d745-426e-89d5-2c172bbcc1f0": "network",
-        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:c5bf5475-8cdf-4e5d-8e4b-f4696df0031a": "ops"
+        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:c5bf5475-8cdf-4e5d-8e4b-f4696df0031a": "ops",
+        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:f4663858-c3b6-40fb-a709-cc6bb44e04ca": "database"
       }
     }
   }

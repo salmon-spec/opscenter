@@ -87,7 +87,7 @@ class Service(Base):
     account = Column(String(100), nullable=True)
     password = Column(String(200), nullable=True)
     last_scanned_at = Column(DateTime, nullable=True)
-    url_overridden = Column(Boolean, default=False)  # URL是否被手动修改，True时扫描不覆盖
+    url_overridden = Column(Boolean, default=False)  # deprecated: 不再使用，扫描始终覆盖URL
     port = Column(Integer, nullable=True)  # 监听端口号（端口驱动扫描唯一键之一）
     proto = Column(String(10), default="tcp")  # 协议 tcp/udp
     host_ip = Column(String(100), nullable=True)  # 服务所在主机IP

@@ -966,8 +966,8 @@ def _sync_nginx_routes(srv, db):
                 if ng_domain and not existing.host_domain:
                     existing.host_domain = ng_domain
                     changed = True
-                # Upgrade IP:port URL to domain URL (also handle localhost/127.0.0.1)
-                if ng_url and ng_domain and not getattr(existing, 'url_overridden', False):
+                # Upgrade IP:port URL to domain URL (always, no url_overridden guard)
+                if ng_url and ng_domain:
                     if srv.host in (existing.url or "") or "localhost" in (existing.url or "") or "127.0.0.1" in (existing.url or ""):
                         existing.url = ng_url
                         changed = True
@@ -1044,9 +1044,6 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                                    ("icon", svc_icon), ("description", svc_desc), ("image", image),
                                    ("ports", ports_display), ("source", ServiceSource.agent.value)]:
                     if val and getattr(existing, field) != val:
-                        # url字段受url_overridden保护
-                        if field == 'url' and existing.url_overridden:
-                            continue
                         setattr(existing, field, val)
                         changed = True
                 existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
@@ -1150,9 +1147,8 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                     existing.host_domain = ng_domain
                     changed = True
                 if ng_url and srv.host and srv.host in (existing.url or '') and ng_domain:
-                    if not getattr(existing, 'url_overridden', False):
-                        existing.url = ng_url
-                        changed = True
+                    existing.url = ng_url
+                    changed = True
                 if backend_port and not existing.port:
                     existing.port = backend_port
                     existing.proto = "tcp"
@@ -1361,8 +1357,6 @@ def _do_sync_ports_systemd(srv, db, scan_data):
                                ("icon", svc_icon), ("description", svc_desc),
                                ("ports", str(port_num)), ("source", ServiceSource.agent.value)]:
                 if val and getattr(existing, field) != val:
-                    if field == 'url' and existing.url_overridden:
-                        continue
                     setattr(existing, field, val)
                     changed = True
             existing.status = ServiceStatus.up.value
@@ -1472,8 +1466,6 @@ def _sync_ssh_containers_to_db(srv, db, client):
                 for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
                                    ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
                     if val and getattr(existing, field) != val:
-                        if field == 'url' and existing.url_overridden:
-                            continue
                         setattr(existing, field, val)
                 existing.status = ServiceStatus.up.value if is_running else ServiceStatus.down.value
                 existing.last_scanned_at = datetime.utcnow()
@@ -1590,7 +1582,7 @@ def list_services(server_id: Optional[str] = None, category: Optional[str] = Non
                 "image": s.image, "ports": s.ports,
                 "account": s.account or "",
                 "password": s.password or "",
-                "url_overridden": s.url_overridden or False,
+                "url_overridden": False,  # deprecated, always False
                 "port": s.port,
                 "proto": s.proto or "tcp",
                 "host_ip": s.host_ip,
@@ -1633,13 +1625,8 @@ def update_service(service_id: str, data: ServiceUpdate):
         if 'password' in data.model_dump(exclude_unset=True):
             pwd = data.model_dump(exclude_unset=True).get('password')
             svc.password = pwd if pwd else ''
-        # C4: 如果url被修改，自动设置url_overridden
-        if 'url' in data.model_dump(exclude_unset=True):
-            new_url = data.model_dump(exclude_unset=True).get('url')
-            if new_url and new_url != original_url:
-                svc.url_overridden = True
         db.commit()
-        return {"ok": True, "url_overridden": svc.url_overridden}
+        return {"ok": True}
 
 @app.delete("/api/v2/services/{service_id}")
 def delete_service(service_id: str):
@@ -1665,21 +1652,7 @@ def toggle_pin(service_id: str):
         return {"ok": True, "pinned": svc.pinned}
 
 
-@app.patch("/api/v2/services/{service_id}/reset-url")
-def reset_service_url(service_id: str):
-    with get_db() as db:
-        svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
-        if not svc:
-            raise HTTPException(404, "服务不存在")
-        svc.url_overridden = False
-        db.commit()
-        server = svc.server
-        if server:
-            try:
-                scan_server_services(str(server.id))
-            except:
-                pass
-        return {"ok": True, "url_overridden": False, "url": svc.url}
+
 
 # === Health Check Trigger ===
 @app.post("/api/v2/health-check")
@@ -2853,7 +2826,7 @@ def list_services_with_status(server_id: Optional[str] = None):
                 "server_host": srv_info.get("host", ""),
                 "server_status": srv_info.get("status", "unknown"),
                 "server_is_local": srv_info.get("is_local", False),
-                "url_overridden": s.url_overridden or False,
+                "url_overridden": False,  # deprecated, always False
                 "port": s.port,
                 "proto": s.proto or "tcp",
                 "host_ip": s.host_ip,
@@ -2894,7 +2867,7 @@ def list_all_services(server_id: Optional[str] = None):
                 "server_host": si.get("host", ""),
                 "server_status": si.get("status", "unknown"),
                 "server_is_local": si.get("is_local", False),
-                "url_overridden": s.url_overridden or False,
+                "url_overridden": False,  # deprecated, always False
                 "port": s.port,
                 "proto": s.proto or "tcp",
                 "host_ip": s.host_ip,
