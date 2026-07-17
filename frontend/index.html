@@ -67,15 +67,8 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .stat-card.purple .num{color:var(--purple)}
 .stat-card.orange .num{color:var(--orange)}
 .stat-card.teal .num{color:var(--accent)}
-.stat-add-btn{display:flex;align-items:center;gap:6px;padding:14px 20px;border:1.5px dashed var(--blue);border-radius:var(--radius);background:transparent;color:var(--blue);font-size:14px;font-weight:500;cursor:pointer;transition:all .2s;white-space:nowrap}
-.stat-add-btn:hover{background:rgba(59,130,246,.08);border-color:var(--blue)}
-.stat-add-btn .add-icon{font-size:20px;line-height:1}
-.svc-card-actions{display:none;gap:4px}
-.svc-card:hover .svc-card-actions{display:flex}
-.svc-card-top{justify-content:space-between}
-.svc-action-btn{width:26px;height:26px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text2);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
-.svc-action-btn:hover{border-color:var(--blue);color:var(--blue);background:rgba(59,130,246,.08)}
-.svc-action-btn.danger:hover{border-color:var(--red);color:var(--red);background:rgba(239,68,68,.08)}
+.svc-del-btn{background:none;border:none;color:var(--text3);cursor:pointer;padding:2px 4px;font-size:12px;border-radius:4px;transition:all .15s}
+.svc-del-btn:hover{color:var(--red);background:rgba(239,68,68,.1)}
 
 
 /* ===== Server Tab Bar ===== */
@@ -89,13 +82,16 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .server-tab .st-count{font-size:11px;padding:2px 8px;border-radius:10px;background:var(--bg);margin-left:4px}
 
 /* ===== Group Filter Chips ===== */
-.group-filter-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:center}
-.group-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;border:1px solid var(--border);background:var(--card);cursor:pointer;font-size:13px;color:var(--text2);transition:all .15s;user-select:none}
-.group-chip:hover{border-color:var(--accent);color:var(--text1)}
-.group-chip.active{color:#0d1117;font-weight:500}
-.chip-count{font-size:11px;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--text2)}
-.group-chip.active .chip-count{background:rgba(0,0,0,.15);color:#0d1117}
-.chip-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.group-filter-bar{display:flex;gap:0;margin-bottom:16px;flex-wrap:wrap;align-items:center}
+.group-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 0;font-size:13px;color:var(--text2);cursor:pointer;transition:all .15s;user-select:none;position:relative}
+.group-chip::after{content:'#';margin-right:1px;color:var(--text3);font-weight:400}
+.group-chip:hover{color:var(--text1)}
+.group-chip:hover::after{color:var(--blue)}
+.group-chip.active{color:var(--blue);font-weight:600}
+.group-chip.active::after{color:var(--blue)}
+.group-chip+.group-chip::before{content:'';display:inline-block;width:1px;height:12px;background:var(--border);margin:0 10px;vertical-align:middle}
+.chip-count{font-size:10px;color:var(--text3);margin-left:2px}
+.chip-dot{display:none}
 .server-filter-label{font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
 
 /* ===== Service Group ===== */
@@ -1568,57 +1564,36 @@ createApp({
 
 
 
-    // ========== Nav page: add/edit/delete service ==========
-    const showNavAddModal = ref(false);
-    const navAddForm = reactive({ name:'', url:'', category:'', description:'', account:'', password:'', serverId:'' });
-    const showNavEditModal = ref(false);
-    const navEditForm = reactive({ id:'', name:'', url:'', category:'', description:'', account:'', password:'' });
+    // ========== Resource page: add/delete service ==========
+    const showAddSvcModal = ref(false);
+    const addSvcForm = reactive({ name:'', url:'', category:'', description:'', account:'', password:'', serverId:'' });
 
-    function openNavAdd() {
-      navAddForm.name = ''; navAddForm.url = ''; navAddForm.category = '';
-      navAddForm.description = ''; navAddForm.account = ''; navAddForm.password = '';
-      navAddForm.serverId = navServerId.value || (servers.value[0]?.id || '');
-      showNavAddModal.value = true;
+    function openAddSvc() {
+      addSvcForm.name = ''; addSvcForm.url = ''; addSvcForm.category = '';
+      addSvcForm.description = ''; addSvcForm.account = ''; addSvcForm.password = '';
+      addSvcForm.serverId = resServerId.value || (servers.value[0]?.id || '');
+      showAddSvcModal.value = true;
     }
-    async function navAddService() {
-      if (!navAddForm.name || !navAddForm.url) return alert('请填写服务名称和URL');
-      if (!navAddForm.serverId) return alert('请选择服务器');
+    async function addSvc() {
+      if (!addSvcForm.name || !addSvcForm.url) return alert('请填写服务名称和URL');
+      if (!addSvcForm.serverId) return alert('请选择服务器');
       try {
-        await apiPost(`${API}/services?server_id=${navAddForm.serverId}`, {
-          name: navAddForm.name, url: navAddForm.url,
-          category: navAddForm.category || '未分类',
-          description: navAddForm.description,
-          account: navAddForm.account, password: navAddForm.password,
+        await apiPost(`${API}/services?server_id=${addSvcForm.serverId}`, {
+          name: addSvcForm.name, url: addSvcForm.url,
+          category: addSvcForm.category || '未分类',
+          description: addSvcForm.description,
+          account: addSvcForm.account, password: addSvcForm.password,
         });
-        showNavAddModal.value = false;
+        showAddSvcModal.value = false;
+        await loadAllServerServices();
         await loadAutoServices();
       } catch(e) { alert('添加失败: ' + e.message); }
     }
-    function openNavEdit(s) {
-      navEditForm.id = s.id;
-      navEditForm.name = s.name;
-      navEditForm.url = s.url || '';
-      navEditForm.category = s.category || '';
-      navEditForm.description = s.description || '';
-      navEditForm.account = s.account || '';
-      navEditForm.password = s.password || '';
-      showNavEditModal.value = true;
-    }
-    async function navSaveEdit() {
-      try {
-        await apiPut(`${API}/services/${navEditForm.id}`, {
-          name: navEditForm.name, url: navEditForm.url,
-          category: navEditForm.category, description: navEditForm.description,
-          account: navEditForm.account, password: navEditForm.password,
-        });
-        showNavEditModal.value = false;
-        await loadAutoServices();
-      } catch(e) { alert('保存失败: ' + e.message); }
-    }
-    async function navDeleteService(s) {
+    async function deleteSvc(s) {
       if (!confirm(`确定删除服务「${s.name}」？此操作不可撤销。`)) return;
       try {
         await apiDelete(`${API}/services/${s.id}`);
+        await loadAllServerServices();
         await loadAutoServices();
       } catch(e) { alert('删除失败: ' + e.message); }
     }
@@ -1628,8 +1603,6 @@ createApp({
       groupConfig, autoServices,
       mergedGroups, filteredGroups, stats, effectiveStatus,
       navServerId, navServerTabs,
-      showNavAddModal, navAddForm, openNavAdd, navAddService,
-      showNavEditModal, navEditForm, openNavEdit, navSaveEdit, navDeleteService,
       selectedGroupIds, showAllGroups, toggleGroupFilter, clearGroupFilter,
       showGroupModal, newGroupName, newGroupId, newGroupColor,
       addGroup, deleteGroup, startEditGroup, cancelEditGroup, saveEditGroup, editingGroup, editGroupName, editGroupColor, editGroupOrder, moveServiceToGroup,
@@ -1649,6 +1622,7 @@ createApp({
       triggerScan,
       deployAgent, checkAgentStatus,
       serverServices, getSvcCount, toggleSvcHidden, openEditSvc,
+      showAddSvcModal, addSvcForm, openAddSvc, addSvc, deleteSvc,
       showEditSvcModal, editSvcForm, saveEditSvc,
       resServerId, switchResServer,
       showAddServerModal, newServer, sshTestResult,
@@ -1709,14 +1683,7 @@ createApp({
 
     <!-- ===== NAV PAGE ===== -->
     <div class="content" v-if="currentPage==='nav'">
-      <!-- Stat Cards (simplified) -->
-      <div class="stat-row">
-        <div class="stat-card teal"><div class="num">{{stats.total}}</div><div class="label">服务总数</div></div>
-        <div class="stat-card blue"><div class="num">{{stats.groupCount}}</div><div class="label">分组数</div></div>
-        <button class="stat-add-btn" @click="openNavAdd()"><span class="add-icon">+</span> 添加服务</button>
-      </div>
-
-      <!-- Group Filter Chips (primary filter) -->
+      <!-- Group Filter Tags -->
       <div class="group-filter-bar">
         <div class="group-chip" :class="{active: showAllGroups}" @click="clearGroupFilter()">
           全部 <span class="chip-count">{{autoServices.length}}</span>
@@ -1724,9 +1691,7 @@ createApp({
         <div v-for="g in mergedGroups" :key="g.id"
              class="group-chip"
              :class="{active: !showAllGroups && selectedGroupIds.has(g.id)}"
-             :style="!showAllGroups && selectedGroupIds.has(g.id) ? {background:g.color, borderColor:g.color} : {}"
              @click="toggleGroupFilter(g.id)">
-          <span class="chip-dot" :style="{background:g.color}" v-if="!(!showAllGroups && selectedGroupIds.has(g.id))"></span>
           {{g.name}} <span class="chip-count">{{g.services.length}}</span>
         </div>
       </div>
@@ -1757,10 +1722,6 @@ createApp({
                  @click="s.fullUrl && openService(s.fullUrl)">
             <div class="svc-card-top">
               <div class="svc-name">{{s.name}}</div>
-              <div class="svc-card-actions">
-                <button class="svc-action-btn" @click.stop="openNavEdit(s)" title="编辑">✎</button>
-                <button class="svc-action-btn danger" @click.stop="navDeleteService(s)" title="删除">✕</button>
-              </div>
             </div>
             <div class="svc-desc">{{s.desc || s.description || ''}}</div>
             <div class="svc-server-info" v-if="!navServerId">
@@ -1954,6 +1915,9 @@ createApp({
           <button class="btn-sm" @click="showGroupModal=true" style="font-size:13px;padding:6px 16px">
             管理分组
           </button>
+          <button class="btn-sm" @click="openAddSvc()" style="font-size:13px;padding:6px 16px;color:var(--accent)">
+            + 添加服务
+          </button>
           <button class="btn-sm primary" @click="showAddServerModal=true" style="font-size:13px;padding:6px 16px">
             + 添加服务器
           </button>
@@ -2060,7 +2024,8 @@ createApp({
                   <button class="svc-tag" :class="s.hidden ? 'hid' : 'vis'" @click="toggleSvcHidden(s)" :title="s.hidden ? '点击显示' : '点击隐藏'">
                     {{s.hidden ? '已隐藏' : '可见'}}
                   </button>
-                  <button class="svc-edit-btn" @click="openEditSvc(s)" title="编辑">&#9998;</button>
+                  <button class="svc-edit-btn" @click="openEditSvc(s)" title="编辑">✎</button>
+                  <button class="svc-del-btn" @click="deleteSvc(s)" title="删除">✕</button>
                 </div>
               </div>
             </div>
@@ -2165,84 +2130,46 @@ createApp({
       </div>
     </div>
 
-    <!-- ===== Nav Add Service Modal ===== -->
-    <div class="modal-overlay" v-if="showNavAddModal" @click.self="showNavAddModal=false">
+    <!-- ===== Add Service Modal ===== -->
+    <div class="modal-overlay" v-if="showAddSvcModal" @click.self="showAddSvcModal=false">
       <div class="modal" style="min-width:440px">
         <h3>添加服务</h3>
         <div class="modal-row">
           <label>服务器</label>
-          <select v-model="navAddForm.serverId" style="flex:1">
+          <select v-model="addSvcForm.serverId" style="flex:1">
             <option v-for="srv in servers" :key="srv.id" :value="srv.id">{{srv.name}}</option>
           </select>
         </div>
         <div class="modal-row">
           <label>名称 *</label>
-          <input v-model="navAddForm.name" placeholder="服务名称" style="flex:1">
+          <input v-model="addSvcForm.name" placeholder="服务名称" style="flex:1">
         </div>
         <div class="modal-row">
           <label>访问地址 *</label>
-          <input v-model="navAddForm.url" placeholder="http://host:port/path" style="flex:1">
+          <input v-model="addSvcForm.url" placeholder="http://host:port/path" style="flex:1">
         </div>
         <div class="modal-row">
           <label>分类</label>
-          <input v-model="navAddForm.category" placeholder="如：网络与代理" style="flex:1">
+          <input v-model="addSvcForm.category" placeholder="如：网络与代理" style="flex:1">
         </div>
         <div class="modal-row">
           <label>描述</label>
-          <input v-model="navAddForm.description" placeholder="服务描述" style="flex:1">
+          <input v-model="addSvcForm.description" placeholder="服务描述" style="flex:1">
         </div>
         <div style="margin:12px 0 8px;padding-top:10px;border-top:1px solid var(--border)">
           <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:8px">登录凭证（可选）</div>
           <div class="modal-row">
             <label>账号</label>
-            <input v-model="navAddForm.account" placeholder="登录账号" style="flex:1">
+            <input v-model="addSvcForm.account" placeholder="登录账号" style="flex:1">
           </div>
           <div class="modal-row">
             <label>密码</label>
-            <input v-model="navAddForm.password" type="password" placeholder="登录密码" style="flex:1">
+            <input v-model="addSvcForm.password" type="password" placeholder="登录密码" style="flex:1">
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn-sm" @click="showNavAddModal=false">取消</button>
-          <button class="btn-sm primary" @click="navAddService">添加</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ===== Nav Edit Service Modal ===== -->
-    <div class="modal-overlay" v-if="showNavEditModal" @click.self="showNavEditModal=false">
-      <div class="modal" style="min-width:440px">
-        <h3>编辑服务</h3>
-        <div class="modal-row">
-          <label>名称</label>
-          <input v-model="navEditForm.name" style="flex:1">
-        </div>
-        <div class="modal-row">
-          <label>访问地址</label>
-          <input v-model="navEditForm.url" placeholder="http://host:port/path" style="flex:1">
-        </div>
-        <div class="modal-row">
-          <label>分类</label>
-          <input v-model="navEditForm.category" placeholder="如：网络与代理" style="flex:1">
-        </div>
-        <div class="modal-row">
-          <label>描述</label>
-          <input v-model="navEditForm.description" placeholder="服务描述" style="flex:1">
-        </div>
-        <div style="margin:12px 0 8px;padding-top:10px;border-top:1px solid var(--border)">
-          <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:8px">登录凭证（可选）</div>
-          <div class="modal-row">
-            <label>账号</label>
-            <input v-model="navEditForm.account" placeholder="登录账号，留空清除" style="flex:1">
-          </div>
-          <div class="modal-row">
-            <label>密码</label>
-            <input v-model="navEditForm.password" type="password" placeholder="登录密码，留空清除" style="flex:1">
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn-sm" @click="showNavEditModal=false">取消</button>
-          <button class="btn-sm primary" @click="navSaveEdit">保存</button>
+          <button class="btn-sm" @click="showAddSvcModal=false">取消</button>
+          <button class="btn-sm primary" @click="addSvc">添加</button>
         </div>
       </div>
     </div>
