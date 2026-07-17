@@ -174,6 +174,31 @@ class ServiceUpdate(BaseModel):
     hidden: Optional[bool] = None
     account: Optional[str] = None
     password: Optional[str] = None
+    sort_order: Optional[int] = None
+    source: Optional[str] = None
+
+class ServiceCreateNav(BaseModel):
+    """For nav page quick-add: only name+url required, server_id auto-picks first server."""
+    name: str
+    url: str
+    category: str = "未分类"
+    icon: str = "fa-cube"
+    description: str = ""
+    account: Optional[str] = None
+    password: Optional[str] = None
+    group_id: Optional[str] = None
+    pinned: bool = False
+
+class BatchDeleteRequest(BaseModel):
+    ids: List[str]
+
+class BatchMoveRequest(BaseModel):
+    ids: List[str]
+    group_id: str
+
+
+class SortUpdate(BaseModel):
+    sort_order: int
 
 class PinToggle(BaseModel):
     pinned: bool
@@ -852,6 +877,9 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                 Service.container_name == name,
             ).first()
             if existing:
+                # Protect manually-added services from being overwritten by scans
+                if existing.source == ServiceSource.manual.value:
+                    continue
                 changed = False
                 for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
                                    ("icon", svc_icon), ("description", svc_desc), ("image", image),
@@ -1118,6 +1146,9 @@ def _sync_ssh_containers_to_db(srv, db, client):
                 Service.container_name == name,
             ).first()
             if existing:
+                # Protect manually-added services from being overwritten by scans
+                if existing.source == ServiceSource.manual.value:
+                    continue
                 for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
                                    ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
                     if val and getattr(existing, field) != val:
@@ -1275,17 +1306,23 @@ def update_service(service_id: str, data: ServiceUpdate):
         if not svc:
             raise HTTPException(404, "Service not found")
         for field, val in data.model_dump(exclude_unset=True).items():
+            if field == 'source':
+                # Allow converting a scanned service to manual ("takeover")
+                if val:
+                    setattr(svc, 'source', val)
+                continue
             if val is not None:
                 setattr(svc, field, val)
         # Handle account/password explicitly (allow empty string to clear)
-        if 'account' in data.model_dump(exclude_unset=True):
-            acct = data.model_dump(exclude_unset=True).get('account')
+        raw = data.model_dump(exclude_unset=True)
+        if 'account' in raw:
+            acct = raw.get('account')
             svc.account = acct if acct else ''
-        if 'password' in data.model_dump(exclude_unset=True):
-            pwd = data.model_dump(exclude_unset=True).get('password')
+        if 'password' in raw:
+            pwd = raw.get('password')
             svc.password = pwd if pwd else ''
         db.commit()
-        return {"ok": True}
+    return {"ok": True}
 
 @app.delete("/api/v2/services/{service_id}")
 def delete_service(service_id: str):
@@ -1293,8 +1330,6 @@ def delete_service(service_id: str):
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
         if not svc:
             raise HTTPException(404, "Service not found")
-        if svc.source == ServiceSource.docker_label.value:
-            raise HTTPException(400, "Cannot delete auto-discovered service (disable label instead)")
         db.delete(svc)
         db.commit()
         return {"ok": True}
@@ -2415,6 +2450,130 @@ def list_services_with_status(server_id: Optional[str] = None):
                 "server_is_local": srv_info.get("is_local", False),
             })
         return result
+
+
+# === Services for Nav page (manual-only, no health status) ===
+@app.get("/api/v2/services-for-nav")
+def list_services_for_nav():
+    """Nav page专用：仅返回 source=manual 且 hidden=False 的服务，不含健康状态。
+    附带分组映射信息（从 groups.json 读取）。"""
+    with get_db() as db:
+        q = db.query(Service).filter(
+            Service.source == ServiceSource.manual.value,
+            Service.hidden == False,
+            Service.url != None,
+            Service.url != '',
+        ).order_by(Service.sort_order, Service.category, Service.name)
+        services = q.all()
+        # Read group config to resolve each service's group
+        config = _read_groups_json()
+        result = []
+        for s in services:
+            sid = str(s.server_id)
+            svc_id = str(s.id)
+            service_key = f"auto:{sid}:{svc_id}"
+            group_id = None
+            srv_cfg = config.get("servers", {}).get(sid)
+            if srv_cfg:
+                group_id = srv_cfg.get("serviceGroupMap", {}).get(service_key)
+            # Also check top-level serviceGroupMap (legacy)
+            if not group_id:
+                group_id = config.get("serviceGroupMap", {}).get(service_key)
+            result.append({
+                "id": svc_id, "server_id": sid,
+                "name": s.name, "url": s.url, "category": s.category,
+                "icon": s.icon, "description": s.description,
+                "pinned": s.pinned, "sort_order": s.sort_order or 0,
+                "account": s.account or "", "password": s.password or "",
+                "group_id": group_id,
+            })
+        return result
+
+
+@app.post("/api/v2/services/nav-add", status_code=201)
+def nav_add_service(data: ServiceCreateNav):
+    """Nav page quick-add: auto-pick first server if not specified."""
+    with get_db() as db:
+        # Auto-pick first server
+        srv = db.query(Server).first()
+        if not srv:
+            raise HTTPException(400, "No server available. Add a server first.")
+        svc = Service(
+            server_id=srv.id, name=data.name, url=data.url,
+            category=data.category, icon=data.icon, description=data.description,
+            pinned=data.pinned,
+            source=ServiceSource.manual.value, status=ServiceStatus.unknown.value,
+            account=data.account, password=data.password,
+            sort_order=0,
+        )
+        db.add(svc)
+        db.commit()
+        db.refresh(svc)
+        # Assign to group if specified
+        if data.group_id:
+            service_key = f"auto:{srv.id}:{svc.id}"
+            current = _read_groups_json()
+            if str(srv.id) not in current.get("servers", {}):
+                current.setdefault("servers", {})[str(srv.id)] = {
+                    "groups": list(current.get("defaultGroups", DEFAULT_GROUPS)),
+                    "serviceGroupMap": {}
+                }
+            current["servers"][str(srv.id)].setdefault("serviceGroupMap", {})[service_key] = data.group_id
+            _write_groups_json(current)
+        return {"id": str(svc.id), "name": svc.name}
+
+
+@app.post("/api/v2/services/batch-move")
+def batch_move_services(req: BatchMoveRequest):
+    """Batch move multiple services to a group."""
+    current = _read_groups_json()
+    moved = 0
+    for svc_id in req.ids:
+        with get_db() as db:
+            svc = db.query(Service).filter(Service.id == uuid.UUID(svc_id)).first()
+            if not svc:
+                continue
+            sid = str(svc.server_id)
+            service_key = f"auto:{sid}:{svc_id}"
+            if sid not in current.get("servers", {}):
+                current.setdefault("servers", {})[sid] = {
+                    "groups": list(current.get("defaultGroups", DEFAULT_GROUPS)),
+                    "serviceGroupMap": {}
+                }
+            smap = current["servers"][sid].setdefault("serviceGroupMap", {})
+            if req.group_id == "ungrouped":
+                smap.pop(service_key, None)
+            else:
+                smap[service_key] = req.group_id
+            moved += 1
+    _write_groups_json(current)
+    return {"ok": True, "moved": moved}
+
+
+@app.post("/api/v2/services/batch-delete")
+def batch_delete_services(req: BatchDeleteRequest):
+    """Batch delete multiple services."""
+    deleted = 0
+    with get_db() as db:
+        for svc_id in req.ids:
+            svc = db.query(Service).filter(Service.id == uuid.UUID(svc_id)).first()
+            if svc:
+                db.delete(svc)
+                deleted += 1
+        db.commit()
+    return {"ok": True, "deleted": deleted}
+
+
+@app.patch("/api/v2/services/{service_id}/sort")
+def update_service_sort(service_id: str, data: SortUpdate):
+    """Update service sort order."""
+    with get_db() as db:
+        svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
+        if not svc:
+            raise HTTPException(404, "Service not found")
+        svc.sort_order = data.sort_order
+        db.commit()
+        return {"ok": True}
 
 
 @app.get("/api/v2/services/all")

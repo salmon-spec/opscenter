@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpsCenter v3.12.1 运维工作台</title>
+<title>OpsCenter v3.18.0 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <link rel="stylesheet" href="/assets/xterm/xterm.min.css">
@@ -129,6 +129,27 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .btn-sm.danger:hover{background:rgba(239,68,68,.1)}
 .svc-move-select{font-size:11px;padding:3px 6px;border-radius:6px;border:1px solid var(--border);background:var(--bg2);color:var(--text1);cursor:pointer}
 .svc-server-info{font-size:11px;color:var(--text2);margin-top:4px;display:flex;align-items:center;gap:4px}
+
+/* ===== Nav Add Button Card ===== */
+.stat-card.add-btn{cursor:pointer;border-style:dashed;border-color:var(--accent);display:flex;flex-direction:column;align-items:center;justify-content:center;transition:all .2s}
+.stat-card.add-btn:hover{background:rgba(45,212,191,.08);transform:translateY(-1px)}
+.stat-card.add-btn .num{font-size:24px;color:var(--accent)}
+
+/* ===== Nav Toolbar ===== */
+.nav-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.batch-info{font-size:13px;color:var(--text2);margin:0 4px}
+.batch-group-select{font-size:12px;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--text1);cursor:pointer}
+.batch-group-select:focus{outline:none;border-color:var(--accent)}
+
+/* ===== Service Card Actions (Nav) ===== */
+.svc-card .svc-actions{opacity:0;transition:opacity .15s}
+.svc-card:hover .svc-actions{opacity:1}
+.svc-action-btn{background:none;border:1px solid var(--border);border-radius:6px;padding:2px 7px;font-size:12px;color:var(--text2);cursor:pointer;transition:all .15s;line-height:1.4}
+.svc-action-btn:hover{color:var(--accent);border-color:var(--accent)}
+.svc-action-btn.danger:hover{color:var(--red);border-color:var(--red)}
+.svc-card .svc-batch-check input{width:16px;height:16px;cursor:pointer;accent-color:var(--accent)}
+.svc-card.batch-selected{border-color:var(--accent);background:rgba(45,212,191,.06)}
+.svc-card.drag-over{border-color:var(--blue);box-shadow:0 0 8px rgba(59,130,246,.3)}
 
 /* ===== Group Management Modal ===== */
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:100;display:flex;align-items:center;justify-content:center}
@@ -555,22 +576,22 @@ createApp({
     // ========== Load auto services via backend API ==========
     async function loadAutoServices() {
       try {
-        const data = await apiGet(`${API}/services-with-status`);
+        const data = await apiGet(`${API}/services-for-nav`);
+        const serverMap = {};
+        for (const srv of servers.value) serverMap[srv.id] = srv.name;
         const svcs = data.map(s => ({
-          id: s.id, serverId: s.server_id, name: s.name,
+          id: s.id, serverId: s.server_id, serverName: serverMap[s.server_id] || '',
+          name: s.name,
           url: s.url, category: s.category, icon: s.icon,
-          description: s.description, source: s.source,
-          status: s.status === 'up' ? 'online' : s.status === 'down' ? 'offline' : 'unknown',
-          pinned: s.pinned, containerName: s.container_name,
-          image: s.image, ports: s.ports,
-          serverName: s.server_name, serverHost: s.server_host,
-          serverStatus: s.server_status, serverIsLocal: s.server_is_local,
-          origin: 'auto',
+          description: s.description, source: 'manual',
+          pinned: s.pinned, sort_order: s.sort_order || 0,
+          account: s.account || '', password: s.password || '',
+          groupId: s.group_id || null,
+          origin: 'manual',
           serviceKey: `auto:${s.server_id}:${s.id}`,
-          groupId: (groupConfig.servers[s.server_id]?.serviceGroupMap || groupConfig.serviceGroupMap || {})[`auto:${s.server_id}:${s.id}`] || null,
           fullUrl: '',
         }));
-        // Build fullUrl for auto services
+        // Build fullUrl for manual services
         const proto = location.protocol;
         const Host = location.host;
         for (const s of svcs) {
@@ -578,19 +599,10 @@ createApp({
           if (s.url.startsWith('http')) { s.fullUrl = s.url; }
           else if (s.url.startsWith('/')) { s.fullUrl = `${proto}//${Host}${s.url}`; }
           else if (s.url.startsWith(':')) { s.fullUrl = `${proto}//${Host}${s.url}`; }
-          else { s.fullUrl = `${proto}//${s.serverHost}${s.url.startsWith('/') ? '' : '/'}${s.url}`; }
+          else { s.fullUrl = s.url; }
         }
         autoServices.value = svcs;
       } catch(e) { console.warn('auto services load failed:', e.message); autoServices.value = []; }
-    }
-
-    // ========== Compute effective status ==========
-    function effectiveStatus(svc) {
-      if (svc.origin === 'auto' && svc.serverStatus === 'offline') return 'server_offline';
-      if (svc.status === 'checking') return 'checking';
-      if (svc.status === 'online') return 'online';
-      if (svc.status === 'offline') return 'offline';
-      return 'unknown';
     }
 
     // ========== Compute service groups ==========
@@ -615,49 +627,28 @@ createApp({
 
     const mergedGroups = computed(() => {
       if (navServerId.value) {
-        // Single server: use that server's groups directly
+        // Single server: use that server's groups, explicit mapping only (no category fuzzy match)
         const cfg = groupConfig.servers[navServerId.value];
         if (!cfg) return [];
         const groups = [...(cfg.groups || [])].sort((a, b) => (a.order || 100) - (b.order || 100));
+        const smap = cfg.serviceGroupMap || {};
         const result = [];
         for (const g of groups) {
-          const svcs = allServices.value.filter(s => {
-            const mapped = (cfg.serviceGroupMap || {})[s.serviceKey];
-            if (mapped) return mapped === g.id;
-            if (s.category) {
-              const catNorm = (s.category || '').toLowerCase().replace(/[\s\-_]/g, '');
-              const gNorm = (g.name || '').toLowerCase().replace(/[\s\-_]/g, '');
-              if (catNorm === gNorm || catNorm.includes(gNorm) || gNorm.includes(catNorm)) return true;
-            }
-            return false;
-          });
-          if (svcs.length > 0 || g.id !== 'ungrouped') {
-            result.push({ ...g, services: svcs });
-          }
+          if (g.id === 'ungrouped') continue;
+          const svcs = allServices.value.filter(s => smap[s.serviceKey] === g.id);
+          result.push({ ...g, services: svcs });
         }
-        // ungrouped
-        const ungrouped = allServices.value.filter(s => {
-          const mapped = (cfg.serviceGroupMap || {})[s.serviceKey];
-          if (mapped) return false;
-          if (s.category) {
-            const matched = result.some(g => {
-              if (g.id === 'ungrouped') return false;
-              const catNorm = (s.category || '').toLowerCase().replace(/[\s\-_]/g, '');
-              const gNorm = (g.name || '').toLowerCase().replace(/[\s\-_]/g, '');
-              return catNorm === gNorm || catNorm.includes(gNorm) || gNorm.includes(catNorm);
-            });
-            if (matched) return false;
-          }
-          return true;
-        });
+        // ungrouped: services with no explicit group mapping
+        const groupedKeys = new Set(Object.entries(smap).filter(([k,v]) => v !== 'ungrouped').map(([k]) => k));
+        const ungrouped = allServices.value.filter(s => !groupedKeys.has(s.serviceKey));
         if (ungrouped.length > 0) {
-          const ug = result.find(g => g.id === 'ungrouped');
-          if (ug) { ug.services = ungrouped; }
-          else { result.push({ id: 'ungrouped', name: '未分组', order: 999, color: '#475569', icon: 'box', services: ungrouped }); }
+          const ug = groups.find(g => g.id === 'ungrouped');
+          if (ug) result.push({ ...ug, services: ungrouped });
+          else result.push({ id: 'ungrouped', name: '未分组', order: 999, color: '#475569', icon: 'box', services: ungrouped });
         }
         return result;
       }
-      // All servers: merge groups by name
+      // All servers: merge groups by name, explicit mapping only
       const map = new Map();
       for (const srv of servers.value) {
         const cfg = groupConfig.servers[srv.id];
@@ -703,14 +694,9 @@ createApp({
       })).filter(g => g.services.length > 0);
     });
 
-    // ========== Stats ==========
+    // ========== Stats (simplified: no health status) ==========
     const stats = computed(() => {
-      const all = allServices.value;
-      const online = all.filter(s => effectiveStatus(s) === 'online').length;
-      const offline = all.filter(s => effectiveStatus(s) === 'offline').length;
-      const srvOff = all.filter(s => effectiveStatus(s) === 'server_offline').length;
-      const unknown = all.filter(s => effectiveStatus(s) === 'unknown' || effectiveStatus(s) === 'checking').length;
-      return { total: all.length, online, offline, srvOff, unknown };
+      return { total: allServices.value.length, groupCount: serviceGroups.value.filter(g => g.services.length > 0 || g.id !== 'ungrouped').length };
     });
 
     // ========== Group management ==========
@@ -770,6 +756,200 @@ createApp({
         await loadGroupConfig();
         await loadAutoServices();
       } catch(e) { console.error('move failed:', e); }
+    }
+
+    // ========== Nav Page: Add / Edit / Delete / Batch / Drag ==========
+    const showNavAddModal = ref(false);
+    const navAddForm = reactive({ name:'', url:'', desc:'', groupId:'', account:'', password:'' });
+    const showNavEditModal = ref(false);
+    const navEditForm = reactive({ id:'', serverId:'', name:'', url:'', desc:'', groupId:'', account:'', password:'' });
+
+    // Batch mode
+    const batchMode = ref(false);
+    const batchSelected = ref(new Set());
+    const batchTargetGroup = ref('');
+
+    // Drag state
+    const dragOverKey = ref('');
+    let draggedService = null;
+
+    // Group options for add/edit dropdowns (exclude ungrouped)
+    const navGroupOptions = computed(() => {
+      const groups = [];
+      const seen = new Set();
+      for (const srv of servers.value) {
+        const cfg = groupConfig.servers[srv.id];
+        if (!cfg) continue;
+        for (const g of (cfg.groups || [])) {
+          if (g.id !== 'ungrouped' && !seen.has(g.id)) {
+            seen.add(g.id);
+            groups.push(g);
+          }
+        }
+      }
+      return groups;
+    });
+
+    function openNavAdd() {
+      Object.assign(navAddForm, { name:'', url:'', desc:'', groupId:'', account:'', password:'' });
+      showNavAddModal.value = true;
+    }
+
+    async function navAddService() {
+      if (!navAddForm.name.trim() || !navAddForm.url.trim()) {
+        return alert('请填写名称和访问地址');
+      }
+      try {
+        await apiPost(`${API}/services/nav-add`, {
+          name: navAddForm.name.trim(),
+          url: navAddForm.url.trim(),
+          description: navAddForm.desc.trim(),
+          group_id: navAddForm.groupId || null,
+          account: navAddForm.account || null,
+          password: navAddForm.password || null,
+        });
+        showNavAddModal.value = false;
+        await loadAutoServices();
+        await loadGroupConfig();
+      } catch(e) { alert('添加失败: ' + e.message); }
+    }
+
+    function openNavEdit(svc) {
+      // Resolve current group from groupConfig
+      const cfg = groupConfig.servers[svc.serverId];
+      const groupId = cfg?.serviceGroupMap?.[svc.serviceKey] || '';
+      Object.assign(navEditForm, {
+        id: svc.id, serverId: svc.serverId,
+        name: svc.name, url: svc.url || '',
+        desc: svc.description || '',
+        groupId, account: svc.account || '', password: svc.password || '',
+      });
+      showNavEditModal.value = true;
+    }
+
+    async function navSaveEdit() {
+      if (!navEditForm.name.trim()) return alert('名称不能为空');
+      try {
+        // Update service fields
+        await fetch(`${API}/services/${navEditForm.id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: navEditForm.name.trim(),
+            url: navEditForm.url.trim(),
+            description: navEditForm.desc.trim(),
+            account: navEditForm.account || null,
+            password: navEditForm.password || null,
+          }),
+        });
+        // Update group mapping
+        const serviceKey = `auto:${navEditForm.serverId}:${navEditForm.id}`;
+        await fetch(`${API}/group-config/service-map?serviceKey=${encodeURIComponent(serviceKey)}&groupId=${encodeURIComponent(navEditForm.groupId || 'ungrouped')}`, {
+          method: 'PATCH',
+        });
+        showNavEditModal.value = false;
+        await loadAutoServices();
+        await loadGroupConfig();
+      } catch(e) { alert('保存失败: ' + e.message); }
+    }
+
+    async function navDeleteService(svc) {
+      if (!confirm(`确认删除服务「${svc.name}」？`)) return;
+      try {
+        await fetch(`${API}/services/${svc.id}`, { method: 'DELETE' });
+        await loadAutoServices();
+        await loadGroupConfig();
+      } catch(e) { alert('删除失败: ' + e.message); }
+    }
+
+    function toggleBatchMode() {
+      batchMode.value = !batchMode.value;
+      if (!batchMode.value) { batchSelected.value = new Set(); batchTargetGroup.value = ''; }
+    }
+
+    function toggleBatchSelect(serviceKey) {
+      const next = new Set(batchSelected.value);
+      if (next.has(serviceKey)) next.delete(serviceKey);
+      else next.add(serviceKey);
+      batchSelected.value = next;
+    }
+
+    function batchSelectAll() {
+      batchSelected.value = new Set(autoServices.value.map(s => s.serviceKey));
+    }
+
+    function batchClear() {
+      batchSelected.value = new Set();
+    }
+
+    async function batchMove() {
+      if (batchSelected.value.size === 0 || !batchTargetGroup.value) return;
+      // Resolve service ids from serviceKeys
+      const ids = autoServices.value
+        .filter(s => batchSelected.value.has(s.serviceKey))
+        .map(s => s.id);
+      try {
+        await apiPost(`${API}/services/batch-move`, { ids, group_id: batchTargetGroup.value });
+        await loadAutoServices();
+        await loadGroupConfig();
+        batchSelected.value = new Set();
+        batchTargetGroup.value = '';
+      } catch(e) { alert('批量移动失败: ' + e.message); }
+    }
+
+    async function batchDelete() {
+      if (batchSelected.value.size === 0) return;
+      if (!confirm(`确认删除选中的 ${batchSelected.value.size} 个服务？`)) return;
+      const ids = autoServices.value
+        .filter(s => batchSelected.value.has(s.serviceKey))
+        .map(s => s.id);
+      try {
+        await apiPost(`${API}/services/batch-delete`, { ids });
+        await loadAutoServices();
+        await loadGroupConfig();
+        batchSelected.value = new Set();
+      } catch(e) { alert('批量删除失败: ' + e.message); }
+    }
+
+    // Drag & drop sorting
+    function onDragStart(event, svc) {
+      if (batchMode.value) { event.preventDefault(); return; }
+      draggedService = svc;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', svc.serviceKey);
+    }
+
+    function onDragOver(event, svc) {
+      if (batchMode.value) return;
+      event.dataTransfer.dropEffect = 'move';
+      if (draggedService && draggedService.serviceKey !== svc.serviceKey) {
+        dragOverKey.value = svc.serviceKey;
+      }
+    }
+
+    function onDragLeave(event) {
+      dragOverKey.value = '';
+    }
+
+    async function onDrop(event, targetSvc) {
+      if (batchMode.value || !draggedService) return;
+      dragOverKey.value = '';
+      if (draggedService.serviceKey === targetSvc.serviceKey) { draggedService = null; return; }
+      const dragged = draggedService;
+      draggedService = null;
+      // Swap sort_order between dragged and target
+      try {
+        const draggedOrder = dragged.sort_order || 0;
+        const targetOrder = targetSvc.sort_order || 0;
+        await fetch(`${API}/services/${dragged.id}/sort`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sort_order: targetOrder }),
+        });
+        await fetch(`${API}/services/${targetSvc.id}/sort`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sort_order: draggedOrder }),
+        });
+        await loadAutoServices();
+      } catch(e) { console.error('sort failed:', e); }
     }
 
     // ========== Group Chip Filter ==========
@@ -1551,12 +1731,19 @@ createApp({
     return {
       currentPage, darkMode, searchQuery, clock, collapsed,
       groupConfig, autoServices,
-      mergedGroups, filteredGroups, stats, effectiveStatus,
+      mergedGroups, filteredGroups, stats,
       navServerId, navServerTabs,
       selectedGroupIds, showAllGroups, toggleGroupFilter, clearGroupFilter,
       showGroupModal, newGroupName, newGroupId, newGroupColor,
       addGroup, deleteGroup, startEditGroup, cancelEditGroup, saveEditGroup, editingGroup, editGroupName, editGroupColor, editGroupOrder, moveServiceToGroup,
       groupManageServerId, applyDefaultGroups,
+
+      // Nav page: add/edit/delete/batch/drag
+      showNavAddModal, navAddForm, openNavAdd, navAddService,
+      showNavEditModal, navEditForm, openNavEdit, navSaveEdit, navDeleteService,
+      navGroupOptions,
+      batchMode, batchSelected, batchTargetGroup, toggleBatchMode, toggleBatchSelect, batchSelectAll, batchClear, batchMove, batchDelete,
+      dragOverKey, onDragStart, onDragOver, onDragLeave, onDrop,
 
       copyText, iconMap, openService,
       termTabs, termActiveId, termRefs, termConnect, termClose, termQuickConnect,
@@ -1586,7 +1773,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.12.1</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.18.0</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -1631,12 +1818,27 @@ createApp({
 
     <!-- ===== NAV PAGE ===== -->
     <div class="content" v-if="currentPage==='nav'">
-      <!-- Stat Cards (top priority) -->
+      <!-- Stat Cards -->
       <div class="stat-row">
         <div class="stat-card teal"><div class="num">{{stats.total}}</div><div class="label">服务总数</div></div>
-        <div class="stat-card green"><div class="num">{{stats.online}}</div><div class="label">在线</div></div>
-        <div class="stat-card red"><div class="num">{{stats.offline}}</div><div class="label">离线</div></div>
-        <div class="stat-card orange"><div class="num">{{stats.srvOff}}</div><div class="label">服务器离线</div></div>
+        <div class="stat-card blue"><div class="num">{{stats.groupCount}}</div><div class="label">分组数</div></div>
+        <div class="stat-card add-btn" @click="openNavAdd()"><div class="num">+</div><div class="label">添加服务</div></div>
+      </div>
+
+      <!-- Nav Toolbar (batch operations) -->
+      <div class="nav-toolbar">
+        <button class="btn-sm" :class="{primary: batchMode}" @click="toggleBatchMode()">{{ batchMode ? '退出批量' : '批量操作' }}</button>
+        <template v-if="batchMode">
+          <span class="batch-info">已选 {{batchSelected.size}} 项</span>
+          <button class="btn-sm" @click="batchSelectAll()">全选</button>
+          <button class="btn-sm" @click="batchClear()">清空</button>
+          <select class="batch-group-select" v-model="batchTargetGroup">
+            <option value="">移动到分组...</option>
+            <option v-for="g in navGroupOptions" :key="g.id" :value="g.id">{{g.name}}</option>
+          </select>
+          <button class="btn-sm" @click="batchMove()" :disabled="!batchTargetGroup || batchSelected.size===0">移动</button>
+          <button class="btn-sm danger" @click="batchDelete()" :disabled="batchSelected.size===0">删除</button>
+        </template>
       </div>
 
       <!-- Group Filter Chips (primary filter) -->
@@ -1663,7 +1865,6 @@ createApp({
         </div>
         <div class="server-tab" v-for="srv in navServerTabs" :key="srv.id"
              :class="{active: navServerId===srv.id}" @click="navServerId=srv.id">
-          <span class="st-dot" :class="srv.status==='online'?'online':'offline'"></span>
           {{srv.name}}
           <span class="st-count">{{srv.serviceCount}}</span>
         </div>
@@ -1674,35 +1875,34 @@ createApp({
           <span class="group-dot" :style="{background:g.color}"></span>
           <span class="group-name">{{g.name}}</span>
           <span class="group-count">{{g.services.length}} 个服务</span>
-          <span v-if="g.services.filter(s=>effectiveStatus(s)==='online').length>0" style="font-size:11px;color:var(--green);margin-left:4px">
-            {{g.services.filter(s=>effectiveStatus(s)==='online').length}} 在线
-          </span>
         </div>
         <div class="svc-grid">
-          <div class="svc-card" v-for="s in g.services" :key="s.serviceKey" @click="openService(s.fullUrl)">
+          <div class="svc-card" v-for="s in g.services" :key="s.serviceKey"
+               :class="{'batch-selected': batchSelected.has(s.serviceKey), 'drag-over': dragOverKey===s.serviceKey}"
+               draggable="true"
+               @dragstart="onDragStart($event, s)"
+               @dragover.prevent="onDragOver($event, s)"
+               @dragleave="onDragLeave($event)"
+               @drop.prevent="onDrop($event, s)"
+               @click="batchMode ? toggleBatchSelect(s.serviceKey) : openService(s.fullUrl)">
             <div class="svc-card-top">
-              <div class="svc-name">
-                <span class="status-dot" :class="effectiveStatus(s)"></span>
-                {{s.name}}
+              <div class="svc-name">{{s.name}}</div>
+              <div class="svc-actions" v-if="!batchMode">
+                <button class="svc-action-btn" @click.stop="openNavEdit(s)" title="编辑">✎</button>
+                <button class="svc-action-btn danger" @click.stop="navDeleteService(s)" title="删除">✕</button>
               </div>
-              <span class="svc-badge"
-                :class="effectiveStatus(s)==='server_offline' ? 'srv-offline' : 'auto'">
-                {{effectiveStatus(s)==='server_offline' ? '服务器离线' : '自动检测'}}
-              </span>
+              <div class="svc-batch-check" v-if="batchMode">
+                <input type="checkbox" :checked="batchSelected.has(s.serviceKey)" @click.stop="toggleBatchSelect(s.serviceKey)">
+              </div>
             </div>
             <div class="svc-desc">{{s.desc || s.description || ''}}</div>
             <div class="svc-server-info" v-if="!navServerId">
               <svg width="12" height="12"><use href="#fa-server"/></svg>
               {{s.serverName}}
-              <span v-if="s.containerName" style="margin-left:6px">| {{s.containerName}}</span>
-            </div>
-            <div class="svc-server-info" v-else-if="s.containerName">
-              {{s.containerName}}
             </div>
             <div class="svc-url" v-if="s.fullUrl">
-              <a :href="s.fullUrl" target="_blank" rel="noopener">{{s.fullUrl}}</a>
+              <a :href="s.fullUrl" target="_blank" rel="noopener" @click.stop>{{s.fullUrl}}</a>
             </div>
-
           </div>
         </div>
       </div>
@@ -2228,6 +2428,50 @@ createApp({
           </button>
           <button class="btn-sm" @click="showAddServerModal=false;Object.assign(sshTestResult,{testing:false,success:null,message:''});newServer.auto_deploy_agent=true">取消</button>
           <button class="btn-sm primary" @click="addServer">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Nav Add Service Modal -->
+    <div class="modal-overlay" v-if="showNavAddModal" @click.self="showNavAddModal=false">
+      <div class="modal" style="min-width:420px;max-width:480px">
+        <h3>添加服务</h3>
+        <div class="modal-row"><label>名称</label><input v-model="navAddForm.name" placeholder="如：Nginx 管理面板" @keyup.enter="navAddService()"></div>
+        <div class="modal-row"><label>访问地址</label><input v-model="navAddForm.url" placeholder="http://ip:port 或 /path" @keyup.enter="navAddService()"></div>
+        <div class="modal-row"><label>描述</label><input v-model="navAddForm.desc" placeholder="可选"></div>
+        <div class="modal-row"><label>分组</label>
+          <select v-model="navAddForm.groupId">
+            <option value="">未分组</option>
+            <option v-for="g in navGroupOptions" :key="g.id" :value="g.id">{{g.name}}</option>
+          </select>
+        </div>
+        <div class="modal-row"><label>账号</label><input v-model="navAddForm.account" placeholder="可选"></div>
+        <div class="modal-row"><label>密码</label><input v-model="navAddForm.password" placeholder="可选"></div>
+        <div class="modal-footer">
+          <button class="btn-sm" @click="showNavAddModal=false">取消</button>
+          <button class="btn-sm primary" @click="navAddService()">添加</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Nav Edit Service Modal -->
+    <div class="modal-overlay" v-if="showNavEditModal" @click.self="showNavEditModal=false">
+      <div class="modal" style="min-width:420px;max-width:480px">
+        <h3>编辑服务</h3>
+        <div class="modal-row"><label>名称</label><input v-model="navEditForm.name"></div>
+        <div class="modal-row"><label>访问地址</label><input v-model="navEditForm.url"></div>
+        <div class="modal-row"><label>描述</label><input v-model="navEditForm.desc"></div>
+        <div class="modal-row"><label>分组</label>
+          <select v-model="navEditForm.groupId">
+            <option value="">未分组</option>
+            <option v-for="g in navGroupOptions" :key="g.id" :value="g.id">{{g.name}}</option>
+          </select>
+        </div>
+        <div class="modal-row"><label>账号</label><input v-model="navEditForm.account"></div>
+        <div class="modal-row"><label>密码</label><input v-model="navEditForm.password"></div>
+        <div class="modal-footer">
+          <button class="btn-sm" @click="showNavEditModal=false">取消</button>
+          <button class="btn-sm primary" @click="navSaveEdit()">保存</button>
         </div>
       </div>
     </div>
