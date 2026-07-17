@@ -201,12 +201,13 @@ class ServiceUpdate(BaseModel):
     hidden: Optional[bool] = None
     account: Optional[str] = None
     password: Optional[str] = None
+    sort_order: Optional[int] = None
 
 class PinToggle(BaseModel):
     pinned: bool
 
 # === App ===
-app = FastAPI(title="OpsCenter API", version="3.21.0")
+app = FastAPI(title="OpsCenter API", version="3.22.0")
 
 
 # Category metadata for enhanced UI
@@ -961,6 +962,8 @@ def _sync_nginx_routes(srv, db):
                     Service.container_name == cname,
                 ).first()
             if existing:
+                if existing.source == ServiceSource.manual.value:
+                    continue
                 # Already exists - enrich with nginx domain info
                 changed = False
                 if ng_domain and not existing.host_domain:
@@ -1039,6 +1042,8 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                 Service.container_name == name,
             ).first()
             if existing:
+                if existing.source == ServiceSource.manual.value:
+                    continue
                 changed = False
                 for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
                                    ("icon", svc_icon), ("description", svc_desc), ("image", image),
@@ -1352,6 +1357,8 @@ def _do_sync_ports_systemd(srv, db, scan_data):
         ).first()
         
         if existing:
+            if existing.source == ServiceSource.manual.value:
+                continue
             changed = False
             for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
                                ("icon", svc_icon), ("description", svc_desc),
@@ -1390,6 +1397,8 @@ def _do_sync_ports_systemd(srv, db, scan_data):
             Service.container_name == dedup_key,
         ).first()
         if existing:
+            if existing.source == ServiceSource.manual.value:
+                continue
             existing.status = ServiceStatus.up.value if status_str == "active" else ServiceStatus.down.value
             existing.last_scanned_at = datetime.utcnow()
             continue
@@ -1463,6 +1472,8 @@ def _sync_ssh_containers_to_db(srv, db, client):
                 Service.container_name == name,
             ).first()
             if existing:
+                if existing.source == ServiceSource.manual.value:
+                    continue
                 for field, val in [("name", svc_name), ("url", svc_url), ("category", svc_category),
                                    ("icon", svc_icon), ("description", svc_desc), ("image", image), ("ports", ports)]:
                     if val and getattr(existing, field) != val:
@@ -1634,8 +1645,6 @@ def delete_service(service_id: str):
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
         if not svc:
             raise HTTPException(404, "Service not found")
-        if svc.source == ServiceSource.docker_label.value:
-            raise HTTPException(400, "Cannot delete auto-discovered service (disable label instead)")
         db.delete(svc)
         db.commit()
         return {"ok": True}
