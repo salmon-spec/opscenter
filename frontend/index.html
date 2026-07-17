@@ -1982,7 +1982,6 @@ createApp({
             <div class="sc-btn-row">
               <button class="btn-sm primary" @click="currentServerId=srv.id;currentPage='monitor'">监控</button>
               <button class="btn-sm" @click="termConnect(srv.id)" style="color:var(--accent)">终端</button>
-              <button class="btn-sm" :disabled="scanningServerId===srv.id" @click="triggerScan(srv.id)">{{scanningServerId===srv.id ? "扫描中..." : "扫描"}}</button>
               <button class="btn-deploy-agent" v-if="srv.agent_type !== 'local' && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
               <button class="btn-deploy-agent" v-if="srv.agent_status==='running'" @click="deployAgent(srv.id)">升级Agent</button>
               <button class="btn-sm" v-if="srv.agent_status==='running'" :disabled="checkingAgentServerId===srv.id" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">{{checkingAgentServerId===srv.id ? '检查中...' : '检查Agent'}}</button>
