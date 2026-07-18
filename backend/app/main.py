@@ -217,7 +217,7 @@ class LoginRequest(BaseModel):
     password: str
 
 # === App ===
-app = FastAPI(title="OpsCenter API", version="3.23.0")
+app = FastAPI(title="OpsCenter API", version="3.23.1")
 
 
 # Category metadata for enhanced UI
@@ -584,8 +584,8 @@ async def startup():
     asyncio.create_task(background_agent_collector())
     # Migrate groups.json to per-server format if needed
     _migrate_groups_json()
-    # Auto-assign groups on startup
-    _auto_assign_all_groups()
+    # v3.23.1: 移除启动时自动分组(_auto_assign_all_groups)，避免覆盖用户手动配置的分组
+    # v3.22.x 已转为纯手动管理模式，启动自动分组与手动管理设计冲突
 
 
 # === Server APIs ===
