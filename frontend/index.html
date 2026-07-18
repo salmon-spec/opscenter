@@ -355,6 +355,28 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .fm-upload-status{font-size:11px;color:var(--text3)}
 .fm-loading{text-align:center;padding:20px;color:var(--text3);font-size:12px}
 .term-connecting{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85);color:var(--accent);font-size:14px;z-index:5}
+/* === Login Modal & User (v3.23.0) === */
+.login-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:9999}
+.login-box{background:#1e293b;border:1px solid #334155;border-radius:14px;padding:32px 28px;width:340px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.login-header{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.login-header h3{margin:0;font-size:18px;color:#e2e8f0}
+.login-header .logo-icon{background:linear-gradient(135deg,#3b82f6,#06b6d4);color:#fff;border-radius:10px;display:flex;align-items:center;justify-content:center}
+.login-sub{margin:0 0 18px;color:#94a3b8;font-size:13px}
+.login-field{margin-bottom:12px}
+.login-field input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:14px;outline:none}
+.login-field input:focus{border-color:#3b82f6}
+.login-error{color:#ef4444;font-size:13px;margin:-4px 0 10px}
+.login-btn{width:100%;padding:11px;border:none;border-radius:8px;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .2s}
+.login-btn:disabled{opacity:.6;cursor:not-allowed}
+.login-cancel{display:block;text-align:center;margin-top:12px;color:#94a3b8;font-size:13px;cursor:pointer}
+.login-cancel:hover{color:#e2e8f0}
+.sidebar-user{padding:10px 14px;border-top:1px solid #334155}
+.user-info{display:flex;align-items:center;gap:10px}
+.user-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#10b981,#059669);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;flex-shrink:0}
+.user-meta{display:flex;flex-direction:column;min-width:0}
+.user-name{color:#e2e8f0;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.user-logout{color:#94a3b8;font-size:12px;cursor:pointer;margin-top:2px}
+.user-logout:hover{color:#ef4444}
 </style>
 <svg style="display:none" xmlns="http://www.w3.org/2000/svg">
 <symbol id="fa-server" viewBox="0 0 640 512"><path fill="currentColor" d="M480 96H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zm0 128H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zm0 128H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zM64 0C28.7 0 0 28.7 0 64v64c0 35.3 28.7 64 64 64h512c35.3 0 64-28.7 64-64V64c0-35.3-28.7-64-64-64H64zm0 256c-35.3 0-64 28.7-64 64v64c0 35.3 28.7 64 64 64h512c35.3 0 64-28.7 64-64v-64c0-35.3-28.7-64-64-64H64z"/></symbol>
@@ -511,12 +533,67 @@ createApp({
     let clockTimer;
     function updateClock() { clock.value = new Date().toLocaleTimeString('zh-CN',{hour12:false}); }
 
+    // ========== Auth (v3.23.0) ==========
+    const authToken = ref(localStorage.getItem('ops_token') || '');
+    const currentUser = ref(JSON.parse(localStorage.getItem('ops_user') || 'null'));
+    const isLoggedIn = computed(() => !!authToken.value);
+    const showLoginModal = ref(false);
+    const loginForm = reactive({ username: '', password: '' });
+    const loginLoading = ref(false);
+    const loginError = ref('');
+    let pendingPage = '';
+
+    function authHeaders(extra) {
+      const h = extra ? { ...extra } : {};
+      if (authToken.value) h['Authorization'] = 'Bearer ' + authToken.value;
+      return h;
+    }
+    function handleAuthError(status) {
+      if (status === 401) {
+        authToken.value = ''; currentUser.value = null;
+        localStorage.removeItem('ops_token'); localStorage.removeItem('ops_user');
+        if (!showLoginModal.value) showLoginModal.value = true;
+        return true;
+      }
+      return false;
+    }
+    async function doLogin() {
+      loginLoading.value = true; loginError.value = '';
+      try {
+        const r = await fetch(`${API}/auth/login`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: loginForm.username, password: loginForm.password }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { loginError.value = data.detail || '登录失败'; return; }
+        authToken.value = data.token;
+        currentUser.value = data.user;
+        localStorage.setItem('ops_token', data.token);
+        localStorage.setItem('ops_user', JSON.stringify(data.user));
+        showLoginModal.value = false;
+        loginForm.password = '';
+        if (pendingPage) { currentPage.value = pendingPage; pendingPage = ''; }
+        showToast('登录成功，欢迎 ' + (data.user.display_name || data.user.username), 'ok');
+      } catch (e) { loginError.value = '网络错误: ' + e.message; }
+      finally { loginLoading.value = false; }
+    }
+    function doLogout() {
+      authToken.value = ''; currentUser.value = null;
+      localStorage.removeItem('ops_token'); localStorage.removeItem('ops_user');
+      if (currentPage.value === 'resources') currentPage.value = 'nav';
+      showToast('已退出登录', 'ok');
+    }
+    function goResources() {
+      if (!isLoggedIn.value) { pendingPage = 'resources'; showLoginModal.value = true; return; }
+      currentPage.value = 'resources';
+    }
+
     // ========== API helpers ==========
-    async function apiGet(url) { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return r.json(); }
-    async function apiPost(url, body) { return fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
-    async function apiPut(url, body) { return fetch(url, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); }
-    async function apiPatch(url) { return fetch(url, { method:'PATCH' }); }
-    async function apiDelete(url) { return fetch(url, { method:'DELETE' }); }
+    async function apiGet(url) { const r = await fetch(url, { headers: authHeaders() }); if (handleAuthError(r.status)) throw new Error('401'); if (!r.ok) throw new Error(r.status); return r.json(); }
+    async function apiPost(url, body) { const r = await fetch(url, { method:'POST', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify(body) }); handleAuthError(r.status); return r; }
+    async function apiPut(url, body) { const r = await fetch(url, { method:'PUT', headers: authHeaders({'Content-Type':'application/json'}), body: JSON.stringify(body) }); handleAuthError(r.status); return r; }
+    async function apiPatch(url) { const r = await fetch(url, { method:'PATCH', headers: authHeaders() }); handleAuthError(r.status); return r; }
+    async function apiDelete(url) { const r = await fetch(url, { method:'DELETE', headers: authHeaders() }); handleAuthError(r.status); return r; }
 
     // ========== Agent Management ==========
     async function deployAgent(serverId) {
@@ -1151,6 +1228,10 @@ createApp({
 
     // ========== Init ==========
     onMounted(async () => {
+      // 未登录不留在资源管理页（v3.23.0 鉴权）
+      if (currentPage.value === 'resources' && !isLoggedIn.value) {
+        currentPage.value = 'nav';
+      }
       updateClock();
       clockTimer = setInterval(updateClock, 1000);
       // Preload ECharts immediately (non-blocking)
@@ -1600,6 +1681,8 @@ createApp({
 
     return {
       currentPage, darkMode, searchQuery, clock, collapsed,
+      authToken, currentUser, isLoggedIn, showLoginModal, loginForm, loginLoading, loginError,
+      doLogin, doLogout, goResources,
       groupConfig, autoServices,
       mergedGroups, filteredGroups, stats, effectiveStatus,
       navServerId, navServerTabs,
@@ -1638,7 +1721,7 @@ createApp({
   <aside class="sidebar" :class="{collapsed}">
     <div class="sidebar-logo">
       <div class="logo-icon">O</div>
-      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.22.0</small></div>
+      <div class="logo-text" v-show="!collapsed">OpsCenter<small>运维工作台 v3.23.0</small></div>
     </div>
     <nav class="sidebar-nav">
       <div class="nav-section-title">主导航</div>
@@ -1649,7 +1732,7 @@ createApp({
         <svg class="nav-icon"><use href="#fa-gauge"/></svg><span>监控中心</span>
       </div>
 
-      <div class="nav-item" :class="{active:currentPage==='resources'}" @click="currentPage='resources'">
+      <div class="nav-item" :class="{active:currentPage==='resources'}" @click="goResources">
         <svg class="nav-icon"><use href="#fa-layer-group"/></svg><span>资源管理</span>
       </div>
       <div class="nav-item" :class="{active:currentPage==='terminal'}" @click="currentPage='terminal'">
@@ -1660,7 +1743,36 @@ createApp({
     <div class="sidebar-footer">
       <span class="online-dot"></span><span class="sidebar-footer-text">{{servers.length}} 服务器 · {{stats.total}} 服务</span>
     </div>
+    <div class="sidebar-user" v-if="isLoggedIn">
+      <div class="user-info">
+        <div class="user-avatar">{{(currentUser?.display_name || currentUser?.username || 'U')[0]}}</div>
+        <div class="user-meta" v-show="!collapsed">
+          <div class="user-name">{{currentUser?.display_name || currentUser?.username}}</div>
+          <a class="user-logout" @click="doLogout">退出登录</a>
+        </div>
+      </div>
+    </div>
   </aside>
+
+  <!-- Login Modal (v3.23.0) -->
+  <div class="login-overlay" v-if="showLoginModal" @click.self="showLoginModal=false">
+    <div class="login-box">
+      <div class="login-header">
+        <div class="logo-icon" style="width:44px;height:44px;font-size:20px">O</div>
+        <h3>OpsCenter 登录</h3>
+      </div>
+      <p class="login-sub">请登录后访问资源管理</p>
+      <div class="login-field">
+        <input v-model="loginForm.username" placeholder="用户名" @keyup.enter="$refs.loginPwd.focus()" autocomplete="username">
+      </div>
+      <div class="login-field">
+        <input ref="loginPwd" v-model="loginForm.password" type="password" placeholder="密码" @keyup.enter="doLogin" autocomplete="current-password">
+      </div>
+      <div class="login-error" v-if="loginError">{{loginError}}</div>
+      <button class="login-btn" @click="doLogin" :disabled="loginLoading">{{loginLoading ? '登录中...' : '登 录'}}</button>
+      <a class="login-cancel" @click="showLoginModal=false">取消</a>
+    </div>
+  </div>
 
   <!-- Main -->
   <div class="main" :class="{expanded:collapsed}">

@@ -105,3 +105,15 @@ class MetricHistory(Base):
     metric = Column(String(20), nullable=False)
     value = Column(Float, nullable=False)
 
+class User(Base):
+    """OpsCenter 登录用户（v3.23.0 新增，用于资源管理页鉴权）。"""
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    display_name = Column(String(100), nullable=True)
+    role = Column(String(20), default="admin")
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+

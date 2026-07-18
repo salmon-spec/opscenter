@@ -12,7 +12,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, User
+from app.auth import hash_password, verify_password, create_access_token, get_current_user
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
@@ -27,6 +28,11 @@ class TerminalCreateRequest(BaseModel):
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
 LOCAL_HOST = os.getenv("LOCAL_HOST", "101.200.91.229")
 LOCAL_DOMAIN = os.getenv("LOCAL_DOMAIN", "ops.salmon.xin")
+
+# === Auth Config (v3.23.0) ===
+JWT_SECRET = os.getenv("OPS_JWT_SECRET", "opscenter-default-secret-change-me-1234567890")
+ADMIN_USER = os.getenv("OPS_ADMIN_USER", "admin")
+ADMIN_PASSWORD = os.getenv("OPS_ADMIN_PASSWORD", "OpsCenter@2026")
 
 # Category -> Group ID auto-mapping for service grouping
 CATEGORY_TO_GROUP = {
@@ -206,8 +212,12 @@ class ServiceUpdate(BaseModel):
 class PinToggle(BaseModel):
     pinned: bool
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
 # === App ===
-app = FastAPI(title="OpsCenter API", version="3.22.0")
+app = FastAPI(title="OpsCenter API", version="3.23.0")
 
 
 # Category metadata for enhanced UI
@@ -491,6 +501,21 @@ async def startup():
     for i in range(30):
         try:
             Base.metadata.create_all(bind=engine)
+            # === 初始管理员用户（users 表为空时自动创建）===
+            try:
+                with get_db() as _udb:
+                    if _udb.query(User).count() == 0:
+                        _udb.add(User(
+                            username=ADMIN_USER,
+                            password_hash=hash_password(ADMIN_PASSWORD),
+                            display_name="管理员",
+                            role="admin",
+                            is_active=True,
+                        ))
+                        _udb.commit()
+                        print(f"[OpsCenter] 初始管理员已创建: {ADMIN_USER}")
+            except Exception as _e:
+                print(f"[OpsCenter] 管理员初始化跳过: {_e}")
             break
         except Exception:
             time.sleep(2)
@@ -564,6 +589,46 @@ async def startup():
 
 
 # === Server APIs ===
+# === Auth Routes (v3.23.0) ===
+@app.post("/api/v2/auth/login")
+def login(data: LoginRequest):
+    """用户名密码登录，返回 JWT 令牌。"""
+    with get_db() as db:
+        user = db.query(User).filter(User.username == data.username).first()
+        if not user or not verify_password(data.password, user.password_hash):
+            raise HTTPException(401, "用户名或密码错误")
+        if not user.is_active:
+            raise HTTPException(403, "用户已禁用")
+        user.last_login_at = datetime.utcnow()
+        db.commit()
+        token = create_access_token(user.id, user.username)
+        return {
+            "token": token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "display_name": user.display_name or user.username,
+                "role": user.role,
+            },
+        }
+
+@app.get("/api/v2/auth/me")
+def auth_me(current_user: User = Depends(get_current_user)):
+    """获取当前登录用户信息。"""
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "display_name": current_user.display_name or current_user.username,
+        "role": current_user.role,
+        "last_login_at": current_user.last_login_at.isoformat() if current_user.last_login_at else None,
+    }
+
+@app.post("/api/v2/auth/logout")
+def auth_logout(current_user: User = Depends(get_current_user)):
+    """登出（无状态JWT，后端不维护黑名单，前端清除令牌即可）。"""
+    return {"ok": True}
+
 @app.get("/api/v2/servers")
 def list_servers():
     with get_db() as db:
@@ -593,7 +658,7 @@ def list_servers():
         return result
 
 @app.post("/api/v2/servers", status_code=201)
-def create_server(data: ServerCreate):
+def create_server(data: ServerCreate, current_user: User = Depends(get_current_user)):
     with get_db() as db:
         ssh_key_val = data.ssh_key
         if data.ssh_password and not data.ssh_key:
@@ -638,7 +703,7 @@ def create_server(data: ServerCreate):
     return result
 
 @app.get("/api/v2/servers/{server_id}")
-def get_server(server_id: str):
+def get_server(server_id: str, current_user: User = Depends(get_current_user)):
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
@@ -652,7 +717,7 @@ def get_server(server_id: str):
         }
 
 @app.put("/api/v2/servers/{server_id}")
-def update_server(server_id: str, data: ServerUpdate):
+def update_server(server_id: str, data: ServerUpdate, current_user: User = Depends(get_current_user)):
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
@@ -664,7 +729,7 @@ def update_server(server_id: str, data: ServerUpdate):
         return {"ok": True}
 
 @app.delete("/api/v2/servers/{server_id}")
-def delete_server(server_id: str):
+def delete_server(server_id: str, current_user: User = Depends(get_current_user)):
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
@@ -698,7 +763,7 @@ def delete_server(server_id: str):
         return {"ok": True, "message": f"服务器'{server_name}'已删除{agent_info}"}
 
 @app.post("/api/v2/servers/{server_id}/scan")
-def scan_server(server_id: str, password: Optional[str] = None):
+def scan_server(server_id: str, password: Optional[str] = None, current_user: User = Depends(get_current_user)):
     """Scan services on a server using Agent (preferred) or SSH fallback. Unified for all servers."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
@@ -757,7 +822,7 @@ def scan_server(server_id: str, password: Optional[str] = None):
                 pass
 
 @app.post("/api/v2/servers/{server_id}/test")
-def test_server(server_id: str, password: Optional[str] = None):
+def test_server(server_id: str, password: Optional[str] = None, current_user: User = Depends(get_current_user)):
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
@@ -793,7 +858,7 @@ def test_server(server_id: str, password: Optional[str] = None):
 
 
 @app.post("/api/v2/test-ssh")
-def test_ssh_connection_api(data: SshTestRequest):
+def test_ssh_connection_api(data: SshTestRequest, current_user: User = Depends(get_current_user)):
     """Test SSH connection with provided credentials (before creating server)."""
     from app.ssh_manager import test_ssh_connection
     if not data.password and not data.ssh_key:
@@ -810,7 +875,7 @@ def test_ssh_connection_api(data: SshTestRequest):
 # === Agent Service Scan APIs ===
 
 @app.get("/api/v2/servers/{server_id}/agent/services")
-def get_agent_services(server_id: str):
+def get_agent_services(server_id: str, current_user: User = Depends(get_current_user)):
     """Preview Agent-discovered services without syncing to DB."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
@@ -1501,7 +1566,7 @@ def _sync_ssh_containers_to_db(srv, db, client):
 
 
 @app.post("/api/v2/servers/{server_id}/scan-services")
-def scan_server_services(server_id: str, password: Optional[str] = None):
+def scan_server_services(server_id: str, password: Optional[str] = None, current_user: User = Depends(get_current_user)):
     """Scan services on a server using Agent (preferred) or SSH fallback, and sync to DB. Unified for all servers."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
@@ -1602,7 +1667,7 @@ def list_services(server_id: Optional[str] = None, category: Optional[str] = Non
         return result
 
 @app.post("/api/v2/services", status_code=201)
-def create_service(data: ServiceCreate, server_id: str = Query(...)):
+def create_service(data: ServiceCreate, server_id: str = Query(...), current_user: User = Depends(get_current_user)):
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
@@ -1619,7 +1684,7 @@ def create_service(data: ServiceCreate, server_id: str = Query(...)):
         return {"id": str(svc.id), "name": svc.name}
 
 @app.put("/api/v2/services/{service_id}")
-def update_service(service_id: str, data: ServiceUpdate):
+def update_service(service_id: str, data: ServiceUpdate, current_user: User = Depends(get_current_user)):
     with get_db() as db:
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
         if not svc:
@@ -1640,7 +1705,7 @@ def update_service(service_id: str, data: ServiceUpdate):
         return {"ok": True}
 
 @app.delete("/api/v2/services/{service_id}")
-def delete_service(service_id: str):
+def delete_service(service_id: str, current_user: User = Depends(get_current_user)):
     with get_db() as db:
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
         if not svc:
@@ -1650,7 +1715,7 @@ def delete_service(service_id: str):
         return {"ok": True}
 
 @app.patch("/api/v2/services/{service_id}/pin")
-def toggle_pin(service_id: str):
+def toggle_pin(service_id: str, current_user: User = Depends(get_current_user)):
     """Toggle service pin status."""
     with get_db() as db:
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
@@ -1665,7 +1730,7 @@ def toggle_pin(service_id: str):
 
 # === Health Check Trigger ===
 @app.post("/api/v2/health-check")
-def trigger_health_check():
+def trigger_health_check(current_user: User = Depends(get_current_user)):
     """Manually trigger health check for all services."""
     import requests as req
     checked = 0
@@ -1722,7 +1787,7 @@ def trigger_health_check():
 
 
 @app.post("/api/v2/servers/{server_id}/ssh-test")
-def ssh_test(server_id: str, password: Optional[str] = None):
+def ssh_test(server_id: str, password: Optional[str] = None, current_user: User = Depends(get_current_user)):
     """Test SSH connection and auto-scan if successful."""
     from app.discovery import classify_image, get_icon, get_desc, get_url
     with get_db() as db:
@@ -1789,7 +1854,7 @@ def ssh_test(server_id: str, password: Optional[str] = None):
 
 # === Scan & Discovery ===
 @app.post("/api/v2/scan")
-def scan_all():
+def scan_all(current_user: User = Depends(get_current_user)):
     with get_db() as db:
         total_added = 0
         total_updated = 0
@@ -2165,7 +2230,7 @@ def list_categories(server_id: Optional[str] = None):
 # === Agent Management APIs ===
 
 @app.post("/api/v2/servers/{server_id}/deploy-agent")
-def deploy_agent_api(server_id: str):
+def deploy_agent_api(server_id: str, current_user: User = Depends(get_current_user)):
     """Deploy or re-deploy OpsAgent on a remote server."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
@@ -2227,7 +2292,7 @@ def deploy_agent_api(server_id: str):
 
 
 @app.get("/api/v2/servers/{server_id}/agent-status")
-def agent_status_api(server_id: str):
+def agent_status_api(server_id: str, current_user: User = Depends(get_current_user)):
     """Check OpsAgent status on a remote server."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
@@ -2270,7 +2335,7 @@ def agent_status_api(server_id: str):
 
 
 @app.delete("/api/v2/servers/{server_id}/agent")
-def uninstall_agent_api(server_id: str):
+def uninstall_agent_api(server_id: str, current_user: User = Depends(get_current_user)):
     """Uninstall OpsAgent from a remote server."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
@@ -2636,7 +2701,7 @@ def get_group_config(server_id: Optional[str] = Query(None)):
     return {"groups": config.get("defaultGroups", []), "serviceGroupMap": {}}
 
 @app.put("/api/v2/group-config")
-def update_group_config(data: GroupConfigUpdate, server_id: Optional[str] = Query(None)):
+def update_group_config(data: GroupConfigUpdate, server_id: Optional[str] = Query(None), current_user: User = Depends(get_current_user)):
     """Update groups.json configuration (full replace). If server_id given, update that server's section only."""
     current = _read_groups_json()
     if not server_id:
@@ -2663,7 +2728,7 @@ def update_group_config(data: GroupConfigUpdate, server_id: Optional[str] = Quer
     return {"ok": True, "server_id": server_id, "groups": current["servers"][server_id]["groups"], "serviceGroupMap": current["servers"][server_id]["serviceGroupMap"]}
 
 @app.patch("/api/v2/group-config/service-map")
-def update_service_group_map(serviceKey: str = Query(...), groupId: str = Query(...)):
+def update_service_group_map(serviceKey: str = Query(...), groupId: str = Query(...), current_user: User = Depends(get_current_user)):
     """Move a service to a different group. serviceKey format: auto:{server_id}:{service_id}. Parses server_id from key."""
     parts = serviceKey.split(":")
     server_id = parts[1] if len(parts) >= 3 and parts[0] == "auto" else None
@@ -2687,7 +2752,7 @@ def update_service_group_map(serviceKey: str = Query(...), groupId: str = Query(
     return {"ok": True, "serviceKey": serviceKey, "groupId": groupId, "server_id": server_id}
 
 @app.post("/api/v2/group-config/groups")
-def add_group(item: GroupItem, server_id: Optional[str] = Query(None)):
+def add_group(item: GroupItem, server_id: Optional[str] = Query(None), current_user: User = Depends(get_current_user)):
     """Add a new group to a specific server's groups (or defaultGroups if no server_id)."""
     current = _read_groups_json()
     if "servers" not in current:
@@ -2709,7 +2774,7 @@ def add_group(item: GroupItem, server_id: Optional[str] = Query(None)):
     return {"ok": True, "group": item.model_dump(), "server_id": server_id, "groups": groups}
 
 @app.put("/api/v2/group-config/groups/{group_id}")
-def update_group(group_id: str, item: GroupItem, server_id: Optional[str] = Query(None)):
+def update_group(group_id: str, item: GroupItem, server_id: Optional[str] = Query(None), current_user: User = Depends(get_current_user)):
     """Update a group's name, color, icon, or order for a specific server."""
     current = _read_groups_json()
     if "servers" not in current:
@@ -2734,7 +2799,7 @@ def update_group(group_id: str, item: GroupItem, server_id: Optional[str] = Quer
 
 
 @app.delete("/api/v2/group-config/groups/{group_id}")
-def delete_group(group_id: str, server_id: Optional[str] = Query(None)):
+def delete_group(group_id: str, server_id: Optional[str] = Query(None), current_user: User = Depends(get_current_user)):
     """Delete a group for a specific server. Also cleans serviceGroupMap mappings pointing to it."""
     if group_id == "ungrouped":
         raise HTTPException(400, "Cannot delete the 'ungrouped' group")
@@ -2787,7 +2852,7 @@ def get_merged_groups():
 
 
 @app.post("/api/v2/group-config/apply-default")
-def apply_default_groups(server_id: str = Query(..., description="Server ID to apply default groups to")):
+def apply_default_groups(server_id: str = Query(..., description="Server ID to apply default groups to"), current_user: User = Depends(get_current_user)):
     """Copy defaultGroups to a specific server's groups. Does not affect existing serviceGroupMap."""
     config = _read_groups_json()
     if "servers" not in config:
