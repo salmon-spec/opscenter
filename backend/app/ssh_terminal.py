@@ -342,8 +342,12 @@ class SSHTerminalSession:
     def is_alive(self):
         if self.pending_reconnect:
             return True  # Keep alive during grace period
-        # v3.23.2: 连接中也算 alive, 让前端能等到 ready
+        # v3.23.2: 连接中算 alive, 让前端能等到 ready
         if self.is_connecting:
+            # 孤儿保护: connecting 超 30s 视为前端未建 WS, 自动清理避免池占满
+            if time.time() - self.created_at > 30:
+                logger.warning(f"Session {self.session_id} connecting timeout(30s), force cleanup")
+                return False
             return True
         if not self.connected or not self.channel:
             return False
