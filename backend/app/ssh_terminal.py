@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
-"""SSH Terminal module - manages SSH sessions via WebSocket"""
+"""SSH Terminal module - manages SSH sessions via WebSocket
 
-import uuid, time, logging, threading
+v3.23.2 改动:
+1. SSHClientPool: 按 (host,port,user) 维护常驻 paramiko.SSHClient, 复用避免重复握手
+2. connect_in_background: 异步建连, POST 立即返回, WebSocket 等 ready
+3. 状态机: status = 'connecting' | 'ready' | 'failed', 暴露 connect_error
+4. 失败时打印 repr(e) 便于排障
+"""
+
+import uuid, time, logging, threading, io
 from typing import Optional
 import paramiko
 
@@ -11,6 +18,82 @@ _sessions: dict = {}
 MAX_SESSIONS_PER_SERVER = 5
 SESSION_TIMEOUT = 3600
 RECONNECT_GRACE = 30  # seconds to wait for WebSocket reconnect after disconnect
+
+
+# === SSH Client Pool (v3.23.2 新增) ===
+class SSHClientPool:
+    """按 (host,port,user) 维护常驻 SSHClient, 跨 session 复用避免重复 TCP+认证握手"""
+    _lock = threading.Lock()
+    _clients: dict = {}  # key -> {"client": paramiko.SSHClient, "last_use": float}
+
+    @classmethod
+    def _key(cls, host, port, user):
+        return f"{host}:{port}:{user}"
+
+    @classmethod
+    def _is_alive(cls, client):
+        try:
+            transport = client.get_transport() if client else None
+            return transport is not None and transport.is_active()
+        except Exception:
+            return False
+
+    @classmethod
+    def acquire(cls, host, port, user, password=None, key_content=None, timeout=10):
+        """获取一个可用 SSHClient, 优先复用池里已建好的。返回 (client, reused_bool)"""
+        key = cls._key(host, port, user)
+        with cls._lock:
+            entry = cls._clients.get(key)
+            if entry and cls._is_alive(entry["client"]):
+                entry["last_use"] = time.time()
+                logger.info(f"SSH pool reuse: {key}")
+                return entry["client"], True
+            if entry:
+                try: entry["client"].close()
+                except Exception: pass
+                del cls._clients[key]
+        # 释放锁后再建连, 避免 connect 耗时阻塞其他 acquire
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        kwargs = {"hostname": host, "port": port, "username": user, "timeout": timeout}
+        if key_content:
+            key_data = key_content
+            if not key_data.endswith("\n"):
+                key_data += "\n"
+            kf = io.StringIO(key_data)
+            pkey = None
+            for cls_k in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+                try:
+                    kf.seek(0)
+                    pkey = cls_k.from_private_key(kf)
+                    break
+                except Exception:
+                    continue
+            if pkey:
+                kwargs["pkey"] = pkey
+        elif password:
+            kwargs["password"] = password
+        client.connect(**kwargs)
+        try:
+            transport = client.get_transport()
+            if transport:
+                transport.set_keepalive(30)  # 30s 心跳保活
+        except Exception:
+            pass
+        with cls._lock:
+            cls._clients[key] = {"client": client, "last_use": time.time()}
+        logger.info(f"SSH pool new connection: {key}")
+        return client, False
+
+    @classmethod
+    def invalidate(cls, host, port, user):
+        """标某连接失效并移除 (失败重连场景)"""
+        key = cls._key(host, port, user)
+        with cls._lock:
+            entry = cls._clients.pop(key, None)
+        if entry:
+            try: entry["client"].close()
+            except Exception: pass
 
 
 class SSHTerminalSession:
@@ -25,51 +108,72 @@ class SSHTerminalSession:
         self.password = password
         self.key_content = key_content
         self.channel = None
-        self.client = None
+        self.client = None  # 复用池里的 client, 不归此 session 关闭
         self.connected = False
         self.created_at = time.time()
         self.last_activity = time.time()
         self.pending_reconnect = False
         self._reconnect_timer = None
+        # v3.23.2: 懒连接状态机
+        self.status = "connecting"  # connecting | ready | failed
+        self.connect_error = ""
+        self.connect_event = threading.Event()
+        self._connect_thread = None
 
     def connect(self, cols=80, rows=24):
+        """同步建连 (内部用池), 供旧接口和后台线程调用"""
         try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            kwargs = {"hostname": self.host, "port": self.port,
-                      "username": self.user, "timeout": 10}
-            if self.key_content:
-                import io
-                # Ensure key ends with newline (required by paramiko parser)
-                key_data = self.key_content
-                if not key_data.endswith("\n"):
-                    key_data += "\n"
-                kf = io.StringIO(key_data)
-                pkey = None
-                for cls in [paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey]:
-                    try:
-                        kf.seek(0)
-                        pkey = cls.from_private_key(kf)
-                        break
-                    except Exception:
-                        continue
-                if pkey:
-                    kwargs["pkey"] = pkey
-            elif self.password:
-                kwargs["password"] = self.password
-            client.connect(**kwargs)
-            self.client = client
+            client, reused = SSHClientPool.acquire(
+                self.host, self.port, self.user,
+                password=self.password, key_content=self.key_content)
             ch = client.invoke_shell(term="xterm-256color", width=cols, height=rows)
             ch.setblocking(0)
+            self.client = client
             self.channel = ch
             self.connected = True
             self.last_activity = time.time()
-            logger.info(f"SSH session {self.session_id} connected to {self.host}:{self.port}")
+            self.status = "ready"
+            self.connect_event.set()
+            logger.info(f"SSH session {self.session_id} connected to {self.host}:{self.port} (reused={reused})")
             return True
         except Exception as e:
-            logger.error(f"SSH connect failed for {self.host}:{self.port}: {e}")
+            err = str(e) or e.__class__.__name__
+            logger.error(f"SSH connect failed for {self.host}:{self.port}: {e!r}")
+            self.connect_error = err
+            self.status = "failed"
+            self.connect_event.set()
             self.close()
+            # 失败时让池清掉这条连接, 下次重新建
+            try:
+                SSHClientPool.invalidate(self.host, self.port, self.user)
+            except Exception:
+                pass
             return False
+
+    def connect_in_background(self, cols=80, rows=24):
+        """启动后台线程异步建连, 立即返回不阻塞调用方"""
+        if self._connect_thread and self._connect_thread.is_alive():
+            return
+        self.status = "connecting"
+        self.connect_event.clear()
+        self.connect_error = ""
+        self._connect_thread = threading.Thread(
+            target=self.connect, args=(cols, rows), daemon=True,
+            name=f"ssh-connect-{self.session_id[:8]}"
+        )
+        self._connect_thread.start()
+
+    def wait_ready(self, timeout=15):
+        """阻塞等待连接就绪, 返回 (ok: bool, err: str)"""
+        if not self.connect_event.wait(timeout=timeout):
+            return False, "SSH connect timeout"
+        if self.status == "ready":
+            return True, ""
+        return False, self.connect_error or "SSH connection failed"
+
+    @property
+    def is_connecting(self):
+        return self.status == "connecting"
 
     def resize(self, cols, rows):
         if self.channel and self.connected:
@@ -136,8 +240,7 @@ class SSHTerminalSession:
         if not sftp:
             return None, "SFTP not available"
         try:
-            import io as _io
-            buf = _io.BytesIO()
+            buf = io.BytesIO()
             sftp.getfo(remote_path, buf)
             buf.seek(0)
             return buf.read(), ""
@@ -150,8 +253,7 @@ class SSHTerminalSession:
         if not sftp:
             return False, "SFTP not available"
         try:
-            import io as _io
-            buf = _io.BytesIO(data)
+            buf = io.BytesIO(data)
             sftp.putfo(buf, remote_path)
             return True, ""
         except Exception as e:
@@ -207,9 +309,7 @@ class SSHTerminalSession:
         try:
             if self.channel: self.channel.close()
         except Exception: pass
-        try:
-            if self.client: self.client.close()
-        except Exception: pass
+        # 注意: client 由 SSHClientPool 统一管理, session.close 不 close client
         try:
             if hasattr(self, '_sftp') and self._sftp: self._sftp.close()
         except Exception: pass
@@ -242,6 +342,9 @@ class SSHTerminalSession:
     def is_alive(self):
         if self.pending_reconnect:
             return True  # Keep alive during grace period
+        # v3.23.2: 连接中也算 alive, 让前端能等到 ready
+        if self.is_connecting:
+            return True
         if not self.connected or not self.channel:
             return False
         try:

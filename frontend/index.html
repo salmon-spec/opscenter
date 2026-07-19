@@ -1421,6 +1421,7 @@ createApp({
           id: data.session_id,
           name: data.server_name + ' (' + data.user + ')',
           serverId: serverId,
+          host: data.server_host || '',
           connected: true,
           term: null,
           ws: null,
@@ -1429,10 +1430,11 @@ createApp({
         termTabs.value.push(tab);
         termActiveId.value = tab.id;
         currentPage.value = 'terminal';
+        // v3.23.2: 立即切到终端页并显示 loading, 让用户看到即时反馈
         termSaveState();
         await nextTick();
         // Initialize xterm after DOM renders
-        setTimeout(() => termInit(tab), 100);
+        setTimeout(() => termInit(tab), 50);
       } catch(e) {
         showToast('终端连接失败: ' + e.message, 'err');
       }
@@ -1519,6 +1521,11 @@ createApp({
       tab.term = term;
       tab.fitAddon = fitAddon;
 
+      // v3.23.2: 连接中提示 — xterm 渲染完成立即显示 loading
+      try {
+        term.write('\r\n\x1b[90m● 正在建立 SSH 连接到 ' + (tab.host || '服务器') + ' ...\x1b[0m\r\n\r\n');
+      } catch(e) {}
+
       // Open WebSocket
       const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = wsProto + '//' + location.host + '/ws/terminal/' + tab.id;
@@ -1535,7 +1542,31 @@ createApp({
       };
 
       ws.onmessage = (evt) => {
-        term.write(evt.data);
+        const data = evt.data;
+        // v3.23.2: 优先检查是否为后端控制消息 (connecting/ready/error)
+        if (typeof data === 'string' && data.length > 0 && data.length < 500 && data.charAt(0) === '{') {
+          try {
+            const obj = JSON.parse(data);
+            if (obj && obj.__ops === true) {
+              if (obj.type === 'status' && obj.value === 'ready') {
+                // 清掉之前 loading 那两行 (ANSI: 上移2行+清到屏底)
+                try { term.write('\x1b[2A\x1b[J'); } catch(e) {}
+                return;
+              }
+              if (obj.type === 'status' && obj.value === 'connecting') {
+                return;  // loading 已在 onopen 前写入, 无需重复
+              }
+              if (obj.type === 'error') {
+                try { term.write('\x1b[2A\x1b[J'); } catch(e) {}
+                term.write('\x1b[31m✗ 连接失败: ' + (obj.message || '未知错误') + '\x1b[0m\r\n');
+                showToast('终端连接失败: ' + (obj.message || ''), 'err');
+                try { ws.close(); } catch(e) {}
+                return;
+              }
+            }
+          } catch(e) { /* 不是 JSON 控制消息, 走普通数据流 */ }
+        }
+        term.write(data);
       };
 
       ws.onclose = () => {
