@@ -3013,8 +3013,8 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
     loop = asyncio.get_event_loop()
 
     # v3.23.2: 处理懒连接场景 — session 还在 connecting, 先推状态后等就绪
+    import json as _json
     if session.is_connecting:
-        import json as _json
         try:
             await websocket.send_text(_json.dumps({
                 "__ops": True, "type": "status", "value": "connecting",
@@ -3040,6 +3040,12 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
     elif not session.connected:
         await websocket.close(code=4004, reason="Invalid or expired session")
         return
+    else:
+        # v3.23.2: 连接池已 ready (POST -> WS 极快的情况) — 补发 ready 让前端清 loading
+        try:
+            await websocket.send_text(_json.dumps({"__ops": True, "type": "status", "value": "ready"}))
+        except Exception:
+            pass
 
     async def recv_from_ssh():
         """Read from SSH and send to WebSocket"""
