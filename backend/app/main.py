@@ -56,15 +56,7 @@ CATEGORY_TO_GROUP = {
 }
 
 DEFAULT_GROUPS = [
-    {"id": "cicd", "name": "代码与CI/CD", "order": 10, "color": "#2dd4bf", "icon": "code"},
-    {"id": "security", "name": "安全与认证", "order": 15, "color": "#ef4444", "icon": "shield"},
-    {"id": "monitor", "name": "监控与日志", "order": 20, "color": "#3b82f6", "icon": "chart"},
-    {"id": "network", "name": "网络与代理", "order": 30, "color": "#64748b", "icon": "globe"},
-    {"id": "database", "name": "数据存储", "order": 35, "color": "#a855f7", "icon": "database"},
     {"id": "app", "name": "应用服务", "order": 40, "color": "#f59e0b", "icon": "box"},
-    {"id": "ops", "name": "运维管理", "order": 45, "color": "#10b981", "icon": "tool"},
-    {"id": "middleware", "name": "消息与注册", "order": 50, "color": "#f97316", "icon": "cube"},
-    {"id": "auto_workflow", "name": "自动化工作流", "order": 60, "color": "#ec4899", "icon": "bolt"},
     {"id": "ungrouped", "name": "未分组", "order": 999, "color": "#475569", "icon": "inbox"},
 ]
 
@@ -2811,8 +2803,14 @@ def get_group_config(server_id: Optional[str] = Query(None)):
         return config
     srv = config.get("servers", {}).get(server_id)
     if srv:
-        return {"groups": srv.get("groups", []), "serviceGroupMap": srv.get("serviceGroupMap", {})}
-    return {"groups": config.get("defaultGroups", []), "serviceGroupMap": {}}
+        groups = list(srv.get("groups", []))
+        existing_ids = {g["id"] for g in groups}
+        for dg in DEFAULT_GROUPS:
+            if dg["id"] not in existing_ids:
+                groups.append(dict(dg))
+                existing_ids.add(dg["id"])
+        return {"groups": groups, "serviceGroupMap": srv.get("serviceGroupMap", {})}
+    return {"groups": list(DEFAULT_GROUPS), "serviceGroupMap": {}}
 
 @app.put("/api/v2/group-config")
 def update_group_config(data: GroupConfigUpdate, server_id: Optional[str] = Query(None), current_user: User = Depends(get_current_user)):

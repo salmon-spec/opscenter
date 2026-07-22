@@ -6,6 +6,13 @@
       "order": 40,
       "color": "#f59e0b",
       "icon": "box"
+    },
+    {
+      "id": "ungrouped",
+      "name": "未分组",
+      "order": 999,
+      "color": "#475569",
+      "icon": "inbox"
     }
   ],
   "servers": {
@@ -17,6 +24,13 @@
           "order": 40,
           "color": "#f59e0b",
           "icon": "box"
+        },
+        {
+          "id": "ungrouped",
+          "name": "未分组",
+          "order": 999,
+          "color": "#475569",
+          "icon": "inbox"
         }
       ],
       "serviceGroupMap": {
@@ -24,6 +38,25 @@
         "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:8ff1a58e-5fa0-4bb9-a4b9-8db9139c5e60": "app",
         "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:b225c423-c5d4-4f0d-ba43-f18ca2c425cb": "app"
       }
+    },
+    "c38966e8-18f1-4e45-a52f-5fefcbd50b9c": {
+      "groups": [
+        {
+          "id": "app",
+          "name": "应用服务",
+          "order": 40,
+          "color": "#f59e0b",
+          "icon": "box"
+        },
+        {
+          "id": "ungrouped",
+          "name": "未分组",
+          "order": 999,
+          "color": "#475569",
+          "icon": "inbox"
+        }
+      ],
+      "serviceGroupMap": {}
     }
   }
 }
