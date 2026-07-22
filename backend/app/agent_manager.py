@@ -104,6 +104,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
         # 3. Create directory and upload agent script
         token = existing_config.get('token', '') or _generate_token()
         _ssh_exec(client, f"sudo mkdir -p {AGENT_DIR} && sudo chmod 777 {AGENT_DIR}")
+        _ssh_exec(client, f"sudo rm -f {AGENT_DIR}/*.py {AGENT_DIR}/.agent_config")
 
         # Upload agent script + scanner module via SFTP
         sftp = client.open_sftp()
@@ -129,13 +130,13 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
         # 4. Create systemd service
         service_content = _build_service_content(port, token)
         # Write service file via python
-        _ssh_exec(client, f"python3 -c \""
+        _ssh_exec(client, f"sudo python3 -c \""
                    f"with open('/etc/systemd/system/{AGENT_SERVICE}', 'w') as f: "
                    f"f.write('''{service_content}''')\"")
 
         # 5. Save agent config
         config = {"port": port, "token": token, "version": _AGENT_VERSION}
-        _ssh_exec(client, f"python3 -c \""
+        _ssh_exec(client, f"sudo python3 -c \""
                    f"import json; "
                    f"open('{AGENT_DIR}/.agent_config', 'w').write(json.dumps({config}))\"")
 
@@ -267,7 +268,7 @@ def uninstall_agent(server: Server, password: str = None) -> Dict:
         _ssh_exec(client, f"sudo systemctl stop {AGENT_SERVICE} 2>/dev/null || true")
         _ssh_exec(client, f"sudo systemctl disable {AGENT_SERVICE} 2>/dev/null || true")
         _ssh_exec(client, f"sudo rm -f /etc/systemd/system/{AGENT_SERVICE}")
-        _ssh_exec(client, f"rm -rf {AGENT_DIR}")
+        _ssh_exec(client, f"sudo rm -rf {AGENT_DIR}")
         _ssh_exec(client, "sudo systemctl daemon-reload")
         return {"success": True, "message": "Agent已卸载"}
     except Exception as e:
