@@ -440,6 +440,9 @@ createApp({
     const termRefs = reactive({});
     let termCounter = 0;
     const resServerId = ref('');   // selected server in resources page
+    const showScanModal = ref(false);
+    const scanResult = ref([]);
+    const scanningForServerId = ref('');
 
     function switchResServer(sid) {
       resServerId.value = sid;
@@ -1214,16 +1217,54 @@ createApp({
       setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 350); }, duration);
     }
 
+    async function scanForServices(sid) {
+      scanningServerId.value = sid;
+      scanningForServerId.value = sid;
+      showScanModal.value = true;
+      scanResult.value = [];
+      try {
+        const r = await apiPost(\`\${API}/servers/\${sid}/scan-preview\`);
+        const data = await r.json().catch(() => ({}));
+        scanResult.value = (data.containers || []).map(c => ({...c, checked: c.is_new}));
+        if (scanResult.value.length === 0) {
+          showToast('未发现新服务', 'info');
+        }
+      } catch(e) {
+        showToast('扫描失败：' + (e.message||'未知错误'), 'err');
+        showScanModal.value = false;
+      }
+      finally { scanningServerId.value = null; }
+    }
+
+    async function batchAddSelected() {
+      const sid = scanningForServerId.value;
+      const selected = scanResult.value.filter(c => c.checked && c.is_new).map(c => c.name);
+      if (!selected.length) {
+        showToast('请勾选要添加的服务', 'warn');
+        return;
+      }
+      try {
+        const r = await apiPost(\`\${API}/servers/\${sid}/services/batch-add\`, {services: selected});
+        const data = await r.json().catch(() => ({}));
+        showToast(\`已添加 \${data.added||0} 个服务\`, 'ok');
+        showScanModal.value = false;
+        await loadServerServices(sid);
+        await loadServers();
+      } catch(e) {
+        showToast('添加失败：' + (e.message||'未知错误'), 'err');
+      }
+    }
+
     async function triggerScan(sid) {
       scanningServerId.value = sid;
       try {
-        const r = await apiPost(`${API}/servers/${sid}/scan-services`);
+        const r = await apiPost(\`\${API}/servers/\${sid}/scan-services\`);
         const data = await r.json().catch(() => ({}));
         const src = {agent:'Agent',ssh:'SSH',docker_local:'本地Docker'}[data.source] || data.source || '';
         if (data.discovered > 0) {
-          showToast(`扫描完成（${src}）：新增 ${data.added||0}，更新 ${data.updated||0}`, 'ok');
+          showToast(\`扫描完成（\${src}）：新增 \${data.added||0}，更新 \${data.updated||0}\`, 'ok');
         } else {
-          showToast(`扫描完成（${src}）：服务无变化`, 'info');
+          showToast(\`扫描完成（\${src}）：服务无变化\`, 'info');
         }
         await loadMonitor(); await loadServerServices(sid); await loadAutoServices(); await loadServers();
       } catch(e) { showToast('扫描失败：' + (e.message||'未知错误'), 'err'); }
@@ -2131,6 +2172,7 @@ createApp({
               <button class="btn-sm" @click="termConnect(srv.id)" style="color:var(--accent)">终端</button>
               <button class="btn-deploy-agent" v-if="srv.agent_type !== 'local' && srv.agent_status!=='running' && srv.agent_status!=='deploying'" @click="deployAgent(srv.id)">部署Agent</button>
               <button class="btn-deploy-agent" v-if="srv.agent_status==='running'" @click="deployAgent(srv.id)">升级Agent</button>
+              <button class="btn-sm primary" v-if="srv.agent_status==='running'" :disabled="scanningServerId===srv.id" @click="scanForServices(srv.id)" style="font-size:12px">{{scanningServerId===srv.id ? '扫描中...' : '扫描服务'}}</button>
               <button class="btn-sm" v-if="srv.agent_status==='running'" :disabled="checkingAgentServerId===srv.id" @click="checkAgentStatus(srv.id)" style="font-size:11px;color:var(--green)">{{checkingAgentServerId===srv.id ? '检查中...' : '检查Agent'}}</button>
               <button class="btn-sm" @click="openEditServer(srv)" style="color:var(--accent2)">编辑</button>
               <div style="flex:1"></div>
@@ -2179,6 +2221,42 @@ createApp({
           </div>
         </div>
       </template>
+    </div>
+
+    <!-- ===== Scan Result Modal ===== -->
+    <div class="modal-overlay" v-if="showScanModal" @click.self="showScanModal=false">
+      <div class="modal" style="max-width:560px">
+        <h3 style="margin-bottom:12px">扫描结果</h3>
+        <div v-if="scanResult.length === 0" style="text-align:center;padding:30px 0;color:var(--text2);font-size:13px">扫描中...</div>
+        <div v-else>
+          <div style="margin-bottom:10px;font-size:12px;color:var(--text2);display:flex;justify-content:space-between">
+            <span>共发现 {{scanResult.length}} 个容器</span>
+            <label style="cursor:pointer;display:flex;align-items:center;gap:4px">
+              <input type="checkbox" :checked="scanResult.filter(c=>c.is_new).every(c=>c.checked) && scanResult.some(c=>c.is_new)"
+                     @change="scanResult.forEach(c=>{if(c.is_new)c.checked=$event.target.checked})">
+              全选新服务
+            </label>
+          </div>
+          <div style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
+            <div v-for="(c,i) in scanResult" :key="c.name"
+                 style="display:flex;align-items:center;padding:8px 12px;gap:8px;border-bottom:1px solid var(--border);font-size:13px"
+                 :style="{background:i%2===0?'var(--card)':'transparent'}">
+              <input type="checkbox" v-model="c.checked" :disabled="!c.is_new" style="flex-shrink:0">
+              <span :style="{color:c.status==='running'?'var(--green)':'var(--red)',flexShrink:0}">●</span>
+              <span style="flex:1;font-weight:500">{{c.name}}</span>
+              <span style="font-size:11px;color:var(--text2);flex-shrink:0;max-width:120px;overflow:hidden;text-overflow:ellipsis">{{c.image}}</span>
+              <span v-if="!c.is_new" style="font-size:10px;padding:1px 6px;border-radius:4px;background:var(--border);color:var(--text2);flex-shrink:0">已存在</span>
+              <span v-else style="font-size:10px;padding:1px 6px;border-radius:4px;background:rgba(34,197,94,.15);color:var(--green);flex-shrink:0">新发现</span>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+            <button class="btn-sm" @click="showScanModal=false">取消</button>
+            <button class="btn-sm primary" @click="batchAddSelected" :disabled="!scanResult.some(c=>c.checked&&c.is_new)">
+              添加选中 ({{scanResult.filter(c=>c.checked&&c.is_new).length}})
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- ===== Group Management Modal (per-server) ===== -->

@@ -2266,30 +2266,144 @@ def deploy_agent_api(server_id: str, current_user: User = Depends(get_current_us
             s.agent_status = "error"
         db.commit()
     
-    # Auto-trigger first scan after successful deploy
-    scan_info = ""
-    if result.get("success"):
-        try:
-            scan_data = trigger_agent_scan(srv.host, result.get("agent_port", 19100), result.get("agent_token", ""))
-            if scan_data:
-                with get_db() as db2:
-                    s2 = db2.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
-                    if s2:
-                        sr = _sync_agent_scan_to_db(s2, db2, scan_data)
-                        s2.status = ServerStatus.online.value
-                        s2.last_seen = datetime.utcnow()
-                        s2.docker_available = True
-                        db2.commit()
-                        scan_info = f" 发现{sr['added']}个服务"
-                        result["scan_added"] = sr["added"]
-                        result["scan_updated"] = sr["updated"]
-        except Exception as e:
-            scan_info = f" 自动扫描失败: {e}"
-        if scan_info:
-            result["message"] = (result.get("message", "") + scan_info).strip()
-    
     return result
 
+
+
+@app.post("/api/v2/servers/{server_id}/scan-preview")
+def scan_server_preview(server_id: str, current_user: User = Depends(get_current_user)):
+    """Scan services and return preview list (NOT writing to DB). User selects which to add."""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        
+        agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        
+        # Try Agent first
+        containers = []
+        if srv.agent_status == "running" and srv.agent_port:
+            scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+            if scan_data:
+                for c in scan_data.get("containers", []):
+                    name = c.get("name", "")
+                    image = c.get("image", "")
+                    is_running = c.get("status") == "running" or "Up" in c.get("status", "")
+                    short_image = image.split(':')[0].split('/')[-1] if image else ''
+                    svc_url = _build_svc_url_for_remote(name, srv.host, c)
+                    if not svc_url:
+                        continue
+                    # Check if already exists in DB
+                    existing = db.query(Service).filter(
+                        Service.server_id == srv.id,
+                        Service.container_name == name,
+                    ).first()
+                    containers.append({
+                        "name": name,
+                        "image": image,
+                        "url": svc_url,
+                        "status": "running" if is_running else "stopped",
+                        "is_new": existing is None,
+                        "existing_id": str(existing.id) if existing else None,
+                        "existing_source": existing.source if existing else None,
+                    })
+                return {"containers": containers, "source": "agent", "total": len(containers)}
+        
+        # SSH fallback for remote
+        from app.ssh_manager import get_ssh_client, get_remote_containers
+        password = None
+        if srv.ssh_key and srv.ssh_key.startswith("__password__"):
+            password = srv.ssh_key[len("__password__"):]
+        client = get_ssh_client(srv, password=password)
+        if client:
+            try:
+                remote_containers = get_remote_containers(client)
+                for c in remote_containers:
+                    name = c.get("name", "")
+                    svc_url = _build_svc_url_for_remote(name, srv.host, c)
+                    if not svc_url:
+                        continue
+                    existing = db.query(Service).filter(
+                        Service.server_id == srv.id,
+                        Service.container_name == name,
+                    ).first()
+                    containers.append({
+                        "name": name,
+                        "image": c.get("image", ""),
+                        "url": svc_url,
+                        "status": c.get("status", "unknown"),
+                        "is_new": existing is None,
+                        "existing_id": str(existing.id) if existing else None,
+                        "existing_source": existing.source if existing else None,
+                    })
+                client.close()
+            except:
+                try: client.close()
+                except: pass
+        return {"containers": containers, "source": "ssh", "total": len(containers)}
+
+
+@app.post("/api/v2/servers/{server_id}/services/batch-add")
+def batch_add_services(server_id: str, data: dict, current_user: User = Depends(get_current_user)):
+    """Batch add scanned services by container name. Only adds NEW services, skips existing ones."""
+    from app.discovery import classify_image, get_icon, get_desc
+    
+    svc_names = data.get("services", [])
+    if not svc_names:
+        return {"ok": False, "message": "No services specified"}
+    
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        
+        count = 0
+        for name in svc_names:
+            existing = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == name,
+            ).first()
+            if existing:
+                continue  # skip existing services
+            
+            short_image = ""
+            svc_url = ""
+            # Build minimal service record
+            svc_name = name.replace('-', ' ').replace('_', ' ').title()
+            svc_category = classify_image("")
+            svc_icon = get_icon("")
+            svc_desc = get_desc("", name)
+            
+            # Try to enrich from agent
+            agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+            if srv.agent_status == "running" and srv.agent_port:
+                from app.agent_manager import trigger_agent_scan
+                scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+                if scan_data:
+                    for c in scan_data.get("containers", []):
+                        if c.get("name") == name:
+                            image = c.get("image", "")
+                            short_image = image.split(':')[0].split('/')[-1] if image else ''
+                            svc_url = _build_svc_url_for_remote(name, srv.host, c)
+                            svc_category = classify_image(short_image)
+                            svc_icon = get_icon(short_image)
+                            svc_desc = get_desc(short_image, name)
+                            break
+            
+            svc = Service(
+                server_id=srv.id, name=svc_name, url=svc_url,
+                category=svc_category, icon=svc_icon, description=svc_desc,
+                source=ServiceSource.agent.value,
+                status=ServiceStatus.up.value,
+                container_name=name, image=short_image,
+                host_ip=srv.host,
+                last_scanned_at=datetime.utcnow(),
+            )
+            db.add(svc)
+            count += 1
+        
+        db.commit()
+        return {"ok": True, "added": count}
 
 @app.get("/api/v2/servers/{server_id}/agent-status")
 def agent_status_api(server_id: str, current_user: User = Depends(get_current_user)):
