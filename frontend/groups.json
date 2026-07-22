@@ -44,7 +44,7 @@
         {
           "id": "app",
           "name": "应用服务",
-          "order": 40,
+          "order": 41,
           "color": "#f59e0b",
           "icon": "box"
         },
@@ -56,7 +56,10 @@
           "icon": "inbox"
         }
       ],
-      "serviceGroupMap": {}
+      "serviceGroupMap": {
+        "auto:c38966e8-18f1-4e45-a52f-5fefcbd50b9c:cb18c49c-ba84-45b3-9883-d245e274dca2": "app",
+        "auto:c38966e8-18f1-4e45-a52f-5fefcbd50b9c:7caf57db-e45e-41fd-b760-35d2b7b4705c": "app"
+      }
     }
   }
 }
