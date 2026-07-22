@@ -98,12 +98,12 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             except Exception:
                 pass
             # Old version detected — stop service, will reinstall below
-            _ssh_exec(client, f"systemctl stop {AGENT_SERVICE}")
+            _ssh_exec(client, f"sudo systemctl stop {AGENT_SERVICE}")
             import time; time.sleep(1)
 
         # 3. Create directory and upload agent script
         token = existing_config.get('token', '') or _generate_token()
-        _ssh_exec(client, f"mkdir -p {AGENT_DIR}")
+        _ssh_exec(client, f"sudo mkdir -p {AGENT_DIR} && sudo chmod 777 {AGENT_DIR}")
 
         # Upload agent script + scanner module via SFTP
         sftp = client.open_sftp()
@@ -140,9 +140,9 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
                    f"open('{AGENT_DIR}/.agent_config', 'w').write(json.dumps({config}))\"")
 
         # 6. Reload systemd, enable and start service
-        _ssh_exec(client, "systemctl daemon-reload")
-        _ssh_exec(client, f"systemctl enable {AGENT_SERVICE}")
-        out, err, code = _ssh_exec(client, f"systemctl start {AGENT_SERVICE}")
+        _ssh_exec(client, "sudo systemctl daemon-reload")
+        _ssh_exec(client, f"sudo systemctl enable {AGENT_SERVICE}")
+        out, err, code = _ssh_exec(client, f"sudo systemctl start {AGENT_SERVICE}")
 
         if code != 0 and 'Job' not in err:
             return {"success": False, "message": f"Agent启动失败: {err.strip()}"}
@@ -157,7 +157,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             return {"success": False, "message": f"Agent启动异常: {log_out[-200:]}"}
 
         # 8. Try to open firewall if ufw is active
-        _ssh_exec(client, f"ufw status | grep -q 'active' && ufw allow {port}/tcp 2>/dev/null || true")
+        _ssh_exec(client, f"sudo ufw status | grep -q 'active' && ufw allow {port}/tcp 2>/dev/null || true")
 
         return {
             "success": True,
@@ -264,11 +264,11 @@ def uninstall_agent(server: Server, password: str = None) -> Dict:
         return {"success": False, "message": "SSH连接失败"}
 
     try:
-        _ssh_exec(client, f"systemctl stop {AGENT_SERVICE} 2>/dev/null || true")
-        _ssh_exec(client, f"systemctl disable {AGENT_SERVICE} 2>/dev/null || true")
-        _ssh_exec(client, f"rm -f /etc/systemd/system/{AGENT_SERVICE}")
+        _ssh_exec(client, f"sudo systemctl stop {AGENT_SERVICE} 2>/dev/null || true")
+        _ssh_exec(client, f"sudo systemctl disable {AGENT_SERVICE} 2>/dev/null || true")
+        _ssh_exec(client, f"sudo rm -f /etc/systemd/system/{AGENT_SERVICE}")
         _ssh_exec(client, f"rm -rf {AGENT_DIR}")
-        _ssh_exec(client, "systemctl daemon-reload")
+        _ssh_exec(client, "sudo systemctl daemon-reload")
         return {"success": True, "message": "Agent已卸载"}
     except Exception as e:
         return {"success": False, "message": f"卸载异常: {str(e)}"}

@@ -420,7 +420,7 @@ createApp({
     const monitorData = ref(null);
     const containers = ref([]);
     const selectedMetric = ref('cpu');
-    const historyHours = ref(1);
+    const historyHours = ref(24);
     const historyData = ref([]);
     let echartsLib = null;
     let chartInstance = null;
@@ -993,10 +993,6 @@ createApp({
       const axisLineColor = isDarkVal ? '#334155' : '#e2e8f0';
       const splitLineColor = isDarkVal ? '#1e293b88' : '#f1f5f9';
       const labelColor = isDarkVal ? '#94a3b8' : '#64748b';
-      const now = Date.now();
-      const rangeMs = historyHours.value * 3600 * 1000;
-      const xAxisMin = now - rangeMs;
-      const xAxisMax = now;
       chartInstance.setOption({
         backgroundColor:'transparent',
         textStyle:{color:labelColor},
@@ -1004,7 +1000,7 @@ createApp({
         tooltip:{trigger:'axis',backgroundColor:isDarkVal?'#1e293b':'#fff',borderColor:isDarkVal?'#334155':'#e2e8f0',textStyle:{color:isDarkVal?'#e2e8f0':'#1e293b',fontSize:11},
           formatter:function(params){const p=params[0];if(!p)return '';const d=new Date(p.value[0]);const ts=d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0')+':'+d.getSeconds().toString().padStart(2,'0');return ts+'<br/><b>'+title+'</b>: '+parseFloat(p.value[1]).toFixed(2);}
         },
-        xAxis:{type:'time',min:xAxisMin,max:xAxisMax,axisLine:{lineStyle:{color:axisLineColor}},axisLabel:{fontSize:10,color:labelColor,
+        xAxis:{type:'time',axisLine:{lineStyle:{color:axisLineColor}},axisLabel:{fontSize:10,color:labelColor,
           formatter:function(v){const d=new Date(v);if(historyHours.value>24)return (d.getMonth()+1)+'/'+d.getDate()+' '+d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');}
         },splitLine:{show:false},boundaryGap:false},
         yAxis:{type:'value',axisLine:{show:false},splitLine:{lineStyle:{color:splitLineColor}},axisLabel:{fontSize:10,color:labelColor}},
@@ -1425,7 +1421,6 @@ createApp({
           id: data.session_id,
           name: data.server_name + ' (' + data.user + ')',
           serverId: serverId,
-          host: data.server_host || '',
           connected: true,
           term: null,
           ws: null,
@@ -1434,11 +1429,10 @@ createApp({
         termTabs.value.push(tab);
         termActiveId.value = tab.id;
         currentPage.value = 'terminal';
-        // v3.23.2: 立即切到终端页并显示 loading, 让用户看到即时反馈
         termSaveState();
         await nextTick();
         // Initialize xterm after DOM renders
-        setTimeout(() => termInit(tab), 50);
+        setTimeout(() => termInit(tab), 100);
       } catch(e) {
         showToast('终端连接失败: ' + e.message, 'err');
       }
@@ -1525,11 +1519,6 @@ createApp({
       tab.term = term;
       tab.fitAddon = fitAddon;
 
-      // v3.23.2: 连接中提示 — xterm 渲染完成立即显示 loading
-      try {
-        term.write('\r\n\x1b[90m● 正在建立 SSH 连接到 ' + (tab.host || '服务器') + ' ...\x1b[0m\r\n\r\n');
-      } catch(e) {}
-
       // Open WebSocket
       const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = wsProto + '//' + location.host + '/ws/terminal/' + tab.id;
@@ -1546,31 +1535,7 @@ createApp({
       };
 
       ws.onmessage = (evt) => {
-        const data = evt.data;
-        // v3.23.2: 优先检查是否为后端控制消息 (connecting/ready/error)
-        if (typeof data === 'string' && data.length > 0 && data.length < 500 && data.charAt(0) === '{') {
-          try {
-            const obj = JSON.parse(data);
-            if (obj && obj.__ops === true) {
-              if (obj.type === 'status' && obj.value === 'ready') {
-                // 清掉之前 loading 那两行 (ANSI: 上移2行+清到屏底)
-                try { term.write('\x1b[2A\x1b[J'); } catch(e) {}
-                return;
-              }
-              if (obj.type === 'status' && obj.value === 'connecting') {
-                return;  // loading 已在 onopen 前写入, 无需重复
-              }
-              if (obj.type === 'error') {
-                try { term.write('\x1b[2A\x1b[J'); } catch(e) {}
-                term.write('\x1b[31m✗ 连接失败: ' + (obj.message || '未知错误') + '\x1b[0m\r\n');
-                showToast('终端连接失败: ' + (obj.message || ''), 'err');
-                try { ws.close(); } catch(e) {}
-                return;
-              }
-            }
-          } catch(e) { /* 不是 JSON 控制消息, 走普通数据流 */ }
-        }
-        term.write(data);
+        term.write(evt.data);
       };
 
       ws.onclose = () => {

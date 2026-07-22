@@ -1,0 +1,16 @@
+[Unit]
+Description=OpsCenter Backend API
+After=network.target docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/opscenter/backend
+ExecStart=/opt/opscenter/venv/bin/python3 -m uvicorn app.main:app --host 0.0.0.0 --port 9091
+Restart=always
+RestartSec=5
+Environment=DATABASE_URL=postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter
+Environment=LOCAL_HOST=ops.salmon.xin
+
+[Install]
+WantedBy=multi-user.target

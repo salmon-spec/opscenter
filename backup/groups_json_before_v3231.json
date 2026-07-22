@@ -1,0 +1,155 @@
+{
+  "defaultGroups": [
+    {
+      "id": "cicd",
+      "name": "代码与CI/CD",
+      "order": 10,
+      "color": "#2dd4bf",
+      "icon": "code"
+    },
+    {
+      "id": "security",
+      "name": "安全与认证",
+      "order": 15,
+      "color": "#ef4444",
+      "icon": "shield"
+    },
+    {
+      "id": "monitor",
+      "name": "监控与日志",
+      "order": 20,
+      "color": "#3b82f6",
+      "icon": "chart"
+    },
+    {
+      "id": "network",
+      "name": "网络与代理",
+      "order": 30,
+      "color": "#64748b",
+      "icon": "globe"
+    },
+    {
+      "id": "database",
+      "name": "数据存储",
+      "order": 35,
+      "color": "#a855f7",
+      "icon": "database"
+    },
+    {
+      "id": "app",
+      "name": "应用服务",
+      "order": 40,
+      "color": "#f59e0b",
+      "icon": "box"
+    },
+    {
+      "id": "ops",
+      "name": "运维管理",
+      "order": 45,
+      "color": "#10b981",
+      "icon": "tool"
+    },
+    {
+      "id": "middleware",
+      "name": "消息与注册",
+      "order": 50,
+      "color": "#f97316",
+      "icon": "cube"
+    },
+    {
+      "id": "auto_workflow",
+      "name": "自动化工作流",
+      "order": 60,
+      "color": "#ec4899",
+      "icon": "bolt"
+    },
+    {
+      "id": "ungrouped",
+      "name": "未分组",
+      "order": 999,
+      "color": "#475569",
+      "icon": "inbox"
+    }
+  ],
+  "servers": {
+    "bd275f0e-a2ec-444c-bfa3-4508410268dd": {
+      "groups": [
+        {
+          "id": "ungrouped",
+          "name": "未分组",
+          "order": 999,
+          "color": "#475569",
+          "icon": "inbox"
+        },
+        {
+          "id": "app",
+          "name": "应用服务",
+          "order": 40,
+          "color": "#f59e0b",
+          "icon": "box"
+        },
+        {
+          "id": "ops",
+          "name": "运维管理",
+          "order": 45,
+          "color": "#10b981",
+          "icon": "tool"
+        },
+        {
+          "id": "cicd",
+          "name": "代码与CI/CD",
+          "order": 10,
+          "color": "#2dd4bf",
+          "icon": "code"
+        },
+        {
+          "id": "security",
+          "name": "安全与认证",
+          "order": 15,
+          "color": "#ef4444",
+          "icon": "shield"
+        },
+        {
+          "id": "monitor",
+          "name": "监控与日志",
+          "order": 20,
+          "color": "#3b82f6",
+          "icon": "chart"
+        },
+        {
+          "id": "network",
+          "name": "网络与代理",
+          "order": 30,
+          "color": "#64748b",
+          "icon": "globe"
+        },
+        {
+          "id": "database",
+          "name": "数据存储",
+          "order": 35,
+          "color": "#a855f7",
+          "icon": "database"
+        },
+        {
+          "id": "middleware",
+          "name": "消息与注册",
+          "order": 50,
+          "color": "#f97316",
+          "icon": "cube"
+        },
+        {
+          "id": "auto_workflow",
+          "name": "自动化工作流",
+          "order": 60,
+          "color": "#ec4899",
+          "icon": "bolt"
+        }
+      ],
+      "serviceGroupMap": {
+        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:7e56f748-4f9c-47c5-ac53-654d83054ebb": "database",
+        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:8ff1a58e-5fa0-4bb9-a4b9-8db9139c5e60": "security",
+        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:b225c423-c5d4-4f0d-ba43-f18ca2c425cb": "ungrouped"
+      }
+    }
+  }
+}

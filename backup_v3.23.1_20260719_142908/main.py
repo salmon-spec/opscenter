@@ -2988,11 +2988,12 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
     session = get_session(sid)
     if not session:
         raise HTTPException(500, "Failed to create session")
-    # v3.23.2: 懒连接 — 后台异步建连, HTTP 请求立即返回
-    # 实际 SSH 建连放在 WebSocket 建立后等 ready, 避免前端长时间卡在 POST
-    session.connect_in_background(cols=req.cols, rows=req.rows)
-    return {"session_id": sid, "server_name": srv_name, "server_host": srv_host,
-            "user": srv_user, "status": "connecting"}
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(None, lambda: session.connect(cols=req.cols, rows=req.rows))
+    if not ok:
+        remove_session(sid)
+        raise HTTPException(500, f"SSH connection to {srv_host} failed")
+    return {"session_id": sid, "server_name": srv_name, "server_host": srv_host, "user": srv_user}
 
 
 @app.websocket("/ws/terminal/{session_id}")
@@ -3009,43 +3010,11 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
             remove_session(session_id)
             return
         session.cancel_pending_reconnect()
-    await websocket.accept()
-    loop = asyncio.get_event_loop()
-
-    # v3.23.2: 处理懒连接场景 — session 还在 connecting, 先推状态后等就绪
-    import json as _json
-    if session.is_connecting:
-        try:
-            await websocket.send_text(_json.dumps({
-                "__ops": True, "type": "status", "value": "connecting",
-                "host": session.host, "server_name": session.server_name, "user": session.user,
-            }))
-        except Exception:
-            pass
-        ok, err = await loop.run_in_executor(None, session.wait_ready, 20)
-        if not ok:
-            try:
-                await websocket.send_text(_json.dumps({
-                    "__ops": True, "type": "error", "message": err or "SSH connection failed",
-                }))
-            except Exception:
-                pass
-            await websocket.close()
-            remove_session(session_id)
-            return
-        try:
-            await websocket.send_text(_json.dumps({"__ops": True, "type": "status", "value": "ready"}))
-        except Exception:
-            pass
     elif not session.connected:
         await websocket.close(code=4004, reason="Invalid or expired session")
         return
-    else:
-        # v3.23.2: 连接池已 ready (POST -> WS 极快的情况) — 补发 ready 让前端清 loading
-        try:
-            await websocket.send_text(_json.dumps({"__ops": True, "type": "status", "value": "ready"}))
-        except Exception:
-            pass
+    await websocket.accept()
+    loop = asyncio.get_event_loop()
 
     async def recv_from_ssh():
         """Read from SSH and send to WebSocket"""
@@ -3131,9 +3100,9 @@ async def api_sftp_upload(session_id: str, path: str = "", file: UploadFile = Fa
     session = get_session(session_id)
     if not session or not session.is_alive:
         raise HTTPException(404, "Session not found or expired")
-    file.file.seek(0)
+    content = await file.read()
     remote_path = path.rstrip("/") + "/" + file.filename if path else file.filename
-    ok, err = session.sftp_upload(remote_path, file.file)
+    ok, err = session.sftp_upload(remote_path, content)
     if not ok:
         raise HTTPException(400, err)
     return {"ok": True, "path": remote_path, "size": len(content)}
