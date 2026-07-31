@@ -539,7 +539,9 @@ createApp({
     // ========== Auth (v3.23.0) ==========
     const authToken = ref(localStorage.getItem('ops_token') || '');
     const currentUser = ref(JSON.parse(localStorage.getItem('ops_user') || 'null'));
-    const isLoggedIn = computed(() => !!authToken.value);
+    // v3.24.0 免登录模式：后端 OPS_AUTH_ENABLED=false，始终视为已登录；
+    // 恢复鉴权时改回 computed(() => !!authToken.value) 即可。
+    const isLoggedIn = computed(() => true);
     const showLoginModal = ref(false);
     const loginForm = reactive({ username: '', password: '' });
     const loginLoading = ref(false);
@@ -1824,7 +1826,8 @@ createApp({
     <div class="sidebar-footer">
       <span class="online-dot"></span><span class="sidebar-footer-text">{{servers.length}} 服务器 · {{stats.total}} 服务</span>
     </div>
-    <div class="sidebar-user" v-if="isLoggedIn">
+    <!-- v3.24.0 免登录模式：隐藏登录/退出入口；恢复鉴权时改为 v-if="isLoggedIn" -->
+    <div class="sidebar-user" v-if="false">
       <div class="user-info">
         <div class="user-avatar">{{(currentUser?.display_name || currentUser?.username || 'U')[0]}}</div>
         <div class="user-meta" v-show="!collapsed">
