@@ -2140,7 +2140,7 @@ createApp({
             <div class="sc-title">
               <span class="status-dot" :class="srv.status==='online'?'online':'offline'" style="width:10px;height:10px"></span>
               <h4>{{srv.name}}</h4>
-              <span v-if="srv.agent_type === 'local'" class="sc-badge local">内置</span>
+              <span v-if="srv.agent_type === 'local'" class="sc-badge local" title="本机内置 Agent 采集">本机</span>
               <span v-if="srv.agent_status==='running' && srv.agent_version" style="font-size:11px;color:#64748b;margin-left:4px;">v{{srv.agent_version}}</span>
               <span v-if="srv.agent_status && srv.agent_type !== 'local'" class="agent-tag" :class="srv.agent_status">
                 {{srv.agent_status === 'running' ? 'Agent运行中' : srv.agent_status === 'not_deployed' ? '未部署Agent' : srv.agent_status === 'deploying' ? '部署中...' : srv.agent_status === 'stopped' ? 'Agent已停止' : 'Agent异常'}}
