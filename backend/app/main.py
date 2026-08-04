@@ -212,6 +212,15 @@ class LoginRequest(BaseModel):
 app = FastAPI(title="OpsCenter API", version="3.23.1")
 
 
+# ── Modular routers (v3.25 refactor: servers / services / monitor / terminal) ──
+from app.routers.servers import router as servers_router
+from app.routers.services import router as services_router
+from app.routers.monitor import router as monitor_router
+from app.routers.terminal import router as terminal_router
+from app.database import init_db
+
+
+
 # Category metadata for enhanced UI
 CATEGORY_META = {
     "代码与CI/CD": {"icon": "fa-code", "color": "#8b5cf6", "order": 1},
@@ -486,6 +495,7 @@ def _auto_assign_all_groups():
 
 @app.on_event("startup")
 async def startup():
+    init_db()  # v3.25: canonical table + admin bootstrap on boot
     # Start Agent health check background task
     import asyncio
     # asyncio.create_task(_agent_health_check_loop())
@@ -3325,3 +3335,9 @@ async def api_terminal_stats():
 @app.get("/health")
 def health():
     return {"status": "ok", "version": "3.25.0-dev"}
+
+# ── Register modular routers (prefix aligned with frontend /api/v2) ──
+app.include_router(servers_router, prefix="/api/v2")
+app.include_router(services_router, prefix="/api/v2")
+app.include_router(monitor_router, prefix="/api/v2")
+app.include_router(terminal_router, prefix="/api/v2")
