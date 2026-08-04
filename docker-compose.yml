@@ -1,0 +1,34 @@
+# ============================================
+# DEPRECATED (2026-08-05): 实际由 systemd 运行
+# 本文件仅供参考，不再使用 Docker 部署后端
+# 详见 backend/app/config.py 与 opscenter-backend.service
+# ============================================
+version: '3.8'
+
+services:
+  opscenter-backend:
+    build: ./backend
+    container_name: opscenter-backend
+    restart: always
+    ports:
+      - "127.0.0.1:9091:9091"
+    environment:
+      - DATABASE_URL=postgresql+psycopg://opscenter:OpsCenter2026@172.17.0.1:5432/opscenter
+      - LOCAL_HOST=ops.salmon.xin
+      - OPS_JWT_SECRET=773d80b709bfd7d27229268fbb9b3b098f12453c7ed0e6928b5042bfc82e80ef
+      - OPS_ADMIN_USER=admin
+      - OPS_ADMIN_PASSWORD=OpsCenter@2026
+    volumes:
+      - /opt/opscenter/frontend:/app/frontend:ro
+      - /opt/opscenter/agent:/app/agent:ro
+      - /opt/opscenter/backend/groups.json:/app/groups.json:ro
+      - /opt/opscenter/backend/services.json:/app/services.json:ro
+      - /root/.ssh:/root/.ssh:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
