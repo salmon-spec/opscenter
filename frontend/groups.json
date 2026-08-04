@@ -16,7 +16,7 @@
     }
   ],
   "servers": {
-    "bd275f0e-a2ec-444c-bfa3-4508410268dd": {
+    "7d962f59-af74-4439-9fea-576536742a41": {
       "groups": [
         {
           "id": "app",
@@ -34,17 +34,18 @@
         }
       ],
       "serviceGroupMap": {
-        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:7e56f748-4f9c-47c5-ac53-654d83054ebb": "app",
-        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:8ff1a58e-5fa0-4bb9-a4b9-8db9139c5e60": "app",
-        "auto:bd275f0e-a2ec-444c-bfa3-4508410268dd:b225c423-c5d4-4f0d-ba43-f18ca2c425cb": "app"
+        "auto:7d962f59-af74-4439-9fea-576536742a41:5b241264-67ba-43ff-b1b6-778d0b10a949": "app",
+        "auto:7d962f59-af74-4439-9fea-576536742a41:4eaf3b31-07af-4329-ae8e-19ae1d6bc6d7": "app",
+        "auto:7d962f59-af74-4439-9fea-576536742a41:9d0c08fe-df6c-43c9-b23a-37696d97ace4": "app",
+        "auto:7d962f59-af74-4439-9fea-576536742a41:cddf47a3-1791-4f9c-aebb-a7d4b91b04f3": "app"
       }
     },
-    "c38966e8-18f1-4e45-a52f-5fefcbd50b9c": {
+    "894182e0-d994-4eb8-be0b-286bc134badc": {
       "groups": [
         {
           "id": "app",
           "name": "应用服务",
-          "order": 41,
+          "order": 40,
           "color": "#f59e0b",
           "icon": "box"
         },
@@ -57,8 +58,38 @@
         }
       ],
       "serviceGroupMap": {
-        "auto:c38966e8-18f1-4e45-a52f-5fefcbd50b9c:cb18c49c-ba84-45b3-9883-d245e274dca2": "app",
-        "auto:c38966e8-18f1-4e45-a52f-5fefcbd50b9c:7caf57db-e45e-41fd-b760-35d2b7b4705c": "app"
+        "auto:894182e0-d994-4eb8-be0b-286bc134badc:5246ec5a-52f7-439a-9713-9eaea262e59f": "app",
+        "auto:894182e0-d994-4eb8-be0b-286bc134badc:50781123-97ff-4fff-b89a-30394593057b": "app",
+        "auto:894182e0-d994-4eb8-be0b-286bc134badc:88f391f8-02e0-4a30-919d-7ff71fe7aff3": "app",
+        "auto:894182e0-d994-4eb8-be0b-286bc134badc:a1e59555-1f9a-46a2-bcc9-e44fc6e83b26": "app",
+        "auto:894182e0-d994-4eb8-be0b-286bc134badc:11111322-4ce0-4733-8a6d-5b2dd6a793cc": "app",
+        "auto:894182e0-d994-4eb8-be0b-286bc134badc:65f61a77-80ed-49b5-918d-1993d8590398": "app",
+        "auto:894182e0-d994-4eb8-be0b-286bc134badc:de651c49-8a57-43d0-b6f8-182cec252449": "app"
+      }
+    },
+    "81161894-2257-499a-bba3-029397dd48c5": {
+      "groups": [
+        {
+          "id": "app",
+          "name": "应用服务",
+          "order": 40,
+          "color": "#f59e0b",
+          "icon": "box"
+        },
+        {
+          "id": "ungrouped",
+          "name": "未分组",
+          "order": 999,
+          "color": "#475569",
+          "icon": "inbox"
+        }
+      ],
+      "serviceGroupMap": {
+        "auto:81161894-2257-499a-bba3-029397dd48c5:eaf97e84-5e43-4e81-8b27-cb135fb081f6": "app",
+        "auto:81161894-2257-499a-bba3-029397dd48c5:965d962f-befc-44b9-962a-ece5ed86aced": "app",
+        "auto:81161894-2257-499a-bba3-029397dd48c5:b5ba3156-0516-4f2f-9db7-0988d834d4f7": "app",
+        "auto:81161894-2257-499a-bba3-029397dd48c5:46144747-df04-4df0-a14d-0ce141fde277": "app",
+        "auto:81161894-2257-499a-bba3-029397dd48c5:99b3875a-ff80-4db2-bd32-6f3f59cb1271": "app"
       }
     }
   }

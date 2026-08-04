@@ -483,14 +483,15 @@ def _auto_assign_all_groups():
     return changed
 
 
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task
     import asyncio
-    asyncio.create_task(_agent_health_check_loop())
+    # asyncio.create_task(_agent_health_check_loop())
     # Wait for DB and create tables
     import time
-    for i in range(30):
+    for i in range(3):  # reduced from 30 for faster startup
         try:
             Base.metadata.create_all(bind=engine)
             # === 初始管理员用户（users 表为空时自动创建）===
@@ -571,7 +572,7 @@ async def startup():
         db.commit()
 
     # Start background health check
-    asyncio.create_task(background_health_check())
+    # asyncio.create_task(background_health_check())
     # Start background agent metrics collector
     asyncio.create_task(background_agent_collector())
     # Migrate groups.json to per-server format if needed
@@ -3319,3 +3320,8 @@ async def api_terminal_session_status(session_id: str):
 async def api_terminal_stats():
     """Get active terminal session stats"""
     return {"active_sessions": get_active_count()}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "version": "3.25.0-dev"}

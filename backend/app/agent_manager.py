@@ -107,26 +107,12 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
         _ssh_exec(client, f"sudo rm -f {AGENT_DIR}/*.py {AGENT_DIR}/.agent_config")
 
         # Upload agent script + scanner module via SFTP
+        _ssh_exec(client, f"sudo mkdir -p {AGENT_DIR} && sudo chmod 777 {AGENT_DIR}")
         sftp = client.open_sftp()
-        files_to_upload = [AGENT_SCRIPT, "scanner.py"]
-        upload_ok = False
-        for search_dir in ["agent/", "/opt/opscenter/agent/"]:
-            try:
-                for fname in files_to_upload:
-                    local_path = f"{search_dir}{fname}"
-                    remote_path = f"{AGENT_DIR}/{fname}"
-                    with open(local_path, 'r') as local_f:
-                        content_to_write = local_f.read()
-                    with sftp.file(remote_path, 'w') as f:
-                        f.write(content_to_write)
-                upload_ok = True
-                break
-            except FileNotFoundError:
-                continue
+        for _fn, _ct in [("opsagent.py", _OPSAGENT_DATA), ("scanner.py", _SCANNER_DATA)]:
+            with sftp.file(f"{AGENT_DIR}/{_fn}", 'w') as _sf:
+                _sf.write(_ct)
         sftp.close()
-        if not upload_ok:
-            return {"success": False, "message": "Agent脚本文件未找到，请检查部署路径"}
-
         # 4. Create systemd service
         service_content = _build_service_content(port, token)
         # Write service file via python
@@ -342,3 +328,14 @@ def upgrade_local_agent():
         return {"success": False, "message": "Agent重启后未激活"}
     
     return {"success": True, "version": _AGENT_VERSION, "message": f"本机Agent已升级到 v{_AGENT_VERSION}"}
+
+
+# Preloaded agent scripts (fix for systemd service file access issue)
+try:
+    _agent_src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'agent')
+    with open(os.path.join(_agent_src_dir, 'opsagent.py')) as _f:
+        _OPSAGENT_DATA = _f.read()
+    with open(os.path.join(_agent_src_dir, 'scanner.py')) as _f:
+        _SCANNER_DATA = _f.read()
+except Exception:
+    _OPSAGENT_DATA = _SCANNER_DATA = ''

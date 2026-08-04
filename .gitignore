@@ -7,3 +7,22 @@ __pycache__/
 .DS_Store
 *.v318
 *.bak*
+
+# Secrets
+/etc/opscenter/secrets.env
+*.env
+!*.env.example
+
+# IDE
+.vscode/
+.idea/
+*.pyc
+__pycache__/
+
+# Tests
+.pytest_cache/
+htmlcov/
+.coverage
+
+# DB backups
+backup/*.sql
