@@ -25,4 +25,4 @@ htmlcov/
 .coverage
 
 # DB backups
-backup/*.sql
+backup/
