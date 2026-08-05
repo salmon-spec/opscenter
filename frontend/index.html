@@ -1814,6 +1814,9 @@ createApp({
       <div class="nav-item" :class="{active:currentPage==='monitor'}" @click="currentPage='monitor'">
         <svg class="nav-icon"><use href="#fa-gauge"/></svg><span>监控中心</span>
       </div>
+      <a class="nav-item" href="/network.html" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">
+        <svg class="nav-icon"><use href="#fa-globe"/></svg><span>网络监控</span>
+      </a>
 
       <div class="nav-item" :class="{active:currentPage==='resources'}" @click="goResources">
         <svg class="nav-icon"><use href="#fa-layer-group"/></svg><span>资源管理</span>

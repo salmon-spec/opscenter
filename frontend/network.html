@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpsCenter · 网络监控</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/echarts@5/dist/echarts.min.js"></script>
+<style>
+:root{
+  --bg:#0d1117;--bg2:#161b22;--card:#1c2330;--card-hover:#243447;
+  --border:#30363d;--text1:#e6edf3;--text2:#8b949e;
+  --accent:#2dd4bf;--accent2:#0d9488;--green:#22c55e;--orange:#f59e0b;--red:#ef4444;--purple:#8b5cf6;--blue:#3b82f6;
+  --radius:14px;
+}
+.light{
+  --bg:#f0f2f5;--bg2:#fff;--card:#fff;--card-hover:#f5f5f5;--border:#e5e7eb;--text1:#1f2937;--text2:#6b7280;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;font-family:-apple-system,"Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s}
+.topbar{display:flex;align-items:center;gap:14px;padding:16px 24px;border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0;z-index:30}
+.topbar h1{font-size:18px;font-weight:700;display:flex;align-items:center;gap:10px}
+.logo{width:34px;height:34px;background:linear-gradient(135deg,var(--accent),var(--blue));border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:800;color:#0d1117}
+.spacer{flex:1}
+select,button{font-family:inherit}
+.server-select{background:var(--card);color:var(--text1);border:1px solid var(--border);border-radius:9px;padding:8px 12px;font-size:13px;outline:none;cursor:pointer}
+.icon-btn{width:36px;height:36px;border:1px solid var(--border);background:var(--card);color:var(--text1);border-radius:9px;cursor:pointer;font-size:15px;transition:.15s}
+.icon-btn:hover{background:var(--card-hover)}
+.wrap{padding:22px 24px;max-width:1500px;margin:0 auto}
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:14px;margin-bottom:18px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;backdrop-filter:blur(20px)}
+.stat .label{font-size:11px;color:var(--text2);margin-bottom:6px}
+.stat .val{font-size:20px;font-weight:700}
+.stat .val small{font-size:12px;color:var(--text2);font-weight:400;margin-left:3px}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;backdrop-filter:blur(20px);position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:linear-gradient(90deg,var(--accent),var(--blue),transparent);opacity:.7}
+.card h3{font-size:13px;font-weight:600;color:var(--text2);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card h3 .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent)}
+.col-6{grid-column:span 6}.col-4{grid-column:span 4}.col-8{grid-column:span 8}.col-12{grid-column:span 12}
+.chart{width:100%;height:300px}
+.empty{display:flex;align-items:center;justify-content:center;height:300px;color:var(--text2);font-size:13px}
+.badge{font-size:11px;padding:2px 8px;border-radius:20px;background:rgba(45,212,191,.12);color:var(--accent)}
+.badge.warn{background:rgba(245,158,11,.14);color:var(--orange)}
+@media(max-width:1100px){.stats{grid-template-columns:repeat(3,1fr)}.col-6,.col-4,.col-8{grid-column:span 12}}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="topbar">
+    <h1><span class="logo">🌐</span> 网络监控</h1>
+    <div class="spacer"></div>
+    <select class="server-select" v-model="selectedId" @change="onServerChange">
+      <option v-if="!servers.length" value="">加载服务器中…</option>
+      <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.name }} · {{ s.host }}</option>
+    </select>
+    <button class="icon-btn" @click="toggleTheme" :title="dark?'亮色':'暗色'">{{ dark?'☀':'🌙' }}</button>
+    <button class="icon-btn" @click="loadAll" title="刷新">⟳</button>
+  </div>
+
+  <div class="wrap">
+    <div class="stats">
+      <div class="stat"><div class="label">总入站速率</div><div class="val">{{ fmtRate(totals.rx) }}<small>Mbps</small></div></div>
+      <div class="stat"><div class="label">总出站速率</div><div class="val">{{ fmtRate(totals.tx) }}<small>Mbps</small></div></div>
+      <div class="stat"><div class="label">今日入站</div><div class="val">{{ fmtGB(todayTot.rx) }}<small>GB</small></div></div>
+      <div class="stat"><div class="label">今日出站</div><div class="val">{{ fmtGB(todayTot.tx) }}<small>GB</small></div></div>
+      <div class="stat"><div class="label">平均延迟</div><div class="val">{{ fmtMs(latencyAvg) }}<small>ms</small></div></div>
+      <div class="stat"><div class="label">丢包率</div><div class="val" :style="{color: lossAvg>1?'var(--red)':'var(--text1)'}">{{ lossAvg.toFixed(2) }}<small>%</small></div></div>
+    </div>
+
+    <div class="grid">
+      <div class="card col-4">
+        <h3><span class="dot"></span>实时带宽（环形）<span class="badge">RX / TX</span></h3>
+        <div id="gauge" class="chart"></div>
+      </div>
+      <div class="card col-8">
+        <h3><span class="dot"></span>各网卡实时速率</h3>
+        <div id="ifaceBar" class="chart"></div>
+      </div>
+      <div class="card col-6">
+        <h3><span class="dot"></span>今日流量累计 <span class="badge" :class="{warn: overQuota}">日限额 {{ quotaGB }}GB</span></h3>
+        <div id="todayBar" class="chart"></div>
+      </div>
+      <div class="card col-6">
+        <h3><span class="dot"></span>延迟 / 丢包趋势（7天）</h3>
+        <div id="latencyLine" class="chart"></div>
+      </div>
+      <div class="card col-12">
+        <h3><span class="dot"></span>每日流量趋势（7天）</h3>
+        <div id="historyBar" class="chart" style="height:260px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } = Vue;
+
+const API = (p) => {
+  const headers = {};
+  try { const t = localStorage.getItem('ops_token'); if (t) headers['Authorization'] = 'Bearer ' + t; } catch(e){}
+  return fetch(p, { headers }).then(r => r.ok ? r.json() : Promise.reject(r.status));
+};
+const PHYS = /^(eth|ens|enp|en|wlan|wg)/;
+const fmtGB = (b) => (b/1e9).toFixed(2);
+const fmtRate = (m) => (m==null?0:m).toFixed(1);
+const fmtMs = (m) => (m==null?0:m).toFixed(0);
+const fmtDate = (iso) => iso ? iso.slice(5) : '';
+
+createApp({
+  setup() {
+    const servers = ref([]);
+    const selectedId = ref('');
+    const dark = ref(true);
+    const quotaGB = 50;
+    const ifaces = ref({});
+    const todayDaily = ref({});
+    const history = ref([]);
+    const latency = ref([]);
+
+    const totals = computed(() => {
+      let rx=0, tx=0;
+      for (const k in ifaces.value) { if (PHYS.test(k)) { rx += ifaces.value[k].rx_rate_mbps||0; tx += ifaces.value[k].tx_rate_mbps||0; } }
+      return { rx, tx };
+    });
+    const todayTot = computed(() => {
+      let rx=0, tx=0;
+      for (const k in todayDaily.value) { rx += todayDaily.value[k].rx_bytes||0; tx += todayDaily.value[k].tx_bytes||0; }
+      return { rx, tx };
+    });
+    const overQuota = computed(() => (todayTot.value.rx + todayTot.value.tx)/1e9 > quotaGB);
+    const latencyAvg = computed(() => { const a = latency.value.filter(p=>p.latency_ms!=null).map(p=>p.latency_ms); return a.length? a.reduce((x,y)=>x+y,0)/a.length : 0; });
+    const lossAvg = computed(() => { const a = latency.value.map(p=>p.loss_pct||0); return a.length? a.reduce((x,y)=>x+y,0)/a.length : 0; });
+
+    const charts = {};
+    const initCharts = () => {
+      ['gauge','ifaceBar','todayBar','latencyLine','historyBar'].forEach(id => {
+        charts[id] = echarts.init(document.getElementById(id), dark.value ? 'dark' : undefined);
+      });
+      window.addEventListener('resize', () => Object.values(charts).forEach(c => c.resize()));
+    };
+    const baseGrid = { left: 50, right: 20, top: 30, bottom: 30 };
+    const axisColor = () => ({ axisLine:{lineStyle:{color: dark.value?'#30363d':'#e5e7eb'}}, axisLabel:{color: dark.value?'#8b949e':'#6b7280'} });
+
+    const updateGauge = () => {
+      charts.gauge.setOption({
+        series: [
+          { type:'gauge', center:['27%','55%'], radius:'82%', min:0, max: Math.max(100, totals.value.rx*1.5),
+            progress:{show:true,width:10}, axisLine:{lineStyle:{width:10,color:[[1,'#2dd4bf']]}},
+            axisTick:{show:false}, splitLine:{show:false}, axisLabel:{show:false},
+            pointer:{width:4}, detail:{valueAnimation:true, formatter:'{value}', fontSize:18, color:'#2dd4bf', offsetCenter:[0,'70%']},
+            title:{offsetCenter:[0,'95%'], color:'#8b949e', fontSize:11}, data:[{value:+totals.value.rx.toFixed(1), name:'RX Mbps'}] },
+          { type:'gauge', center:['73%','55%'], radius:'82%', min:0, max: Math.max(100, totals.value.tx*1.5),
+            progress:{show:true,width:10}, axisLine:{lineStyle:{width:10,color:[[1,'#3b82f6']]}},
+            axisTick:{show:false}, splitLine:{show:false}, axisLabel:{show:false},
+            pointer:{width:4}, detail:{valueAnimation:true, formatter:'{value}', fontSize:18, color:'#3b82f6', offsetCenter:[0,'70%']},
+            title:{offsetCenter:[0,'95%'], color:'#8b949e', fontSize:11}, data:[{value:+totals.value.tx.toFixed(1), name:'TX Mbps'}] }
+        ]
+      });
+    };
+    const updateIfaceBar = () => {
+      const keys = Object.keys(ifaces.value).filter(k=>PHYS.test(k)).sort((a,b)=>(ifaces.value[b].rx_rate_mbps||0)-(ifaces.value[a].rx_rate_mbps||0)).slice(0,8);
+      charts.ifaceBar.setOption({
+        grid: { ...baseGrid, left: 60 },
+        tooltip:{trigger:'axis', axisPointer:{type:'shadow'}},
+        legend:{textStyle:{color: dark.value?'#8b949e':'#6b7280'}, top:0},
+        xAxis:{type:'value', ...axisColor()},
+        yAxis:{type:'category', data: keys.slice().reverse(), ...axisColor()},
+        series:[
+          {name:'RX', type:'bar', data: keys.map(k=>+(ifaces.value[k].rx_rate_mbps||0).toFixed(2)), itemStyle:{color:'#2dd4bf', borderRadius:[0,4,4,0]}},
+          {name:'TX', type:'bar', data: keys.map(k=>+(ifaces.value[k].tx_rate_mbps||0).toFixed(2)), itemStyle:{color:'#3b82f6', borderRadius:[0,4,4,0]}}
+        ]
+      });
+    };
+    const updateTodayBar = () => {
+      const keys = Object.keys(todayDaily.value).filter(k=>PHYS.test(k)).sort((a,b)=>(todayDaily.value[b].rx_bytes||0)-(todayDaily.value[a].rx_bytes||0)).slice(0,8);
+      const rx = keys.map(k=> +(todayDaily.value[k].rx_bytes/1e9).toFixed(2));
+      const tx = keys.map(k=> +(todayDaily.value[k].tx_bytes/1e9).toFixed(2));
+      charts.todayBar.setOption({
+        grid: { ...baseGrid, left: 60 },
+        tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, valueFormatter:v=>v+' GB'},
+        legend:{textStyle:{color: dark.value?'#8b949e':'#6b7280'}, top:0},
+        xAxis:{type:'value', name:'GB', ...axisColor()},
+        yAxis:{type:'category', data: keys.slice().reverse(), ...axisColor()},
+        series:[
+          {name:'RX', type:'bar', data: rx.slice().reverse(), itemStyle:{color:'#2dd4bf', borderRadius:[0,4,4,0]},
+            markLine:{ silent:true, symbol:'none', lineStyle:{color:'#f59e0b',type:'dashed'}, data:[{xAxis: quotaGB}] } },
+          {name:'TX', type:'bar', data: tx.slice().reverse(), itemStyle:{color:'#3b82f6', borderRadius:[0,4,4,0]}}
+        ]
+      });
+    };
+    const updateLatency = () => {
+      const xs = latency.value.map(p=>fmtDate(p.timestamp));
+      charts.latencyLine.setOption({
+        grid: { ...baseGrid, right: 50 },
+        tooltip:{trigger:'axis'},
+        legend:{textStyle:{color: dark.value?'#8b949e':'#6b7280'}, top:0},
+        xAxis:{type:'category', data: xs, ...axisColor()},
+        yAxis:[
+          {type:'value', name:'ms', ...axisColor()},
+          {type:'value', name:'%', max:100, ...axisColor()}
+        ],
+        series:[
+          {name:'延迟', type:'line', smooth:true, data: latency.value.map(p=>p.latency_ms), itemStyle:{color:'#8b5cf6'}, areaStyle:{color:'rgba(139,92,246,.12)'}},
+          {name:'丢包', type:'line', yAxisIndex:1, smooth:true, data: latency.value.map(p=>p.loss_pct), itemStyle:{color:'#ef4444'} }
+        ]
+      });
+    };
+    const updateHistory = () => {
+      const xs = history.value.map(d=>fmtDate(d.date));
+      charts.historyBar.setOption({
+        grid: { ...baseGrid, left: 50 },
+        tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, valueFormatter:v=>v+' GB'},
+        legend:{textStyle:{color: dark.value?'#8b949e':'#6b7280'}, top:0},
+        xAxis:{type:'category', data: xs, ...axisColor()},
+        yAxis:{type:'value', name:'GB', ...axisColor()},
+        series:[
+          {name:'RX', type:'bar', data: history.value.map(d=>+(d.rx_bytes/1e9).toFixed(2)), itemStyle:{color:'#2dd4bf', borderRadius:[4,4,0,0]}},
+          {name:'TX', type:'bar', data: history.value.map(d=>+(d.tx_bytes/1e9).toFixed(2)), itemStyle:{color:'#3b82f6', borderRadius:[4,4,0,0]}}
+        ]
+      });
+    };
+    const updateAll = () => { updateGauge(); updateIfaceBar(); updateTodayBar(); updateLatency(); updateHistory(); };
+
+    const loadServers = () => API('/api/v2/servers').then(d => { servers.value = d.servers || d || []; if (!selectedId.value && servers.value.length) { selectedId.value = servers.value[0].id; loadAll(); } }).catch(()=>{});
+    const loadRealtime = () => { if (!selectedId.value) return; API('/api/v2/monitor/'+selectedId.value+'/network').then(d => { ifaces.value = d.interfaces||{}; todayDaily.value = d.today_daily||{}; }).catch(()=>{}); };
+    const loadHistory = () => { if (!selectedId.value) return; API('/api/v2/monitor/'+selectedId.value+'/network/history?days=7').then(d => { history.value = d.series||[]; }).catch(()=>{}); };
+    const loadLatency = () => { if (!selectedId.value) return; API('/api/v2/monitor/'+selectedId.value+'/network/latency?target=8.8.8.8&days=7').then(d => { latency.value = d.points||[]; }).catch(()=>{}); };
+    const loadAll = () => { loadRealtime(); loadHistory(); loadLatency(); };
+    const onServerChange = () => loadAll();
+    const toggleTheme = () => { dark.value = !dark.value; document.body.classList.toggle('light', !dark.value); Object.values(charts).forEach(c=>c.dispose()); initCharts(); nextTick(updateAll); };
+
+    onMounted(() => {
+      initCharts();
+      loadServers();
+      setInterval(loadRealtime, 20000);
+      setInterval(() => { loadHistory(); loadLatency(); }, 60000);
+    });
+    onUnmounted(() => { /* intervals cleared by page nav */ });
+    watch([ifaces, todayDaily, history, latency], updateAll);
+
+    return { servers, selectedId, dark, quotaGB, totals, todayTot, overQuota, latencyAvg, lossAvg,
+             fmtRate, fmtGB, fmtMs, onServerChange, toggleTheme, loadAll };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

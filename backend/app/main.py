@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, User
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, User, NetworkStats, NetworkLatency
 from app.auth import hash_password, verify_password, create_access_token, get_current_user
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -33,6 +33,7 @@ LOCAL_DOMAIN = os.getenv("LOCAL_DOMAIN", "ops.salmon.xin")
 JWT_SECRET = os.getenv("OPS_JWT_SECRET", "opscenter-default-secret-change-me-1234567890")
 ADMIN_USER = os.getenv("OPS_ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("OPS_ADMIN_PASSWORD", "OpsCenter@2026")
+LOCAL_AGENT_TOKEN = os.getenv("LOCAL_AGENT_TOKEN", "")
 
 # Category -> Group ID auto-mapping for service grouping
 CATEGORY_TO_GROUP = {
@@ -350,7 +351,7 @@ async def _agent_health_check_loop():
                 local_srv = db.query(Server).filter(Server.agent_type == "local").first()
                 if local_srv:
                     try:
-                        local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
+                        local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, LOCAL_AGENT_TOKEN)
                         if local_data:
                             local_srv.agent_status = "running"
                             local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
@@ -545,7 +546,7 @@ async def startup():
         discover_docker_services(local, db, LOCAL_HOST)
         # Auto-detect local Agent status on startup
         try:
-            local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, local.agent_token or "")
+            local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, LOCAL_AGENT_TOKEN)
             if local_agent:
                 local.agent_status = "running"
                 local.agent_version = local_agent.get("agent_version", "2.1.0")
@@ -585,6 +586,7 @@ async def startup():
     # asyncio.create_task(background_health_check())
     # Start background agent metrics collector
     asyncio.create_task(background_agent_collector())
+    asyncio.create_task(daily_network_aggregation())
     # Migrate groups.json to per-server format if needed
     _migrate_groups_json()
     # v3.23.1: 移除启动时自动分组(_auto_assign_all_groups)，避免覆盖用户手动配置的分组
@@ -833,7 +835,7 @@ def test_server(server_id: str, password: Optional[str] = None, current_user: Us
         if srv.agent_type == "local":
             # Local server: try Agent health check
             try:
-                agent_data = fetch_agent_metrics("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
+                agent_data = fetch_agent_metrics("127.0.0.1", srv.agent_port or 19100, LOCAL_AGENT_TOKEN)
                 if agent_data:
                     srv.status = ServerStatus.online.value
                     srv.last_seen = datetime.utcnow()
@@ -1904,7 +1906,7 @@ def scan_all(current_user: User = Depends(get_current_user)):
             local_srv = db.query(Server).filter(Server.agent_type == "local").first()
             if local_srv:
                 try:
-                    local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
+                    local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, LOCAL_AGENT_TOKEN)
                     if local_data:
                         local_srv.agent_status = "running"
                         local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
@@ -2475,6 +2477,128 @@ def uninstall_agent_api(server_id: str, current_user: User = Depends(get_current
 
 # === Agent Metrics Collection ===
 
+# === Network monitoring (v3.25 Phase 2.1) ===
+network_latency_store = {}
+
+
+async def daily_network_aggregation():
+    """每日 00:05 从各 Agent 拉取当日累计流量，upsert 进 network_stats。"""
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from datetime import timedelta
+    while True:
+        now = datetime.now()
+        next_run = now.replace(hour=0, minute=5, second=0, microsecond=0)
+        if next_run <= now:
+            next_run = next_run + timedelta(days=1)
+        try:
+            await asyncio.sleep((next_run - now).total_seconds())
+        except Exception:
+            await asyncio.sleep(3600)
+            continue
+        try:
+            with get_db() as db:
+                servers = db.query(Server).filter(Server.agent_status == "running").all()
+                today = datetime.utcnow().date()
+                for srv in servers:
+                    try:
+                        host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+                        token = srv.agent_token or (LOCAL_AGENT_TOKEN if srv.agent_type == "local" else "")
+                        data = fetch_agent_metrics(host, srv.agent_port or 19100, token)
+                        if not data:
+                            continue
+                        daily = data.get("network_daily", {})
+                        for iface, vals in daily.items():
+                            stmt = pg_insert(NetworkStats).values(
+                                id=uuid.uuid4(), server_id=srv.id, date=today, interface=iface,
+                                rx_bytes=vals.get("rx_bytes", 0), tx_bytes=vals.get("tx_bytes", 0),
+                            ).on_conflict_do_update(
+                                index_elements=['server_id', 'date', 'interface'],
+                                set_={'rx_bytes': vals.get("rx_bytes", 0), 'tx_bytes': vals.get("tx_bytes", 0)},
+                            )
+                            db.execute(stmt)
+                    except Exception as e:
+                        print(f"[network-agg] {srv.name}: {e}", flush=True)
+            print("[network-agg] daily network_stats aggregation done", flush=True)
+        except Exception as e:
+            print(f"[network-agg] error: {e}", flush=True)
+
+
+@app.get("/api/v2/monitor/{server_id}/network")
+def get_network_realtime(server_id: str, current_user: User = Depends(get_current_user)):
+    """实时每网卡带宽 + 今日累计（取自 Agent 实时数据）。"""
+    try:
+        sid = uuid.UUID(server_id)
+    except Exception:
+        raise HTTPException(400, "Invalid server_id")
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == sid).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        token = srv.agent_token or (LOCAL_AGENT_TOKEN if srv.agent_type == "local" else "")
+        data = fetch_agent_metrics(host, srv.agent_port or 19100, token)
+        network = data.get("network", {}) if data else {}
+        daily = data.get("network_daily", {}) if data else {}
+        today = datetime.utcnow().date()
+        db_daily = db.query(NetworkStats).filter(NetworkStats.server_id == sid, NetworkStats.date == today).all()
+        return {
+            "server_id": server_id,
+            "interfaces": network,
+            "today_daily": daily,
+            "db_daily": [{"interface": r.interface, "rx_bytes": r.rx_bytes, "tx_bytes": r.tx_bytes} for r in db_daily],
+            "source": "agent" if data else "none",
+        }
+
+
+@app.get("/api/v2/monitor/{server_id}/network/history")
+def get_network_history(server_id: str, days: int = 7, current_user: User = Depends(get_current_user)):
+    """每日流量趋势（默认 7 天，最多 90 天）。"""
+    try:
+        sid = uuid.UUID(server_id)
+    except Exception:
+        raise HTTPException(400, "Invalid server_id")
+    from datetime import timedelta
+    days = min(max(days, 1), 90)
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == sid).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        cutoff = datetime.utcnow().date() - timedelta(days=days - 1)
+        rows = db.query(NetworkStats).filter(NetworkStats.server_id == sid, NetworkStats.date >= cutoff).all()
+        by_date = {}
+        for r in rows:
+            d = r.date.isoformat()
+            if d not in by_date:
+                by_date[d] = {"date": d, "rx_bytes": 0, "tx_bytes": 0}
+            by_date[d]["rx_bytes"] += r.rx_bytes or 0
+            by_date[d]["tx_bytes"] += r.tx_bytes or 0
+        return {"server_id": server_id, "days": days, "series": [by_date[k] for k in sorted(by_date.keys())]}
+
+
+@app.get("/api/v2/monitor/{server_id}/network/latency")
+def get_network_latency(server_id: str, target: str = "8.8.8.8", days: int = 7, current_user: User = Depends(get_current_user)):
+    """延迟/丢包历史（默认 7 天）。"""
+    try:
+        sid = uuid.UUID(server_id)
+    except Exception:
+        raise HTTPException(400, "Invalid server_id")
+    from datetime import timedelta
+    days = min(max(days, 1), 90)
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == sid).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        rows = db.query(NetworkLatency).filter(
+            NetworkLatency.server_id == sid,
+            NetworkLatency.target == target,
+            NetworkLatency.timestamp >= cutoff,
+        ).order_by(NetworkLatency.timestamp).all()
+        points = [{"timestamp": r.timestamp.isoformat(), "latency_ms": r.latency_ms,
+                   "loss_pct": r.loss_pct, "jitter_ms": r.jitter_ms} for r in rows]
+        return {"server_id": server_id, "target": target, "points": points}
+
+
 def _collect_agent_metrics():
     """Synchronous: collect metrics from all running agents and store history."""
     import requests as req
@@ -2489,7 +2613,7 @@ def _collect_agent_metrics():
             
             for srv in servers:
                 try:
-                    data = fetch_agent_metrics("127.0.0.1" if srv.agent_type == "local" else srv.host, srv.agent_port or 19100, srv.agent_token or "")
+                    data = fetch_agent_metrics("127.0.0.1" if srv.agent_type == "local" else srv.host, srv.agent_port or 19100, LOCAL_AGENT_TOKEN if srv.agent_type == "local" else srv.agent_token or "")
                     if not data:
                         # Agent unreachable
                         srv.agent_status = "stopped"
@@ -2557,6 +2681,20 @@ def _collect_agent_metrics():
                     srv.status = ServerStatus.online.value
                     srv.last_seen = now
                     srv.agent_status = "running"
+
+                    # --- Network latency storage (throttled 5min) ---
+                    if data and data.get("latency"):
+                        _ls = network_latency_store.get(srv.id, 0)
+                        if datetime.utcnow().timestamp() - _ls >= 300:
+                            network_latency_store[srv.id] = datetime.utcnow().timestamp()
+                            for tgt, lval in data["latency"].items():
+                                db.add(NetworkLatency(
+                                    server_id=srv.id,
+                                    target=tgt,
+                                    latency_ms=lval.get("latency_ms"),
+                                    loss_pct=lval.get("loss_pct", 0) or 0,
+                                    jitter_ms=lval.get("jitter_ms"),
+                                ))
                     
                 except Exception as e:
                     print(f"Agent metrics collection error for {srv.host}: {e}")
@@ -2605,7 +2743,7 @@ def get_agent_metrics_api(server_id: str):
     if srv.agent_status != "running":
         return {"error": "Agent未运行", "agent_status": srv.agent_status}
     
-    data = fetch_agent_metrics("127.0.0.1" if srv.agent_type == "local" else srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    data = fetch_agent_metrics("127.0.0.1" if srv.agent_type == "local" else srv.host, srv.agent_port or 19100, LOCAL_AGENT_TOKEN if srv.agent_type == "local" else srv.agent_token or "")
     if not data:
         # Update status
         with get_db() as db:
