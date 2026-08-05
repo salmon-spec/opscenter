@@ -98,38 +98,51 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             except Exception:
                 pass
             # Old version detected — stop service, will reinstall below
-            _ssh_exec(client, f"sudo systemctl stop {AGENT_SERVICE}")
+            _ssh_exec(client, f"systemctl stop {AGENT_SERVICE}")
             import time; time.sleep(1)
 
         # 3. Create directory and upload agent script
         token = existing_config.get('token', '') or _generate_token()
-        _ssh_exec(client, f"sudo mkdir -p {AGENT_DIR} && sudo chmod 777 {AGENT_DIR}")
-        _ssh_exec(client, f"sudo rm -f {AGENT_DIR}/*.py {AGENT_DIR}/.agent_config")
+        _ssh_exec(client, f"mkdir -p {AGENT_DIR}")
 
         # Upload agent script + scanner module via SFTP
-        _ssh_exec(client, f"sudo mkdir -p {AGENT_DIR} && sudo chmod 777 {AGENT_DIR}")
         sftp = client.open_sftp()
-        for _fn, _ct in [("opsagent.py", _OPSAGENT_DATA), ("scanner.py", _SCANNER_DATA)]:
-            with sftp.file(f"{AGENT_DIR}/{_fn}", 'w') as _sf:
-                _sf.write(_ct)
+        files_to_upload = [AGENT_SCRIPT, "scanner.py"]
+        upload_ok = False
+        for search_dir in ["agent/", "/opt/opscenter/agent/"]:
+            try:
+                for fname in files_to_upload:
+                    local_path = f"{search_dir}{fname}"
+                    remote_path = f"{AGENT_DIR}/{fname}"
+                    with open(local_path, 'r') as local_f:
+                        content_to_write = local_f.read()
+                    with sftp.file(remote_path, 'w') as f:
+                        f.write(content_to_write)
+                upload_ok = True
+                break
+            except FileNotFoundError:
+                continue
         sftp.close()
+        if not upload_ok:
+            return {"success": False, "message": "Agent脚本文件未找到，请检查部署路径"}
+
         # 4. Create systemd service
         service_content = _build_service_content(port, token)
         # Write service file via python
-        _ssh_exec(client, f"sudo python3 -c \""
+        _ssh_exec(client, f"python3 -c \""
                    f"with open('/etc/systemd/system/{AGENT_SERVICE}', 'w') as f: "
                    f"f.write('''{service_content}''')\"")
 
         # 5. Save agent config
         config = {"port": port, "token": token, "version": _AGENT_VERSION}
-        _ssh_exec(client, f"sudo python3 -c \""
+        _ssh_exec(client, f"python3 -c \""
                    f"import json; "
                    f"open('{AGENT_DIR}/.agent_config', 'w').write(json.dumps({config}))\"")
 
         # 6. Reload systemd, enable and start service
-        _ssh_exec(client, "sudo systemctl daemon-reload")
-        _ssh_exec(client, f"sudo systemctl enable {AGENT_SERVICE}")
-        out, err, code = _ssh_exec(client, f"sudo systemctl start {AGENT_SERVICE}")
+        _ssh_exec(client, "systemctl daemon-reload")
+        _ssh_exec(client, f"systemctl enable {AGENT_SERVICE}")
+        out, err, code = _ssh_exec(client, f"systemctl start {AGENT_SERVICE}")
 
         if code != 0 and 'Job' not in err:
             return {"success": False, "message": f"Agent启动失败: {err.strip()}"}
@@ -144,7 +157,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             return {"success": False, "message": f"Agent启动异常: {log_out[-200:]}"}
 
         # 8. Try to open firewall if ufw is active
-        _ssh_exec(client, f"sudo ufw status | grep -q 'active' && ufw allow {port}/tcp 2>/dev/null || true")
+        _ssh_exec(client, f"ufw status | grep -q 'active' && ufw allow {port}/tcp 2>/dev/null || true")
 
         return {
             "success": True,
@@ -251,11 +264,11 @@ def uninstall_agent(server: Server, password: str = None) -> Dict:
         return {"success": False, "message": "SSH连接失败"}
 
     try:
-        _ssh_exec(client, f"sudo systemctl stop {AGENT_SERVICE} 2>/dev/null || true")
-        _ssh_exec(client, f"sudo systemctl disable {AGENT_SERVICE} 2>/dev/null || true")
-        _ssh_exec(client, f"sudo rm -f /etc/systemd/system/{AGENT_SERVICE}")
-        _ssh_exec(client, f"sudo rm -rf {AGENT_DIR}")
-        _ssh_exec(client, "sudo systemctl daemon-reload")
+        _ssh_exec(client, f"systemctl stop {AGENT_SERVICE} 2>/dev/null || true")
+        _ssh_exec(client, f"systemctl disable {AGENT_SERVICE} 2>/dev/null || true")
+        _ssh_exec(client, f"rm -f /etc/systemd/system/{AGENT_SERVICE}")
+        _ssh_exec(client, f"rm -rf {AGENT_DIR}")
+        _ssh_exec(client, "systemctl daemon-reload")
         return {"success": True, "message": "Agent已卸载"}
     except Exception as e:
         return {"success": False, "message": f"卸载异常: {str(e)}"}
@@ -328,14 +341,3 @@ def upgrade_local_agent():
         return {"success": False, "message": "Agent重启后未激活"}
     
     return {"success": True, "version": _AGENT_VERSION, "message": f"本机Agent已升级到 v{_AGENT_VERSION}"}
-
-
-# Preloaded agent scripts (fix for systemd service file access issue)
-try:
-    _agent_src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'agent')
-    with open(os.path.join(_agent_src_dir, 'opsagent.py')) as _f:
-        _OPSAGENT_DATA = _f.read()
-    with open(os.path.join(_agent_src_dir, 'scanner.py')) as _f:
-        _SCANNER_DATA = _f.read()
-except Exception:
-    _OPSAGENT_DATA = _SCANNER_DATA = ''

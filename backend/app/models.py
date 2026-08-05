@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, Enum as SAEnum, BigInteger, Date, UniqueConstraint
+from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
@@ -104,48 +104,4 @@ class MetricHistory(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     metric = Column(String(20), nullable=False)
     value = Column(Float, nullable=False)
-
-class User(Base):
-    """OpsCenter 登录用户（v3.23.0 新增，用于资源管理页鉴权）。"""
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(50), unique=True, nullable=False, index=True)
-    password_hash = Column(String(255), nullable=False)
-    display_name = Column(String(100), nullable=True)
-    role = Column(String(20), default="admin")
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_login_at = Column(DateTime, nullable=True)
-
-
-class NetworkStats(Base):
-    """每日流量累计表（每服务器每网卡每天一行）。"""
-    __tablename__ = "network_stats"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False, index=True)
-    date = Column(Date, nullable=False, index=True)
-    interface = Column(String(32), nullable=False)
-    rx_bytes = Column(BigInteger, default=0)
-    tx_bytes = Column(BigInteger, default=0)
-    rx_packets = Column(BigInteger, default=0)
-    tx_packets = Column(BigInteger, default=0)
-    rx_errors = Column(BigInteger, default=0)
-    tx_errors = Column(BigInteger, default=0)
-    peak_rx_mbps = Column(Float, nullable=True)
-    peak_tx_mbps = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    __table_args__ = (UniqueConstraint('server_id', 'date', 'interface', name='uq_network_stats_sdi'),)
-
-
-class NetworkLatency(Base):
-    """延迟/丢包快照表。"""
-    __tablename__ = "network_latency"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False, index=True)
-    target = Column(String(255), nullable=False)
-    latency_ms = Column(Float, nullable=True)
-    loss_pct = Column(Float, default=0)
-    jitter_ms = Column(Float, nullable=True)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-
 

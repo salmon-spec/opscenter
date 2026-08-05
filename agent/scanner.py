@@ -384,56 +384,6 @@ PORT_PROTOCOL_HINTS = {
 }
 
 
-def collect_network():
-    """按网卡读取 /proc/net/dev 计数器（纯 stdlib，无 psutil 依赖）。"""
-    net = {}
-    try:
-        with open('/proc/net/dev') as f:
-            for line in f:
-                if ':' not in line:
-                    continue
-                iface, data = line.split(':', 1)
-                iface = iface.strip()
-                if iface == 'lo':
-                    continue
-                parts = data.split()
-                if len(parts) < 11:
-                    continue
-                net[iface] = {
-                    'rx_bytes': int(parts[0]),
-                    'rx_packets': int(parts[1]),
-                    'rx_errors': int(parts[2]),
-                    'tx_bytes': int(parts[8]),
-                    'tx_packets': int(parts[9]),
-                    'tx_errors': int(parts[10]),
-                }
-    except Exception:
-        pass
-    return net
-
-
-def ping_latency(target, count=4, timeout=1):
-    """对目标做 ping，返回 {latency_ms, loss_pct, jitter_ms}。"""
-    import re
-    try:
-        out = subprocess.run(
-            ['ping', '-c', str(count), '-W', str(timeout), target],
-            capture_output=True, text=True, timeout=count * timeout + 5,
-        )
-        s = out.stdout
-    except Exception:
-        return {'latency_ms': None, 'loss_pct': 100.0, 'jitter_ms': None}
-    loss = 0.0
-    m = re.search(r'(\d+(?:\.\d+)?)%\s*packet loss', s)
-    if m:
-        loss = float(m.group(1))
-    rtt = re.search(r'rtt min/avg/max/mdev = ([\d.]+)/([\d.]+)/([\d.]+)/([\d.]+)', s)
-    if rtt:
-        return {'latency_ms': float(rtt.group(2)), 'loss_pct': loss,
-                'jitter_ms': float(rtt.group(4))}
-    return {'latency_ms': None, 'loss_pct': loss, 'jitter_ms': None}
-
-
 def scan_all():
     """Run all scanners and return combined result."""
     now = time.time()
