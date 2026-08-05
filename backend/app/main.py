@@ -26,8 +26,23 @@ class TerminalCreateRequest(BaseModel):
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
-LOCAL_HOST = os.getenv("LOCAL_HOST", "101.200.91.229")
+
+def _detect_local_ip() -> str:
+    """探测本机主 IP（LOCAL_HOST 默认值兜底，127.0.0.1 兜底）。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("223.5.5.5", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+LOCAL_HOST = os.getenv("LOCAL_HOST", _detect_local_ip())
 LOCAL_DOMAIN = os.getenv("LOCAL_DOMAIN", "ops.salmon.xin")
+# 本机(local)服务器配置（v3.24.1 重构：命名/主机/token 全部可配置化，不再硬编码 "MFA Server"）
+LOCAL_SERVER_NAME = os.getenv("LOCAL_SERVER_NAME", "本机 (OpsCenter)")
+LOCAL_AGENT_TOKEN = os.getenv("LOCAL_AGENT_TOKEN", "")
 
 # === Auth Config (v3.23.0) ===
 JWT_SECRET = os.getenv("OPS_JWT_SECRET", "opscenter-default-secret-change-me-1234567890")
@@ -525,38 +540,62 @@ async def startup():
             time.sleep(2)
     
     # Auto-register local server and discover services
+    # v3.24.1 重构：local 服务器仅在「servers 表为空（首次部署）」时自动创建；
+    # 用户删除后不自动复活（尊重显式意图），需手动调用 rebuild 端点恢复。
     with get_db() as db:
         local = db.query(Server).filter((Server.is_local == True) | (Server.agent_type == "local")).first()
         if not local:
-            local = Server(
-                name="MFA Server",
-                host=LOCAL_HOST,
-                ssh_port=22,
-                ssh_user="root",
-                status=ServerStatus.online.value,
-                docker_available=True,
-                is_local=True,
-                agent_type='local',
-            )
-            db.add(local)
-            db.commit()
-            db.refresh(local)
-        
-        # Run initial discovery
-        discover_docker_services(local, db, LOCAL_HOST)
-        # Auto-detect local Agent status on startup
-        try:
-            local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, LOCAL_AGENT_TOKEN)
-            if local_agent:
-                local.agent_status = "running"
-                local.agent_version = local_agent.get("agent_version", "2.1.0")
-                local.last_seen = datetime.utcnow()
-                print(f"[Startup] Local Agent detected: v{local.agent_version}")
+            if db.query(Server).count() == 0:
+                # 首次部署：自动初始化本机服务器（名称/主机/token 来自环境变量）
+                local = Server(
+                    name=LOCAL_SERVER_NAME,
+                    host=LOCAL_HOST,
+                    ssh_port=22,
+                    ssh_user="root",
+                    status=ServerStatus.online.value,
+                    docker_available=True,
+                    is_local=True,
+                    agent_type='local',
+                    agent_token=LOCAL_AGENT_TOKEN,
+                )
+                db.add(local)
+                db.commit()
+                db.refresh(local)
             else:
-                local.agent_status = "stopped"
-                print("[Startup] Local Agent not reachable")
-        except Exception as e:
-            print(f"[Startup] Local Agent check error: {e}")
+                # 表非空且无 local 记录：不自动重建，避免"删了又复活"
+                print("[Startup] 未找到 local 服务器记录且 servers 表非空，跳过自动重建（可用 POST /api/v2/server/local/rebuild 手动恢复）")
+        else:
+            # 已存在：同步配置字段（改名/改主机/补 token 即时生效），不重复创建
+            changed = False
+            if LOCAL_SERVER_NAME and local.name != LOCAL_SERVER_NAME:
+                local.name = LOCAL_SERVER_NAME
+                changed = True
+            if LOCAL_HOST and local.host != LOCAL_HOST:
+                local.host = LOCAL_HOST
+                changed = True
+            if LOCAL_AGENT_TOKEN and local.agent_token != LOCAL_AGENT_TOKEN:
+                local.agent_token = LOCAL_AGENT_TOKEN
+                changed = True
+            if changed:
+                db.commit()
+                print(f"[Startup] local 服务器字段已同步: {local.name} / {local.host}")
+
+        if local is not None:
+            # Run initial discovery
+            discover_docker_services(local, db, LOCAL_HOST)
+            # Auto-detect local Agent status on startup
+            try:
+                local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, local.agent_token or LOCAL_AGENT_TOKEN)
+                if local_agent:
+                    local.agent_status = "running"
+                    local.agent_version = local_agent.get("agent_version", "2.1.0")
+                    local.last_seen = datetime.utcnow()
+                    print(f"[Startup] Local Agent detected: v{local.agent_version}")
+                else:
+                    local.agent_status = "stopped"
+                    print("[Startup] Local Agent not reachable")
+            except Exception as e:
+                print(f"[Startup] Local Agent check error: {e}")
 
 
         
@@ -766,6 +805,33 @@ def delete_server(server_id: str, current_user: User = Depends(get_current_user)
         except Exception as e:
             print(f"[WARN] groups.json cleanup failed: {e}")
         return {"ok": True, "message": f"服务器'{server_name}'已删除{agent_info}"}
+
+@app.post("/api/v2/server/local/rebuild")
+def rebuild_local_server(current_user: User = Depends(get_current_user)):
+    """手动重建本机(local)服务器记录（v3.24.1 新增）。
+
+    v3.24.1 起 local 服务器不再随启动自动复活（仅首次部署时创建），
+    若误删本机服务器导致本机监控失效，可调用本端点显式恢复。
+    """
+    with get_db() as db:
+        local = db.query(Server).filter((Server.is_local == True) | (Server.agent_type == "local")).first()
+        if local:
+            return {"ok": True, "message": "local 服务器已存在，无需重建", "server_id": str(local.id)}
+        local = Server(
+            name=LOCAL_SERVER_NAME,
+            host=LOCAL_HOST,
+            ssh_port=22,
+            ssh_user="root",
+            status=ServerStatus.online.value,
+            docker_available=True,
+            is_local=True,
+            agent_type='local',
+            agent_token=LOCAL_AGENT_TOKEN,
+        )
+        db.add(local)
+        db.commit()
+        db.refresh(local)
+        return {"ok": True, "message": "local 服务器已重建", "server_id": str(local.id)}
 
 @app.post("/api/v2/servers/{server_id}/scan")
 def scan_server(server_id: str, password: Optional[str] = None, current_user: User = Depends(get_current_user)):
