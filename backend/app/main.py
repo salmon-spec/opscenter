@@ -1713,11 +1713,28 @@ def monitor_network_history(server_id: str, days: int = 7):
 
 @app.get("/api/v2/monitor/{server_id}/network/latency")
 def monitor_network_latency(server_id: str, target: str = "8.8.8.8"):
-    """延迟/丢包探测（调 Agent ping + 写 network_latency 表）。"""
+    """延迟/丢包探测（调 Agent ping + 写 network_latency 表，300s 限频防表膨胀）。"""
+    from datetime import timedelta
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
+        # 限频：300s 内同 server+target 已有记录则直接返回缓存，不重复探测
+        cutoff = datetime.utcnow() - timedelta(seconds=300)
+        recent = db.query(NetworkLatency).filter(
+            NetworkLatency.server_id == srv.id,
+            NetworkLatency.target == target,
+            NetworkLatency.timestamp >= cutoff,
+        ).order_by(NetworkLatency.timestamp.desc()).first()
+        if recent:
+            return {
+                "server_id": server_id, "cached": True,
+                "target": target,
+                "latency_ms": recent.latency_ms,
+                "loss_pct": recent.loss_pct,
+                "jitter_ms": recent.jitter_ms,
+                "timestamp": recent.timestamp.timestamp(),
+            }
     data = _agent_request(srv, f"/api/v1/network/ping?target={target}", timeout=15)
     if data is None:
         return {"server_id": server_id, "connected": False}
@@ -1730,11 +1747,12 @@ def monitor_network_latency(server_id: str, target: str = "8.8.8.8"):
             jitter_ms=data.get("jitter_ms"),
         ))
         db.commit()
-    return {"server_id": server_id, **data}
+    return {"server_id": server_id, "cached": False, **data}
 
 
 async def daily_network_aggregation():
     """每日 00:05 从各 Agent 拉取当日累计流量，upsert 进 network_stats。"""
+    from datetime import timedelta
     import requests as req
     while True:
         now = datetime.utcnow()
