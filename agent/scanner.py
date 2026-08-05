@@ -9,6 +9,7 @@ Pure stdlib, no external dependencies.
 import json
 import os
 import subprocess
+import re
 import time
 
 
@@ -451,3 +452,58 @@ if __name__ == '__main__':
     print(f"  Nginx services: {len(result['nginx_services'])}")
     print()
     pprint.pprint(result, width=120)
+
+
+
+# === Network monitoring (v3.25.1) ===
+
+def collect_network():
+    """读取 /proc/net/dev 返回各网卡 rx/tx 计数器（字节数）。
+
+    返回 { iface: {rx_bytes, tx_bytes, rx_packets, tx_packets, rx_errors, tx_errors} }
+    速率计算由调用方基于两次采样差值完成。
+    """
+    result = {}
+    try:
+        with open('/proc/net/dev') as f:
+            lines = f.readlines()[2:]  # 跳过表头两行
+        for line in lines:
+            if ':' not in line:
+                continue
+            iface, rest = line.split(':', 1)
+            fields = rest.split()
+            if len(fields) < 16:
+                continue
+            result[iface.strip()] = {
+                'rx_bytes': int(fields[0]),
+                'rx_packets': int(fields[1]),
+                'rx_errors': int(fields[2]),
+                'tx_bytes': int(fields[8]),
+                'tx_packets': int(fields[9]),
+                'tx_errors': int(fields[10]),
+            }
+    except Exception:
+        pass
+    return result
+
+
+def ping_latency(target, count=4):
+    """对目标做 ICMP 探测，返回延迟/丢包/抖动统计。"""
+    try:
+        r = subprocess.run(['ping', '-c', str(count), '-W', '2', target],
+                           capture_output=True, text=True, timeout=count * 3 + 5)
+        out = r.stdout
+    except Exception:
+        return {'target': target, 'latency_ms': None, 'loss_pct': 100.0,
+                'jitter_ms': None, 'error': 'ping command failed'}
+    loss = 0.0
+    lat = None
+    jitter = None
+    m = re.search(r'(\d+)% packet loss', out)
+    if m:
+        loss = float(m.group(1))
+    m = re.search(r'rtt min/avg/max/mdev = [\d.]+/([\d.]+)/[\d.]+/([\d.]+)', out)
+    if m:
+        lat = float(m.group(1))
+        jitter = float(m.group(2))
+    return {'target': target, 'latency_ms': lat, 'loss_pct': loss, 'jitter_ms': jitter}

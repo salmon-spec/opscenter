@@ -20,6 +20,49 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scanner
 
 
+# === Network monitoring state (v3.25.1) ===
+_net_last = {}    # iface -> {rx, tx, ts}
+_net_daily = {}   # iface -> {rx, tx, date}
+_net_lock = threading.Lock()
+
+
+def _network_snapshot():
+    """计算各网卡实时速率(Mbps)与今日累计字节，供 /metrics 与 /api/v1/network 使用。"""
+    global _net_last, _net_daily
+    now = time.time()
+    today = time.strftime('%Y-%m-%d')
+    cur = scanner.collect_network()
+    snap = {}
+    with _net_lock:
+        for iface, d in cur.items():
+            last = _net_last.get(iface)
+            rx_rate = tx_rate = 0.0
+            if last:
+                dt = now - last['ts']
+                if dt > 0:
+                    rx_rate = max(0.0, (d['rx_bytes'] - last['rx']) / dt * 8 / 1e6)
+                    tx_rate = max(0.0, (d['tx_bytes'] - last['tx']) / dt * 8 / 1e6)
+            _net_last[iface] = {'rx': d['rx_bytes'], 'tx': d['tx_bytes'], 'ts': now}
+            day = _net_daily.get(iface)
+            if not day or day['date'] != today:
+                day = {'rx': 0, 'tx': 0, 'date': today}
+            if last:
+                day['rx'] += max(0, d['rx_bytes'] - last['rx'])
+                day['tx'] += max(0, d['tx_bytes'] - last['tx'])
+            _net_daily[iface] = day
+            snap[iface] = {
+                'rx_rate_mbps': round(rx_rate, 3),
+                'tx_rate_mbps': round(tx_rate, 3),
+                'rx_bytes': d['rx_bytes'],
+                'tx_bytes': d['tx_bytes'],
+                'rx_errors': d['rx_errors'],
+                'tx_errors': d['tx_errors'],
+                'daily_rx_bytes': day['rx'],
+                'daily_tx_bytes': day['tx'],
+            }
+    return snap
+
+
 # === Scan cache and background thread ===
 
 _scan_cache = None
@@ -203,6 +246,12 @@ def collect_metrics():
     m['agent_version'] = AGENT_VERSION
     m['timestamp'] = time.time()
 
+    # 网络快照（v3.25.1）
+    try:
+        m['network'] = _network_snapshot()
+    except Exception:
+        pass
+
     return m
 
 
@@ -265,6 +314,24 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 'ports': data.get('ports', []),
                 'scanned_at': data.get('scanned_at'),
             })
+
+        elif path == '/api/v1/network':
+            if not self._check_auth():
+                return
+            self._json_response({
+                'interfaces': _network_snapshot(),
+                'timestamp': time.time(),
+            })
+
+        elif path == '/api/v1/network/ping':
+            if not self._check_auth():
+                return
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            target = (q.get('target') or ['8.8.8.8'])[0]
+            result = scanner.ping_latency(target)
+            result['timestamp'] = time.time()
+            self._json_response(result)
 
         else:
             self.send_response(404)

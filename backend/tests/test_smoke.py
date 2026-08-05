@@ -96,3 +96,22 @@ def test_server_health_check():
     data = r2.json()
     assert "services" in data
     assert isinstance(data["services"], list)
+
+
+def test_network_api():
+    """Network monitoring endpoints return structured responses."""
+    r = client.post("/api/v2/servers", json={
+        "name": "Net", "host": "10.0.0.1", "ssh_key": ""
+    })
+    sid = r.json()["id"]
+    # live network endpoint (no agent -> connected False, but 200)
+    r1 = client.get(f"/api/v2/monitor/{sid}/network")
+    assert r1.status_code == 200
+    assert "interfaces" in r1.json()
+    # history endpoint
+    r2 = client.get(f"/api/v2/monitor/{sid}/network/history?days=7")
+    assert r2.status_code == 200
+    assert "history" in r2.json()
+    # latency endpoint (no agent -> connected False)
+    r3 = client.get(f"/api/v2/monitor/{sid}/network/latency?target=8.8.8.8")
+    assert r3.status_code == 200

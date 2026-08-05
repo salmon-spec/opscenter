@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -555,6 +555,7 @@ async def startup():
 
     # Start background health check
     asyncio.create_task(background_health_check())
+    asyncio.create_task(daily_network_aggregation())  # v3.25.1 每日流量归集
     # Start background agent metrics collector
     asyncio.create_task(background_agent_collector())
     # Migrate groups.json to per-server format if needed
@@ -1653,6 +1654,129 @@ def toggle_pin(service_id: str):
         return {"ok": True, "pinned": svc.pinned}
 
 
+
+
+# === Network Monitoring API (v3.25.1 Phase 2.1) ===
+def _agent_request(server, path, timeout=5):
+    """向 Agent 发起 HTTP 请求，返回 JSON 或 None。"""
+    import requests as req
+    host = "127.0.0.1" if server.agent_type == "local" else server.host
+    port = server.agent_port or 19100
+    token = server.agent_token or ""
+    try:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        resp = req.get(f"http://{host}:{port}{path}", headers=headers, timeout=timeout)
+        return resp.json() if resp.status_code == 200 else None
+    except Exception:
+        return None
+
+
+@app.get("/api/v2/monitor/{server_id}/network")
+def monitor_network(server_id: str):
+    """实时带宽 + 今日累计流量（来自 Agent /api/v1/network）。"""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+    data = _agent_request(srv, "/api/v1/network")
+    if data is None:
+        return {"server_id": server_id, "connected": False, "interfaces": {}}
+    return {"server_id": server_id, "connected": True, **data}
+
+
+@app.get("/api/v2/monitor/{server_id}/network/history")
+def monitor_network_history(server_id: str, days: int = 7):
+    """N 天流量趋势（network_stats 表按日聚合）。"""
+    from datetime import timedelta
+    days = min(max(days, 1), 90)
+    since = datetime.utcnow().date() - timedelta(days=days - 1)
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        rows = db.query(NetworkStats).filter(
+            NetworkStats.server_id == srv.id,
+            NetworkStats.date >= since,
+        ).all()
+    by_date = {}
+    for r in rows:
+        d = str(r.date)
+        if d not in by_date:
+            by_date[d] = {"rx_bytes": 0, "tx_bytes": 0, "peak_rx_mbps": 0.0, "peak_tx_mbps": 0.0}
+        by_date[d]["rx_bytes"] += r.rx_bytes or 0
+        by_date[d]["tx_bytes"] += r.tx_bytes or 0
+        by_date[d]["peak_rx_mbps"] = max(by_date[d]["peak_rx_mbps"], r.peak_rx_mbps or 0)
+        by_date[d]["peak_tx_mbps"] = max(by_date[d]["peak_tx_mbps"], r.peak_tx_mbps or 0)
+    result = [{"date": d, **v} for d, v in sorted(by_date.items())]
+    return {"server_id": server_id, "days": days, "history": result}
+
+
+@app.get("/api/v2/monitor/{server_id}/network/latency")
+def monitor_network_latency(server_id: str, target: str = "8.8.8.8"):
+    """延迟/丢包探测（调 Agent ping + 写 network_latency 表）。"""
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+    data = _agent_request(srv, f"/api/v1/network/ping?target={target}", timeout=15)
+    if data is None:
+        return {"server_id": server_id, "connected": False}
+    with get_db() as db:
+        db.add(NetworkLatency(
+            server_id=srv.id,
+            target=target,
+            latency_ms=data.get("latency_ms"),
+            loss_pct=data.get("loss_pct", 0),
+            jitter_ms=data.get("jitter_ms"),
+        ))
+        db.commit()
+    return {"server_id": server_id, **data}
+
+
+async def daily_network_aggregation():
+    """每日 00:05 从各 Agent 拉取当日累计流量，upsert 进 network_stats。"""
+    import requests as req
+    while True:
+        now = datetime.utcnow()
+        # 距下一个 00:05 的秒数
+        nxt = now.replace(hour=0, minute=5, second=0, microsecond=0)
+        if now >= nxt:
+            nxt = nxt + timedelta(days=1)
+        await asyncio.sleep((nxt - now).total_seconds())
+        try:
+            with get_db() as db:
+                servers = db.query(Server).filter(Server.enabled == True).all()
+                for srv in servers:
+                    data = _agent_request(srv, "/api/v1/network")
+                    if not data:
+                        continue
+                    today = datetime.utcnow().date()
+                    for iface, st in (data.get("interfaces") or {}).items():
+                        existing = db.query(NetworkStats).filter(
+                            NetworkStats.server_id == srv.id,
+                            NetworkStats.date == today,
+                            NetworkStats.interface == iface,
+                        ).first()
+                        if existing:
+                            existing.rx_bytes = st.get("daily_rx_bytes", 0)
+                            existing.tx_bytes = st.get("daily_tx_bytes", 0)
+                            existing.peak_rx_mbps = max(existing.peak_rx_mbps or 0, st.get("rx_rate_mbps", 0))
+                            existing.peak_tx_mbps = max(existing.peak_tx_mbps or 0, st.get("tx_rate_mbps", 0))
+                        else:
+                            db.add(NetworkStats(
+                                server_id=srv.id, date=today, interface=iface,
+                                rx_bytes=st.get("daily_rx_bytes", 0),
+                                tx_bytes=st.get("daily_tx_bytes", 0),
+                                rx_packets=st.get("rx_packets", 0),
+                                tx_packets=st.get("tx_packets", 0),
+                                rx_errors=st.get("rx_errors", 0),
+                                tx_errors=st.get("tx_errors", 0),
+                                peak_rx_mbps=st.get("rx_rate_mbps", 0),
+                                peak_tx_mbps=st.get("tx_rate_mbps", 0),
+                            ))
+                db.commit()
+        except Exception as e:
+            print(f"[network-aggregation] error: {e}", flush=True)
 
 
 # === Per-Server Health Check (v3.25 Phase 2.2) ===

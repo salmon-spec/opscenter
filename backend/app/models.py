@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, Enum as SAEnum
+from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, BigInteger, Date, Enum as SAEnum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
@@ -105,3 +105,34 @@ class MetricHistory(Base):
     metric = Column(String(20), nullable=False)
     value = Column(Float, nullable=False)
 
+
+
+class NetworkStats(Base):
+    """每日网络流量累计（v3.25.1）。每日 00:05 由后端归集任务写入。"""
+    __tablename__ = "network_stats"
+    __table_args__ = (UniqueConstraint("server_id", "date", "interface", name="uq_netstats_server_date_iface"),)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    date = Column(Date, nullable=False, index=True)
+    interface = Column(String(32), nullable=False)
+    rx_bytes = Column(BigInteger, default=0)
+    tx_bytes = Column(BigInteger, default=0)
+    rx_packets = Column(BigInteger, default=0)
+    tx_packets = Column(BigInteger, default=0)
+    rx_errors = Column(BigInteger, default=0)
+    tx_errors = Column(BigInteger, default=0)
+    peak_rx_mbps = Column(Float, nullable=True)
+    peak_tx_mbps = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class NetworkLatency(Base):
+    """延迟/丢包快照（v3.25.1）。后端探活时写入。"""
+    __tablename__ = "network_latency"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False, index=True)
+    target = Column(String(255), nullable=False)
+    latency_ms = Column(Float, nullable=True)
+    loss_pct = Column(Float, default=0)
+    jitter_ms = Column(Float, nullable=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)

@@ -403,6 +403,15 @@ createApp({
     let monitorCache = null;    // { serverId: { monitorData, containers } }
     let historyCache = null;    // { key: { historyData } }  key = serverId:metric:hours
 
+    // v3.25.1 Network monitoring
+    const netData = ref(null);
+    const netHistory = ref([]);
+    const netLatency = ref({});
+    const netPeak = ref({ rx: 0, tx: 0 });
+    const netChartBox = ref(null);
+    let netChart = null;
+
+
     // ========== Resource: Server Tab ==========
     const scanningServerId = ref(null);
     const checkingAgentServerId = ref(null);
@@ -851,6 +860,52 @@ createApp({
       } catch(e) { console.warn('monitor load failed:', e.message); }
     }
 
+    function fmtMbps(v) { return (v != null) ? v.toFixed(2) : '-'; }
+
+    async function loadNetwork() {
+      if (!currentServerId.value) return;
+      const sid = currentServerId.value;
+      try {
+        const [n, h, l] = await Promise.all([
+          apiGet(`${API}/monitor/${sid}/network`),
+          apiGet(`${API}/monitor/${sid}/network/history?days=7`),
+          apiGet(`${API}/monitor/${sid}/network/latency?target=8.8.8.8`)
+        ]);
+        if (currentServerId.value !== sid) return;
+        netData.value = n;
+        netHistory.value = (h && h.history) || [];
+        netLatency.value = l || {};
+        if (n && n.interfaces) {
+          const keys = Object.keys(n.interfaces).filter(k => k !== 'lo');
+          let prx = 0, ptx = 0;
+          keys.forEach(k => { prx = Math.max(prx, n.interfaces[k].rx_rate_mbps || 0); ptx = Math.max(ptx, n.interfaces[k].tx_rate_mbps || 0); });
+          netPeak.value = { rx: prx.toFixed(2), tx: ptx.toFixed(2) };
+        }
+        renderNetChart();
+      } catch(e) { console.warn('network load failed:', e.message); }
+    }
+
+    async function renderNetChart() {
+      if (!echartsLib) return;
+      await nextTick();
+      if (!netChartBox.value) return;
+      if (!netChart) netChart = echartsLib.init(netChartBox.value, darkMode.value ? 'dark' : null);
+      const days = netHistory.value.map(d => d.date.slice(5));
+      const rx = netHistory.value.map(d => ((d.rx_bytes || 0) / 1048576).toFixed(2));
+      const tx = netHistory.value.map(d => ((d.tx_bytes || 0) / 1048576).toFixed(2));
+      netChart.setOption({
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['下行', '上行'], textStyle: { color: darkMode.value ? '#ccc' : '#333' } },
+        grid: { left: 45, right: 15, top: 30, bottom: 25 },
+        xAxis: { type: 'category', data: days, axisLabel: { color: darkMode.value ? '#aaa' : '#666' } },
+        yAxis: { type: 'value', axisLabel: { color: darkMode.value ? '#aaa' : '#666' } },
+        series: [
+          { name: '下行', type: 'bar', data: rx, itemStyle: { color: '#3b82f6' }, barMaxWidth: 26 },
+          { name: '上行', type: 'bar', data: tx, itemStyle: { color: '#2dd4bf' }, barMaxWidth: 26 }
+        ]
+      }, true);
+    }
+
     async function loadHistory() {
       if (!currentServerId.value) return;
       const sid = currentServerId.value;
@@ -1172,7 +1227,7 @@ createApp({
 
     // Watch server change for monitor (parallel loading)
     watch(currentServerId, async () => {
-      await Promise.all([loadMonitor(), loadHistory()]);
+      await Promise.all([loadMonitor(), loadHistory(), loadNetwork()]);
     });
     watch(currentPage, async (val) => {
       if (val === 'monitor') {
@@ -1181,9 +1236,9 @@ createApp({
         // Wait for Vue to recreate the monitor DOM (v-if)
         await nextTick();
         // Parallel: load data while initializing chart
-        await Promise.all([loadMonitor(), loadHistory(), initChart()]);
+        await Promise.all([loadMonitor(), loadHistory(), initChart(), loadNetwork()]);
         if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-        autoRefreshTimer = setInterval(loadMonitor, 15000);
+        autoRefreshTimer = setInterval(() => { loadMonitor(); loadNetwork(); }, 15000);
       } else {
         if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
       }
@@ -1794,6 +1849,35 @@ createApp({
         </div>
         <div ref="chartBox" class="chart-container"></div>
       </div>
+
+      <!-- Network Monitoring (v3.25.1) -->
+      <div class="chart-section" v-if="netData && netData.connected">
+        <div class="chart-header">
+          <span class="ch-title">网络监控</span>
+          <span style="font-size:11px;color:var(--text2)">实时带宽 / 今日累计 / 延迟探测</span>
+          <button class="btn-sm" style="margin-left:auto" @click="loadNetwork()">刷新</button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+          <div v-for="(v, iface) in netData.interfaces" :key="iface" class="metric-card" style="flex:1;min-width:170px;padding:10px">
+            <div class="mc-top"><span class="mc-label">{{iface}}</span></div>
+            <div class="mc-value" style="font-size:14px;color:var(--accent)">↓{{fmtMbps(v.rx_rate_mbps)}} ↑{{fmtMbps(v.tx_rate_mbps)}}</div>
+            <div class="mc-detail">今日: ↓{{formatBytes(v.daily_rx_bytes)}} ↑{{formatBytes(v.daily_tx_bytes)}}</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <div style="flex:2;min-width:0">
+            <div style="font-size:12px;color:var(--text2);margin-bottom:4px">近 7 天流量 (MB)</div>
+            <div ref="netChartBox" style="height:200px"></div>
+          </div>
+          <div style="flex:1;min-width:150px;background:var(--card);border-radius:10px;padding:12px">
+            <div style="font-size:12px;color:var(--text2)">延迟探测 ({{netLatency.target||'-'}})</div>
+            <div style="font-size:22px;font-weight:600;color:var(--accent);margin:6px 0">{{netLatency.latency_ms!=null ? netLatency.latency_ms+' ms' : '-'}}</div>
+            <div style="font-size:11px;color:var(--text2)">丢包: {{netLatency.loss_pct!=null ? netLatency.loss_pct+'%' : '-'}} &nbsp;|&nbsp; 抖动: {{netLatency.jitter_ms!=null ? netLatency.jitter_ms+'ms' : '-'}}</div>
+            <div style="font-size:11px;color:var(--text2);margin-top:6px">峰值: ↓{{netPeak.rx||0}}Mbps ↑{{netPeak.tx||0}}Mbps</div>
+          </div>
+        </div>
+      </div>
+
 
       <!-- Containers Table -->
       <div class="container-table">
