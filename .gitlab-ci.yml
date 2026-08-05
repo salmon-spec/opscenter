@@ -17,8 +17,7 @@ backend-test:
   stage: test
   image: python:3.10-slim
   services:
-    - name: postgres:16-alpine
-      alias: postgres
+    - postgres:16-alpine
   before_script:
     - pip install -r backend/requirements.txt pytest pytest-cov
   script:
