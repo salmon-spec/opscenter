@@ -1,10 +1,12 @@
-"""OpsCenter Configuration — 集中管理所有常量和环境变量"""
+"""OpsCenter Configuration — 集中管理所有常量和环境变量
 
-import os
+v3.25 起使用 pydantic-settings 热加载：环境变量优先级高于默认值，
+凭证由 systemd EnvironmentFile=/etc/opscenter/secrets.env 注入。
+"""
+
 import socket
 
-# ── Database ──
-DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _detect_local_ip() -> str:
@@ -19,16 +21,39 @@ def _detect_local_ip() -> str:
         return "127.0.0.1"
 
 
-# ── Server Identity ──
-LOCAL_HOST = os.getenv("LOCAL_HOST", _detect_local_ip())
-LOCAL_DOMAIN = os.getenv("LOCAL_DOMAIN", "ops.salmon.xin")
-LOCAL_SERVER_NAME = os.getenv("LOCAL_SERVER_NAME", "本机 (OpsCenter)")
-LOCAL_AGENT_TOKEN = os.getenv("LOCAL_AGENT_TOKEN", "")
+class Settings(BaseSettings):
+    """环境配置模型（v3.25 热加载）。字段名 = 环境变量名（大小写不敏感）。"""
 
-# ── Auth ──
-JWT_SECRET = os.getenv("OPS_JWT_SECRET", "opscenter-default-secret-change-me-1234567890")
-ADMIN_USER = os.getenv("OPS_ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.getenv("OPS_ADMIN_PASSWORD", "OpsCenter@2026")
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+
+    # ── Database ──
+    database_url: str = "postgresql+psycopg://opscenter:opscenter123@127.0.0.1:5433/opscenter"
+
+    # ── Server Identity ──
+    local_host: str = ""
+    local_domain: str = "ops.salmon.xin"
+    local_server_name: str = "本机 (OpsCenter)"
+    local_agent_token: str = ""
+
+    # ── Auth（免登录默认，OPS_AUTH_ENABLED=true 恢复 JWT） ──
+    jwt_secret: str = "opscenter-default-secret-change-me-1234567890"
+    admin_user: str = "admin"
+    admin_password: str = "OpsCenter@2026"
+    auth_enabled: bool = False
+
+
+_settings = Settings()
+
+# 兼容旧引用（database.py / main.py 使用模块级常量）
+DB_URL = _settings.database_url
+LOCAL_HOST = _settings.local_host or _detect_local_ip()
+LOCAL_DOMAIN = _settings.local_domain
+LOCAL_SERVER_NAME = _settings.local_server_name
+LOCAL_AGENT_TOKEN = _settings.local_agent_token
+JWT_SECRET = _settings.jwt_secret
+ADMIN_USER = _settings.admin_user
+ADMIN_PASSWORD = _settings.admin_password
+OPS_AUTH_ENABLED = _settings.auth_enabled
 
 # ── App ──
 from app.version import VERSION  # noqa: E402

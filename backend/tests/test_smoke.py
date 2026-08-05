@@ -83,3 +83,16 @@ def test_terminal_requires_ssh():
         "server_id": sid, "cols": 80, "rows": 24
     })
     assert r2.status_code == 400
+
+
+def test_server_health_check():
+    """Per-server health check endpoint returns service list."""
+    r = client.post("/api/v2/servers", json={
+        "name": "HC", "host": "10.0.0.1", "ssh_key": ""
+    })
+    sid = r.json()["id"]
+    r2 = client.get(f"/api/v2/monitor/{sid}/health-check")
+    assert r2.status_code == 200
+    data = r2.json()
+    assert "services" in data
+    assert isinstance(data["services"], list)

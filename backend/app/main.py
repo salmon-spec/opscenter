@@ -1655,6 +1655,71 @@ def toggle_pin(service_id: str):
 
 
 
+# === Per-Server Health Check (v3.25 Phase 2.2) ===
+def _service_probe_allowed(url: str, srv) -> bool:
+    """SSRF 防护：仅允许探测目标服务器登记的 host（白名单）。"""
+    if url.startswith("#"):
+        return False
+    if not url.startswith(("http://", "https://")):
+        return False
+    from urllib.parse import urlparse
+    try:
+        host = urlparse(url).hostname or ""
+    except Exception:
+        return False
+    allow_hosts = {h for h in (srv.host, getattr(srv, "host_ip", None), getattr(srv, "host_domain", None)) if h}
+    if srv.agent_type == "local":
+        allow_hosts.update({"127.0.0.1", "localhost", LOCAL_HOST})
+    return host in allow_hosts
+
+
+@app.get("/api/v2/monitor/{server_id}/health-check")
+def monitor_health_check(server_id: str):
+    """对指定服务器的全部服务做 HTTP 探活，返回每服务实际状态码与耗时。
+
+    SSRF 防护：仅探测该服务器登记的 host（白名单），其余服务标记 skipped。
+    """
+    import requests as req
+    import time
+    with get_db() as db:
+        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        if not srv:
+            raise HTTPException(404, "Server not found")
+        services = db.query(Service).filter(Service.server_id == srv.id, Service.hidden != True).all()
+        results = []
+        for svc in services:
+            url = svc.url or ""
+            entry = {"id": str(svc.id), "name": svc.name, "url": url,
+                     "status": "skipped", "status_code": None, "latency_ms": None}
+            if url.startswith("#") or not url:
+                results.append(entry)
+                continue
+            # 相对路径：拼接服务器 host（host 来自白名单内的 server 记录）
+            if not url.startswith(("http://", "https://")):
+                if url.startswith("/"):
+                    base = f"http://{srv.host}"
+                    url = f"{base.rstrip('/')}{url}"
+                else:
+                    results.append(entry)  # 非 HTTP 协议跳过（TCP 探活走 /health-check 全局端点）
+                    continue
+            if not _service_probe_allowed(url, srv):
+                entry["status"] = "blocked"  # SSRF 白名单拦截
+                results.append(entry)
+                continue
+            t0 = time.time()
+            try:
+                resp = req.get(url, timeout=5, stream=True, verify=False, allow_redirects=True,
+                               headers={"User-Agent": "OpsCenter-HealthCheck/3.25"})
+                entry["status_code"] = resp.status_code
+                entry["status"] = "up" if resp.status_code < 500 else "down"
+            except Exception:
+                entry["status"] = "down"
+            finally:
+                entry["latency_ms"] = round((time.time() - t0) * 1000, 1)
+            results.append(entry)
+        return {"server_id": server_id, "server_name": srv.name, "services": results}
+
+
 # === Health Check Trigger ===
 @app.post("/api/v2/health-check")
 def trigger_health_check():
