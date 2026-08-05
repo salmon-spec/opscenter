@@ -1,0 +1,33 @@
+# OpsCenter v3.25 — GitLab CI 配置（迭代方案 1.5）
+# 后端测试阶段：pytest smoke tests + 覆盖率
+# 说明：GitLab CE 19.2.1（VM1），runner 部署后 pipeline 自动生效
+
+stages:
+  - test
+
+variables:
+  # 测试数据库（GitLab CI services: postgres 提供）
+  POSTGRES_DB: opscenter_test
+  POSTGRES_USER: opscenter
+  POSTGRES_PASSWORD: opscenter123
+  DATABASE_URL: postgresql+psycopg://opscenter:opscenter123@postgres:5432/opscenter_test
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.pip-cache"
+
+backend-test:
+  stage: test
+  image: python:3.10-slim
+  services:
+    - name: postgres:16-alpine
+      alias: postgres
+  before_script:
+    - pip install -r backend/requirements.txt pytest pytest-cov
+  script:
+    - cd backend && python -m pytest tests/ -v --cov=app --cov-report=term-missing
+  cache:
+    key: pip
+    paths:
+      - .pip-cache
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG

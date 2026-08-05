@@ -18,7 +18,6 @@ import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from app.models import User
 
 # === 配置 ===
 SECRET_KEY = os.getenv("OPS_JWT_SECRET", "opscenter-default-secret-change-me-1234567890")
@@ -72,7 +71,7 @@ def decode_token(token: str) -> Optional[dict]:
 # === FastAPI 依赖 ===
 def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-) -> User:
+) -> object:
     """强制鉴权依赖：用于资源管理相关路由。
 
     免登录模式（OPS_AUTH_ENABLED=false，v3.24.0 默认）：直接返回虚拟管理员，
@@ -80,8 +79,9 @@ def get_current_user(
     鉴权模式（OPS_AUTH_ENABLED=true）：无令牌或令牌无效 → 401（前端弹出登录框）。
     """
     if not AUTH_ENABLED:
-        # 免登录模式：返回虚拟管理员，不落库、不校验
-        return User(
+        # 免登录模式：返回虚拟管理员，不落库、不校验（User 模型 v3.25 已移除，用轻量对象替代）
+        from types import SimpleNamespace
+        return SimpleNamespace(
             id=1,
             username="admin",
             display_name="管理员",
@@ -105,7 +105,8 @@ def get_current_user(
     if not user_id:
         raise HTTPException(status_code=401, detail="无效的认证令牌")
 
-    # 延迟导入 SessionLocal，避免与 main.py 形成循环导入
+    # 延迟导入：避免与 main.py 形成循环导入；User 模型恢复后自动生效
+    from app.models import User
     from app.main import SessionLocal
     db = SessionLocal()
     try:

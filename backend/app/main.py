@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
 from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory
+from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
@@ -206,7 +207,7 @@ class PinToggle(BaseModel):
     pinned: bool
 
 # === App ===
-app = FastAPI(title="OpsCenter API", version="3.21.0")
+app = FastAPI(title="OpsCenter API", version=VERSION)
 
 
 # Category metadata for enhanced UI

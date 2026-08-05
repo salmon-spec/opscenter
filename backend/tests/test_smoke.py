@@ -7,7 +7,8 @@ import pytest
 import os
 import sys
 
-os.environ["DATABASE_URL"] = "postgresql+psycopg://opscenter:opscenter123@127.0.0.1:5433/opscenter_test"
+# CI（GitLab Runner）通过环境变量注入 DATABASE_URL；本地未设置时用默认值
+os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://opscenter:opscenter123@127.0.0.1:5433/opscenter_test")
 os.environ["OPS_AUTH_ENABLED"] = "false"
 os.environ["LOCAL_HOST"] = "127.0.0.1"
 sys.path.insert(0, "/opt/opscenter/backend")
@@ -27,7 +28,7 @@ def setup():
 
 
 def test_health():
-    r = client.get("/health")
+    r = client.get("/api/v2/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
 
