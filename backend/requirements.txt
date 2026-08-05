@@ -11,3 +11,4 @@ requests==2.32.3
 paramiko==5.0.0
 python-multipart==0.0.32
 httpx==0.28.1
+PyJWT==2.10.1
