@@ -1,6 +1,6 @@
 import os
 import calendar, uuid, asyncio, re, socket
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 from contextlib import contextmanager
 
@@ -12,12 +12,17 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
+from app.alerting import (
+    alerting_loop, retention_loop, seed_default_rules,
+    run_alerting_cycle, retention_cleanup,
+)
+from app.config import RETENTION_METRIC_DAYS
 
 class TerminalCreateRequest(BaseModel):
     server_id: str
@@ -481,6 +486,147 @@ def _auto_assign_all_groups():
     return changed
 
 
+# === Alerting APIs (v3.26, F4/F6) ===
+
+class AlertRuleCreate(BaseModel):
+    name: str
+    server_id: Optional[str] = None
+    metric: str
+    value_type: str = "numeric"          # numeric | string
+    operator: str = ">"
+    threshold: str
+    duration_sec: int = 60
+    cooldown_sec: int = 300
+    notify_webhooks: List[str] = []
+    enabled: bool = True
+
+
+class AlertRuleUpdate(BaseModel):
+    name: Optional[str] = None
+    server_id: Optional[str] = None
+    metric: Optional[str] = None
+    value_type: Optional[str] = None
+    operator: Optional[str] = None
+    threshold: Optional[str] = None
+    duration_sec: Optional[int] = None
+    cooldown_sec: Optional[int] = None
+    notify_webhooks: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+
+@app.get("/api/v2/alert-rules")
+def list_alert_rules():
+    """规则列表（含 server 名）。"""
+    with get_db() as db:
+        rules = db.query(AlertRule).all()
+        result = []
+        for r in rules:
+            server_name = None
+            if r.server_id:
+                srv = db.query(Server).filter(Server.id == r.server_id).first()
+                server_name = srv.name if srv else None
+            result.append({
+                "id": str(r.id), "name": r.name,
+                "server_id": str(r.server_id) if r.server_id else None,
+                "server_name": server_name,
+                "metric": r.metric, "value_type": r.value_type,
+                "operator": r.operator, "threshold": r.threshold,
+                "duration_sec": r.duration_sec, "cooldown_sec": r.cooldown_sec,
+                "notify_webhooks": r.notify_webhooks or [], "enabled": r.enabled,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+        return result
+
+
+@app.post("/api/v2/alert-rules")
+def create_alert_rule(req: AlertRuleCreate):
+    with get_db() as db:
+        rule = AlertRule(
+            name=req.name,
+            server_id=uuid.UUID(req.server_id) if req.server_id else None,
+            metric=req.metric, value_type=req.value_type, operator=req.operator,
+            threshold=req.threshold, duration_sec=req.duration_sec,
+            cooldown_sec=req.cooldown_sec, notify_webhooks=req.notify_webhooks,
+            enabled=req.enabled,
+        )
+        db.add(rule)
+        db.commit()
+        db.refresh(rule)
+        return {"id": str(rule.id), "name": rule.name}
+
+
+@app.put("/api/v2/alert-rules/{rule_id}")
+def update_alert_rule(rule_id: str, req: AlertRuleUpdate):
+    with get_db() as db:
+        rule = db.query(AlertRule).filter(AlertRule.id == uuid.UUID(rule_id)).first()
+        if not rule:
+            raise HTTPException(404, "Rule not found")
+        for field, val in req.model_dump(exclude_unset=True).items():
+            if val is None:
+                continue
+            if field == "server_id":
+                setattr(rule, field, uuid.UUID(val) if val else None)
+            else:
+                setattr(rule, field, val)
+        rule.updated_at = datetime.utcnow()
+        db.commit()
+        return {"id": str(rule.id), "name": rule.name}
+
+
+@app.delete("/api/v2/alert-rules/{rule_id}")
+def delete_alert_rule(rule_id: str):
+    with get_db() as db:
+        rule = db.query(AlertRule).filter(AlertRule.id == uuid.UUID(rule_id)).first()
+        if not rule:
+            raise HTTPException(404, "Rule not found")
+        db.delete(rule)  # 级联删除 alert_events（FK ondelete CASCADE）
+        db.commit()
+        return {"ok": True}
+
+
+@app.get("/api/v2/alert-events")
+def list_alert_events(status: Optional[str] = None, server_id: Optional[str] = None, days: int = 7):
+    """告警事件历史，支持按状态/主机/天数筛选。"""
+    with get_db() as db:
+        q = db.query(AlertEvent)
+        if status:
+            q = q.filter(AlertEvent.status == status)
+        if server_id:
+            q = q.filter(AlertEvent.server_id == uuid.UUID(server_id))
+        if days and days > 0:
+            q = q.filter(AlertEvent.created_at >= datetime.utcnow() - timedelta(days=days))
+        events = q.order_by(AlertEvent.created_at.desc()).limit(500).all()
+        result = []
+        for e in events:
+            rule = db.query(AlertRule).filter(AlertRule.id == e.rule_id).first()
+            srv = db.query(Server).filter(Server.id == e.server_id).first()
+            result.append({
+                "id": str(e.id), "rule_id": str(e.rule_id),
+                "rule_name": rule.name if rule else None,
+                "server_id": str(e.server_id), "server_name": srv.name if srv else None,
+                "status": e.status, "current_value": e.current_value,
+                "fired_at": e.fired_at.isoformat() if e.fired_at else None,
+                "recovered_at": e.recovered_at.isoformat() if e.recovered_at else None,
+                "acked_by": e.acked_by,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            })
+        return result
+
+
+@app.post("/api/v2/alert-events/{event_id}/ack")
+def ack_alert_event(event_id: str, acked_by: str = "admin"):
+    """确认（ack）一条告警事件。"""
+    with get_db() as db:
+        ev = db.query(AlertEvent).filter(AlertEvent.id == uuid.UUID(event_id)).first()
+        if not ev:
+            raise HTTPException(404, "Event not found")
+        ev.status = "acked"
+        ev.acked_by = acked_by
+        ev.acked_at = datetime.utcnow()
+        db.commit()
+        return {"ok": True, "status": "acked"}
+
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task
@@ -517,10 +663,17 @@ async def startup():
         discover_docker_services(local, db, LOCAL_HOST)
         # Auto-detect local Agent status on startup
         try:
+            # F1: 先通过 check_agent_status 解析本机 Agent token（.agent_config），
+            # 否则空 token 会被新 Agent（v2.2.0 强制 token）拒绝，导致本机 Agent 短暂不可达
+            if not local.agent_token:
+                _st = check_agent_status(local)
+                if _st.get("agent_token"):
+                    local.agent_token = _st["agent_token"]
+                    db.commit()
             local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, local.agent_token or "")
             if local_agent:
                 local.agent_status = "running"
-                local.agent_version = local_agent.get("agent_version", "2.1.0")
+                local.agent_version = local_agent.get("agent_version", "2.2.0")
                 local.last_seen = datetime.utcnow()
                 print(f"[Startup] Local Agent detected: v{local.agent_version}")
             else:
@@ -558,6 +711,10 @@ async def startup():
     asyncio.create_task(daily_network_aggregation())  # v3.25.1 每日流量归集
     # Start background agent metrics collector
     asyncio.create_task(background_agent_collector())
+    # v3.26: 告警引擎 + 数据保留后台任务
+    asyncio.create_task(alerting_loop())    # 每 60s 一轮评估（ALERTING_ENABLED=false 关闭）
+    asyncio.create_task(retention_loop())   # 每天 01:00 清理过期数据
+    seed_default_rules()                    # 幂等 seed 默认规则（仅空表时写入）
     # Migrate groups.json to per-server format if needed
     _migrate_groups_json()
     # Auto-assign groups on startup
@@ -2581,9 +2738,9 @@ def _collect_agent_metrics():
             
             db.commit()
             
-            # Cleanup old metrics (keep 7 days)
+            # Cleanup old metrics (保留期由 RETENTION_METRIC_DAYS 控制，F2)
             from datetime import timedelta
-            cutoff = datetime.utcnow() - timedelta(days=7)
+            cutoff = datetime.utcnow() - timedelta(days=RETENTION_METRIC_DAYS)
             db.query(MetricHistory).filter(MetricHistory.timestamp < cutoff).delete()
             db.commit()
             

@@ -136,3 +136,41 @@ class NetworkLatency(Base):
     loss_pct = Column(Float, default=0)
     jitter_ms = Column(Float, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class AlertRule(Base):
+    """告警规则（v3.26, F4）。规则表 + 状态机，之后证书/日志/备份监控全部复用，只加规则不加逻辑。"""
+    __tablename__ = "alert_rules"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False)                                  # 规则名，如「CPU 过高」
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=True)  # NULL=全局
+    metric = Column(String(50), nullable=False)                                 # cpu_percent/memory_percent/disk_percent/server_status/agent_status
+    value_type = Column(String(10), default="numeric")                          # numeric | string（H2 修正：阈值类型分流）
+    operator = Column(String(5), default=">")                                   # > < >= <= == !=
+    threshold = Column(String(50), nullable=False)                              # H2 修正：VARCHAR 兼容字符串阈值（如 'online'）
+    duration_sec = Column(Integer, default=60)                                  # 持续 N 秒才触发（防抖）
+    cooldown_sec = Column(Integer, default=300)                                # 恢复后冷却期，避免抖动重复触发
+    notify_webhooks = Column(JSONB, default=lambda: [])                         # per-rule 飞书 webhook（M1：通知来源，去掉 settings 表依赖）
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AlertEvent(Base):
+    """告警事件（v3.26, F4）。状态机：pending -> firing -> recovered / acked。"""
+    __tablename__ = "alert_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id = Column(UUID(as_uuid=True), ForeignKey("alert_rules.id", ondelete="CASCADE"), nullable=False)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(10), default="pending")                             # pending | firing | recovered | acked（H3 修正：新增 pending）
+    current_value = Column(String(50), nullable=True)                          # 当前值（数值/字符串统一存文本，便于展示）
+    first_breached_at = Column(DateTime, nullable=True)                        # H3：首次越限时间（duration 防抖判定）
+    fired_at = Column(DateTime, nullable=True)                                 # 进入 firing 时间
+    recovered_at = Column(DateTime, nullable=True)                             # 恢复时间（cooldown 冷却起点）
+    last_notified_at = Column(DateTime, nullable=True)                         # 末次通知时间
+    notified = Column(Boolean, default=False)
+    acked_by = Column(String(50), nullable=True)
+    acked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

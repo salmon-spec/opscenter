@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     admin_password: str = "OpsCenter@2026"
     auth_enabled: bool = False
 
+    # ── Alerting (v3.26, F4/F5) ──
+    alerting_enabled: bool = True                       # ALERTING_ENABLED=false 一键关停告警引擎
+    default_notify_webhooks: str = ""                   # 逗号分隔的飞书 webhook URL（全局默认通道，M1 修正：去掉不存在的 settings 表依赖）
+
+    # ── Data Retention (v3.26, F2) ──
+    retention_metric_days: int = 30                     # metric_history 保留天数（高频轮询）
+    retention_latency_days: int = 7                     # network_latency 保留天数（快照）
+    retention_stats_days: int = 180                     # network_stats 保留天数（日归集，低频）
+
 
 _settings = Settings()
 
@@ -54,6 +63,16 @@ JWT_SECRET = _settings.jwt_secret
 ADMIN_USER = _settings.admin_user
 ADMIN_PASSWORD = _settings.admin_password
 OPS_AUTH_ENABLED = _settings.auth_enabled
+
+# ── Alerting (v3.26) ──
+ALERTING_ENABLED = _settings.alerting_enabled
+# 全局默认飞书 webhook：per-rule 的 alert_rules.notify_webhooks 优先，为空时回退到此（M1 修正）
+DEFAULT_NOTIFY_WEBHOOKS = [u.strip() for u in _settings.default_notify_webhooks.split(',') if u.strip()]
+
+# ── Data Retention (v3.26, F2) ──
+RETENTION_METRIC_DAYS = _settings.retention_metric_days
+RETENTION_LATENCY_DAYS = _settings.retention_latency_days
+RETENTION_STATS_DAYS = _settings.retention_stats_days
 
 # ── App ──
 from app.version import VERSION  # noqa: E402
