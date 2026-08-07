@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.1.0 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.2.0 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -12,7 +12,7 @@ import time
 import argparse
 import threading
 
-AGENT_VERSION = "2.1.0"
+AGENT_VERSION = "2.2.0"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -261,10 +261,9 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
     """HTTP handler serving metrics and service scan endpoints."""
 
     def _check_auth(self):
-        if not TOKEN:
-            return True
+        # F1: token 现已强制必填，空 token 不再放行（/health 不调用本函数，保持探活开放）
         auth = self.headers.get('Authorization', '')
-        if auth == f'Bearer {TOKEN}':
+        if TOKEN and auth == f'Bearer {TOKEN}':
             return True
         self.send_response(401)
         self.send_header('Content-Type', 'application/json')
@@ -360,7 +359,8 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description='OpsCenter Agent')
     parser.add_argument('--port', type=int, default=19100, help='HTTP listen port (default: 19100)')
-    parser.add_argument('--token', type=str, default='', help='Auth token (optional)')
+    parser.add_argument('--token', type=str, required=True,
+                        help='Auth token (REQUIRED since v2.2.0; 推荐 >=16 字符，缺失将拒绝启动)')
     parser.add_argument('--bind', type=str, default='0.0.0.0', help='Bind address (default: 0.0.0.0)')
     parser.add_argument('--scan-interval', type=int, default=300,
                         help='Background scan interval in seconds (default: 300)')
@@ -368,6 +368,9 @@ def main():
 
     global TOKEN, _scan_interval
     TOKEN = args.token
+    if len(TOKEN) < 16:
+        # F1: 不强制拒绝，仅告警，避免过渡期短 token 部署直接崩；但生产务必用强 token
+        print(f"[WARN] Agent token 长度 {len(TOKEN)} < 16，存在弱口令风险，建议更换为 secrets.token_urlsafe(32)", flush=True)
     _scan_interval = args.scan_interval
 
     scan_thread = threading.Thread(target=_background_scan_loop, daemon=True)
