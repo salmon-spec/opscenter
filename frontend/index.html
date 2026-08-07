@@ -380,6 +380,14 @@ const iconMap = {code:'#fa-code',chart:'#fa-chart',tool:'#fa-tool',database:'#fa
 createApp({
   setup() {
     const currentPage = ref(localStorage.getItem('ops_page') || 'nav');
+
+    // ===== Alerts (v3.26, F6) =====
+    const alertTab = ref('rules');
+    const alertRules = ref([]);
+    const alertEvents = ref([]);
+    const alertSummary = ref({firing:0, today:0, recovered:0});
+    const newRule = ref({name:'', metric:'cpu', operator:'>', threshold:'90', duration_sec:60, cooldown_sec:300, notify_webhooks:'', enabled:true});
+    let alertTimer = null;
     const darkMode = ref(true);
     const searchQuery = ref('');
     const clock = ref('');
@@ -1201,6 +1209,97 @@ createApp({
       finally { scanningServerId.value = null; }
     }
 
+    // ========== Alerting (v3.26, F6) ==========
+    // 指标分两类：数值型(cpu/memory/disk) 与 字符串型(server_status/agent_status)，
+    // 创建时据此设置 value_type，后端引擎据此选择比较逻辑。
+    function _isStringMetric(m) { return m === 'server_status' || m === 'agent_status'; }
+
+    async function loadAlertRules() {
+      try {
+        const data = await apiGet(`${API}/alert-rules`);
+        alertRules.value = data || [];
+      } catch(e) { console.warn('loadAlertRules failed:', e.message); }
+    }
+
+    async function loadAlertEvents() {
+      try {
+        const data = await apiGet(`${API}/alert-events?days=7`);
+        alertEvents.value = data || [];
+        computeAlertSummary();
+      } catch(e) { console.warn('loadAlertEvents failed:', e.message); }
+    }
+
+    // 汇总卡从事件列表客户端计算，避免额外后端端点
+    function computeAlertSummary() {
+      const evs = alertEvents.value || [];
+      const todayStr = new Date().toISOString().slice(0, 10);
+      let firing = 0, today = 0, recovered = 0;
+      for (const e of evs) {
+        if (e.status === 'firing') firing++;
+        if (e.status === 'recovered') recovered++;
+        if (e.created_at && e.created_at.slice(0, 10) === todayStr) today++;
+      }
+      alertSummary.value = { firing, today, recovered };
+    }
+
+    async function refreshAlerts() {
+      await Promise.all([loadAlertRules(), loadAlertEvents()]);
+    }
+
+    async function createRule() {
+      const nr = newRule.value;
+      if (!nr.name || nr.threshold === '' || nr.threshold == null) { showToast('请填写名称和阈值', 'err'); return; }
+      const body = {
+        name: nr.name,
+        metric: nr.metric,
+        value_type: _isStringMetric(nr.metric) ? 'string' : 'numeric',
+        operator: nr.operator,
+        threshold: String(nr.threshold),
+        duration_sec: Number(nr.duration_sec) || 60,
+        cooldown_sec: Number(nr.cooldown_sec) || 300,
+        notify_webhooks: nr.notify_webhooks
+          ? String(nr.notify_webhooks).split(',').map(s => s.trim()).filter(Boolean)
+          : [],
+        enabled: !!nr.enabled,
+      };
+      try {
+        const r = await apiPost(`${API}/alert-rules`, body);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        showToast('规则已添加', 'ok');
+        newRule.value = { name:'', metric:'cpu', operator:'>', threshold:'90', duration_sec:60, cooldown_sec:300, notify_webhooks:'', enabled:true };
+        await loadAlertRules();
+      } catch(e) { showToast('添加失败: ' + e.message, 'err'); }
+    }
+
+    async function toggleRule(r) {
+      try {
+        const r2 = await apiPut(`${API}/alert-rules/${r.id}`, { enabled: !r.enabled });
+        if (!r2.ok) throw new Error('HTTP ' + r2.status);
+        r.enabled = !r.enabled;
+        showToast(r.enabled ? '已启用' : '已停用', 'ok');
+      } catch(e) { showToast('操作失败: ' + e.message, 'err'); }
+    }
+
+    async function deleteRule(id) {
+      if (!confirm('确定删除该规则？相关事件也会一并删除。')) return;
+      try {
+        const r = await apiDelete(`${API}/alert-rules/${id}`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        alertRules.value = alertRules.value.filter(x => x.id !== id);
+        showToast('已删除', 'ok');
+      } catch(e) { showToast('删除失败: ' + e.message, 'err'); }
+    }
+
+    async function ackEvent(id) {
+      try {
+        const r = await apiPost(`${API}/alert-events/${id}/ack`, {});
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const ev = alertEvents.value.find(x => x.id === id);
+        if (ev) ev.status = 'acked';
+        showToast('已确认', 'ok');
+      } catch(e) { showToast('确认失败: ' + e.message, 'err'); }
+    }
+
     // ========== Init ==========
     onMounted(async () => {
       updateClock();
@@ -1223,7 +1322,7 @@ createApp({
       await loadMonitor();
       await loadAllServerServices();
     });
-    onUnmounted(() => { clearInterval(clockTimer); if (autoRefreshTimer) clearInterval(autoRefreshTimer); });
+    onUnmounted(() => { clearInterval(clockTimer); if (autoRefreshTimer) clearInterval(autoRefreshTimer); if (alertTimer) clearInterval(alertTimer); });
 
     // Watch server change for monitor (parallel loading)
     watch(currentServerId, async () => {
@@ -1239,8 +1338,15 @@ createApp({
         await Promise.all([loadMonitor(), loadHistory(), initChart(), loadNetwork()]);
         if (autoRefreshTimer) clearInterval(autoRefreshTimer);
         autoRefreshTimer = setInterval(() => { loadMonitor(); loadNetwork(); }, 15000);
+      } else if (val === 'alerts') {
+        // 进入告警页：并行加载规则+事件，并启动轮询
+        await Promise.all([loadAlertRules(), loadAlertEvents()]);
+        if (alertTimer) clearInterval(alertTimer);
+        alertTimer = setInterval(refreshAlerts, 15000);
       } else {
         if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+        // 离开告警页：停止轮询
+        if (alertTimer) { clearInterval(alertTimer); alertTimer = null; }
       }
     });
     watch(darkMode, () => { if (chartInstance) { initChart(); renderChart(); } });
@@ -1672,6 +1778,9 @@ createApp({
       <div class="nav-item" :class="{active:currentPage==='terminal'}" @click="currentPage='terminal'">
         <svg class="nav-icon"><use href="#fa-terminal"/></svg><span>终端</span>
       </div>
+      <div class="nav-item" :class="{active:currentPage==='alerts'}" @click="currentPage='alerts'">
+        <svg class="nav-icon"><use href="#fa-bell"/></svg><span>告警中心</span>
+      </div>
 
     </nav>
     <div class="sidebar-footer">
@@ -1686,7 +1795,7 @@ createApp({
         <button class="icon-btn" @click="collapsed=!collapsed" :title="collapsed?'展开':'折叠'">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v1.5H2zm0 4.25h12v1.5H2zm0 4.25h8v1.5H2z"/></svg>
         </button>
-        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':currentPage==='resources'?'资源管理':'终端'}}</h2>
+        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':currentPage==='resources'?'资源管理':currentPage==='alerts'?'告警中心':'终端'}}</h2>
       </div>
       <div class="topbar-right">
         <div class="search-box" v-if="currentPage==='nav'">
@@ -1897,6 +2006,81 @@ createApp({
 
 
     <!-- ===== RESOURCES PAGE ===== -->
+    <!-- ===== ALERTS PAGE (v3.26, F6) ===== -->
+    <div class="content" v-if="currentPage==='alerts'">
+      <div class="stat-row" style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <div class="stat-card" style="flex:1;min-width:140px"><div class="stat-value" style="color:var(--red)">{{alertSummary.firing}}</div><div class="stat-label">当前 firing</div></div>
+        <div class="stat-card" style="flex:1;min-width:140px"><div class="stat-value">{{alertSummary.today}}</div><div class="stat-label">今日触发</div></div>
+        <div class="stat-card" style="flex:1;min-width:140px"><div class="stat-value" style="color:var(--green)">{{alertSummary.recovered}}</div><div class="stat-label">已恢复</div></div>
+      </div>
+
+      <div class="seg" style="display:flex;gap:8px;margin-bottom:14px">
+        <button class="btn-sm" :class="alertTab==='rules'?'primary':''" @click="alertTab='rules'">规则管理</button>
+        <button class="btn-sm" :class="alertTab==='events'?'primary':''" @click="alertTab='events'">事件列表</button>
+        <button class="btn-sm" @click="refreshAlerts" style="margin-left:auto">刷新</button>
+      </div>
+
+      <div v-if="alertTab==='rules'">
+        <div class="card" style="padding:14px;margin-bottom:14px">
+          <div style="font-weight:600;margin-bottom:10px">新建规则</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label>名称<input class="inp" v-model="newRule.name" placeholder="如 CPU 过高" style="width:130px"></label>
+            <label>指标<select class="inp" v-model="newRule.metric">
+              <option value="cpu">cpu</option><option value="memory">memory</option><option value="disk">disk</option>
+              <option value="server_status">server_status</option><option value="agent_status">agent_status</option>
+            </select></label>
+            <label>运算符<select class="inp" v-model="newRule.operator"><option>&gt;</option><option>&lt;</option><option>&gt;=</option><option>&lt;=</option><option>==</option><option>!=</option></select></label>
+            <label>阈值<input class="inp" v-model="newRule.threshold" style="width:80px"></label>
+            <label>持续(s)<input class="inp" v-model.number="newRule.duration_sec" style="width:70px"></label>
+            <label>冷却(s)<input class="inp" v-model.number="newRule.cooldown_sec" style="width:70px"></label>
+            <label>Webhook<input class="inp" v-model="newRule.notify_webhooks" placeholder="逗号分隔，可选" style="width:200px"></label>
+            <button class="btn-sm primary" @click="createRule">添加</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="tbl" style="width:100%;border-collapse:collapse">
+            <thead><tr style="text-align:left;color:var(--text2);font-size:12px">
+              <th style="padding:10px">名称</th><th>作用域</th><th>指标</th><th>条件</th><th>持续/冷却</th><th>状态</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="r in alertRules" :key="r.id" style="border-top:1px solid var(--border)">
+                <td style="padding:10px">{{r.name}}</td>
+                <td>{{r.server_name || '全局'}}</td>
+                <td>{{r.metric}}</td>
+                <td>{{r.operator}} {{r.threshold}}</td>
+                <td>{{r.duration_sec}}s / {{r.cooldown_sec}}s</td>
+                <td><span class="badge" :class="r.enabled?'on':'off'" @click="toggleRule(r)" style="cursor:pointer">{{r.enabled?'启用':'停用'}}</span></td>
+                <td><button class="btn-sm danger" @click="deleteRule(r.id)">删除</button></td>
+              </tr>
+              <tr v-if="!alertRules.length"><td colspan="7" style="padding:14px;color:var(--text2)">暂无规则</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div v-if="alertTab==='events'">
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="tbl" style="width:100%;border-collapse:collapse">
+            <thead><tr style="text-align:left;color:var(--text2);font-size:12px">
+              <th style="padding:10px">规则</th><th>主机</th><th>状态</th><th>当前值</th><th>触发时间</th><th>恢复时间</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="e in alertEvents" :key="e.id" style="border-top:1px solid var(--border)">
+                <td style="padding:10px">{{e.rule_name}}</td>
+                <td>{{e.server_name}}</td>
+                <td><span class="badge" :class="e.status">{{e.status}}</span></td>
+                <td>{{e.current_value}}</td>
+                <td>{{e.fired_at ? e.fired_at.slice(0,19).replace('T',' ') : '-'}}</td>
+                <td>{{e.recovered_at ? e.recovered_at.slice(0,19).replace('T',' ') : '-'}}</td>
+                <td><button v-if="e.status!=='acked'" class="btn-sm" @click="ackEvent(e.id)">确认</button></td>
+              </tr>
+              <tr v-if="!alertEvents.length"><td colspan="7" style="padding:14px;color:var(--text2)">暂无事件</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- ===== TERMINAL PAGE ===== -->
     <div class="content" v-show="currentPage==='terminal'" style="padding:0">
       <div class="term-page" @click="termPickOutside">
