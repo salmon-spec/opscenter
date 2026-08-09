@@ -952,6 +952,64 @@ def trigger_image_check():
     return {"ok": True}
 
 
+# === Status Page API (v3.27, S3) ===
+# 公开端点：仅聚合健康摘要，不暴露 IP/端口/凭证
+
+@app.get("/api/v2/status-page")
+def get_status_page():
+    """聚合状态页数据：服务器健康、服务状态、活跃告警、7 天可用性。"""
+    from datetime import date as _date
+    from collections import defaultdict
+    with get_db() as db:
+        servers = db.query(Server).filter(Server.enabled == True).all()  # noqa: E712
+        srv_rows = []
+        total_up = 0
+        for s in servers:
+            is_up = s.agent_status == "running" and s.status == "online"
+            if is_up:
+                total_up += 1
+            srv_rows.append({
+                "name": s.name,
+                "status": "up" if is_up else ("degraded" if s.status == "online" else "down"),
+                "agent": s.agent_status,
+            })
+        # 服务状态聚合（按 server）
+        svc_rows = []
+        for s in servers:
+            services = db.query(Service).filter(Service.server_id == s.id, Service.hidden == False).all()  # noqa: E712
+            up = sum(1 for x in services if x.status == "up")
+            total = len(services)
+            if total:
+                svc_rows.append({"server_name": s.name, "up": up, "total": total,
+                                 "status": "up" if up == total and total > 0 else ("degraded" if up > 0 else "down")})
+        # 活跃告警
+        firing = db.query(AlertEvent).filter(AlertEvent.status == "firing").count()
+        # 7 天可用性（按 server 从 metric_history 的 server_status 推算：简化用 agent_status 在线比例）
+        # 用最近 7 天 agent 在线天数近似
+        since = datetime.utcnow() - timedelta(days=7)
+        avail = []
+        for s in servers:
+            on = db.query(MetricHistory).filter(
+                MetricHistory.server_id == s.id,
+                MetricHistory.metric == "agent_online",
+                MetricHistory.timestamp >= since,
+            ).all()
+            avail.append({"name": s.name, "samples": len(on)})
+        return {
+            "generated_at": datetime.utcnow().isoformat(),
+            "summary": {
+                "servers_total": len(servers),
+                "servers_up": total_up,
+                "services_up": sum(x["up"] for x in svc_rows),
+                "services_total": sum(x["total"] for x in svc_rows),
+                "alerts_firing": firing,
+            },
+            "servers": srv_rows,
+            "services": svc_rows,
+            "availability": avail,
+        }
+
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task

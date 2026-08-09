@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpsCenter 状态页</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --text2:#94a3b8; --green:#22c55e; --yellow:#eab308; --red:#ef4444; --border:#334155; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'PingFang SC','Microsoft YaHei',sans-serif; min-height:100vh; }
+  .wrap { max-width:880px; margin:0 auto; padding:32px 20px 60px; }
+  header { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
+  .logo { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#6366f1,#8b5cf6); display:flex; align-items:center; justify-content:center; font-weight:800; color:#fff; font-size:18px; }
+  h1 { font-size:22px; font-weight:700; }
+  .sub { color:var(--text2); font-size:13px; margin-bottom:28px; }
+  .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:28px; }
+  .scard { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; }
+  .scard .num { font-size:28px; font-weight:800; }
+  .scard .lbl { color:var(--text2); font-size:12px; margin-top:4px; }
+  .section-title { font-size:14px; font-weight:700; color:var(--text2); text-transform:uppercase; letter-spacing:.5px; margin:24px 0 12px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:10px; }
+  .row { display:flex; align-items:center; padding:14px 16px; gap:12px; }
+  .row + .row { border-top:1px solid var(--border); }
+  .dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .dot.up { background:var(--green); box-shadow:0 0 8px var(--green); }
+  .dot.degraded { background:var(--yellow); }
+  .dot.down { background:var(--red); }
+  .name { font-weight:600; flex:1; }
+  .meta { color:var(--text2); font-size:12px; }
+  .badge { font-size:11px; padding:3px 10px; border-radius:20px; font-weight:600; }
+  .badge.up { background:rgba(34,197,94,.15); color:var(--green); }
+  .badge.degraded { background:rgba(234,179,8,.15); color:var(--yellow); }
+  .badge.down { background:rgba(239,68,68,.15); color:var(--red); }
+  .progress { flex:1; height:6px; background:#334155; border-radius:4px; overflow:hidden; }
+  .progress > i { display:block; height:100%; background:var(--green); border-radius:4px; }
+  footer { margin-top:32px; color:var(--text2); font-size:11px; text-align:center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">O</div>
+    <div>
+      <h1>OpsCenter 状态页</h1>
+      <div class="sub" id="genAt">加载中...</div>
+    </div>
+  </header>
+
+  <div class="summary" id="summary">
+    <div class="scard"><div class="num" id="srvTotal">-</div><div class="lbl">服务器总数</div></div>
+    <div class="scard"><div class="num" id="srvUp">-</div><div class="lbl">在线服务器</div></div>
+    <div class="scard"><div class="num" id="svcUp">-</div><div class="lbl">服务在线</div></div>
+    <div class="scard"><div class="num" id="svcTotal">-</div><div class="lbl">服务总数</div></div>
+    <div class="scard"><div class="num" id="firing" style="color:var(--red)">-</div><div class="lbl">活跃告警</div></div>
+  </div>
+
+  <div class="section-title">服务器</div>
+  <div class="card" id="servers"></div>
+
+  <div class="section-title">服务</div>
+  <div class="card" id="services"></div>
+
+  <footer>OpsCenter Status Page · 数据每 60 秒自动刷新</footer>
+</div>
+
+<script>
+const API = '/api/v2/status-page';
+const badgeCls = { up: 'up', degraded: 'degraded', down: 'down' };
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function load() {
+  try {
+    const r = await fetch(API, { headers: { 'Accept': 'application/json' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    document.getElementById('genAt').textContent = '生成时间：' + (d.generated_at || '').slice(0,19).replace('T',' ');
+    const s = d.summary || {};
+    document.getElementById('srvTotal').textContent = s.servers_total ?? '-';
+    document.getElementById('srvUp').textContent = s.servers_up ?? '-';
+    document.getElementById('svcUp').textContent = s.services_up ?? '-';
+    document.getElementById('svcTotal').textContent = s.services_total ?? '-';
+    document.getElementById('firing').textContent = s.alerts_firing ?? '-';
+
+    const sv = document.getElementById('servers');
+    sv.innerHTML = (d.servers || []).map(x => `
+      <div class="row">
+        <span class="dot ${x.status}"></span>
+        <span class="name">${esc(x.name)}</span>
+        <span class="meta">Agent: ${esc(x.agent)}</span>
+        <span class="badge ${badgeCls[x.status] || 'down'}">${x.status === 'up' ? '正常' : x.status === 'degraded' ? '部分异常' : '离线'}</span>
+      </div>`).join('') || '<div class="row"><span class="name">暂无服务器</span></div>';
+
+    const svc = document.getElementById('services');
+    svc.innerHTML = (d.services || []).map(x => {
+      const pct = x.total ? Math.round(x.up / x.total * 100) : 0;
+      return `
+      <div class="row">
+        <span class="dot ${x.status}"></span>
+        <span class="name">${esc(x.server_name)}</span>
+        <span class="progress"><i style="width:${pct}%"></i></span>
+        <span class="meta">${x.up}/${x.total} 在线</span>
+        <span class="badge ${badgeCls[x.status] || 'down'}">${pct}%</span>
+      </div>`;
+    }).join('') || '<div class="row"><span class="name">暂无服务数据</span></div>';
+  } catch (e) {
+    document.getElementById('genAt').textContent = '加载失败：' + e.message;
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>
