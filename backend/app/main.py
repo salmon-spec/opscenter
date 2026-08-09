@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -23,6 +23,7 @@ from app.log_scanner import log_scan_loop, run_log_scan
 from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_rule
 from app.image_scanner import image_check_loop, run_image_check
 from app.report_engine import generate_report, report_loop
+from app.audit import AuditMiddleware
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -240,6 +241,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# v3.28 A1 操作审计中间件（写操作记录；AUDIT_ENABLED=false 关闭）
+app.add_middleware(AuditMiddleware)
 
 # === Startup ===
 

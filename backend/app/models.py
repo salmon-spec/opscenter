@@ -264,3 +264,17 @@ class DailyReport(Base):
     content = Column(Text, nullable=False)                     # Markdown 正文（推送用）
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class AuditLog(Base):
+    """操作审计日志（v3.28, A1）：写操作（POST/PUT/DELETE）自动记录，供安全回溯。"""
+    __tablename__ = "audit_logs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ts = Column(DateTime, default=datetime.utcnow)
+    username = Column(String(50), default="admin")
+    action = Column(String(20), nullable=False)          # create/update/delete/login/scan/generate
+    resource = Column(String(50), nullable=False)        # alert-rule/server/silence/cert/log-rule/backup/image/report/status
+    resource_id = Column(String(64), nullable=True)
+    detail = Column(Text, nullable=True)
+    ip = Column(String(45), nullable=True)
+    status = Column(String(10), default="success")       # success/failed
+
