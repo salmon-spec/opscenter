@@ -341,6 +341,46 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 return
             self._json_response({'images': scanner.collect_images(), 'timestamp': time.time()})
 
+        elif path == '/api/v1/registry-proxy':
+            # v3.28 E1: 代理 Docker Hub digest 查询（供 VM2 等出站被拦的主机使用）
+            if not self._check_auth():
+                return
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            repo = (q.get('repo') or [''])[0].strip()
+            if not repo:
+                self._json_response({'error': 'repo param required'}, status=400)
+                return
+            result = {'repo': repo, 'remote_digest': None}
+            try:
+                import ssl as _ssl
+                import urllib.request
+                import socket
+                # 强制 IPv4：MFA 的 IPv6 路由不可达，urllib 默认优先 IPv6 会失败
+                _ctx = _ssl.create_default_context()
+                _ctx.maximum_version = _ssl.TLSVersion.TLSv1_2
+                _orig_getaddrinfo = socket.getaddrinfo
+
+                def _ipv4_family(host, port, family=0, type=0, proto=0, flags=0):
+                    # 只保留 IPv4 地址族，避免 urllib 优先 IPv6
+                    addrs = _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+                    return addrs
+                urllib.request.socket.getaddrinfo = _ipv4_family
+
+                if '/' not in repo:
+                    repo = 'library/' + repo
+                token_url = f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull'
+                with urllib.request.urlopen(token_url, timeout=5, context=_ctx) as resp:
+                    token = json.loads(resp.read()).get('token', '')
+                req = urllib.request.Request(
+                    f'https://registry-1.docker.io/v2/{repo}/manifests/latest',
+                    headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.docker.distribution.manifest.v2+json'})
+                with urllib.request.urlopen(req, timeout=5, context=_ctx) as resp:
+                    result['remote_digest'] = resp.headers.get('Docker-Content-Digest')
+            except Exception as e:
+                result['error'] = str(e)
+            self._json_response(result)
+
         elif path == '/api/v1/backup/check':
             if not self._check_auth():
                 return
