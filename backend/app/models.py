@@ -227,3 +227,16 @@ class LogMatch(Base):
     matched_line = Column(Text, nullable=True)
     matched_at = Column(DateTime, default=datetime.utcnow)
 
+
+class BackupCheck(Base):
+    """备份状态验证（v3.27, D3）：检查备份文件新鲜度与大小，超期触发告警。"""
+    __tablename__ = "backup_checks"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    target_path = Column(String(255), nullable=False)
+    expected_interval_hours = Column(Integer, default=24)
+    min_size_bytes = Column(BigInteger, default=0)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+

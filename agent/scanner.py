@@ -532,3 +532,23 @@ def scan_log_pattern(log_path, pattern, tail_lines=200, max_matches=50):
         return []
     hits = [ln.rstrip('\n') for ln in lines if rx.search(ln)]
     return hits[-max_matches:]
+
+
+def check_backup_path(target_path, min_size_bytes=0):
+    """检查备份文件/目录的新鲜度与大小（D3 备份状态验证）。
+
+    Returns:
+        dict: {path, exists, age_hours, size_bytes, error}
+    """
+    import os
+    try:
+        st = os.stat(target_path)
+    except OSError as e:
+        return {'path': target_path, 'exists': False, 'age_hours': None,
+                'size_bytes': 0, 'error': str(e)[:200]}
+    age_hours = None
+    import time
+    if st.st_mtime:
+        age_hours = round((time.time() - st.st_mtime) / 3600, 2)
+    return {'path': target_path, 'exists': True, 'age_hours': age_hours,
+            'size_bytes': st.st_size, 'error': None}

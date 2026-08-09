@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -20,6 +20,7 @@ from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metr
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
 from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
+from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_rule
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -859,6 +860,66 @@ def list_log_matches(rule_id: Optional[str] = None, days: int = 1, limit: int = 
         return result
 
 
+# === Backup Checks API (v3.27, D3) ===
+
+class BackupCheckCreate(BaseModel):
+    name: str
+    server_id: str
+    target_path: str
+    expected_interval_hours: int = 24
+    min_size_bytes: int = 0
+    enabled: bool = True
+
+
+@app.get("/api/v2/backup-checks")
+def list_backup_checks():
+    """备份检查项列表（含 server 名）。"""
+    with get_db() as db:
+        checks = db.query(BackupCheck).all()
+        result = []
+        for chk in checks:
+            srv = db.query(Server).filter(Server.id == chk.server_id).first()
+            result.append({
+                "id": str(chk.id), "name": chk.name,
+                "server_id": str(chk.server_id), "server_name": srv.name if srv else None,
+                "target_path": chk.target_path,
+                "expected_interval_hours": chk.expected_interval_hours,
+                "min_size_bytes": chk.min_size_bytes,
+                "enabled": chk.enabled,
+            })
+        return result
+
+
+@app.post("/api/v2/backup-checks")
+def create_backup_check(req: BackupCheckCreate):
+    with get_db() as db:
+        chk = BackupCheck(
+            name=req.name, server_id=uuid.UUID(req.server_id),
+            target_path=req.target_path,
+            expected_interval_hours=req.expected_interval_hours,
+            min_size_bytes=req.min_size_bytes, enabled=req.enabled,
+        )
+        db.add(chk); db.commit(); db.refresh(chk)
+        return {"id": str(chk.id), "name": chk.name}
+
+
+@app.post("/api/v2/backup-checks/scan")
+def trigger_backup_check():
+    """手动触发一轮备份检查。"""
+    run_backup_check()
+    return {"ok": True}
+
+
+@app.delete("/api/v2/backup-checks/{check_id}")
+def delete_backup_check(check_id: str):
+    with get_db() as db:
+        chk = db.query(BackupCheck).filter(BackupCheck.id == uuid.UUID(check_id)).first()
+        if not chk:
+            raise HTTPException(404, "Backup check not found")
+        db.delete(chk); db.commit()
+        return {"ok": True}
+
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task
@@ -947,9 +1008,11 @@ async def startup():
     asyncio.create_task(alerting_loop())    # 每 60s 一轮评估（ALERTING_ENABLED=false 关闭）
     asyncio.create_task(cert_scan_loop())    # v3.27 D1 证书扫描（CERT_SCAN_ENABLED=false 关闭）
     asyncio.create_task(log_scan_loop())    # v3.27 D2 日志扫描（LOG_SCAN_ENABLED=false 关闭）
+    asyncio.create_task(backup_check_loop())    # v3.27 D3 备份验证（BACKUP_CHECK_ENABLED=false 关闭）
     asyncio.create_task(retention_loop())   # 每天 01:00 清理过期数据
     seed_default_rules()
-    seed_cert_rule()                    # 幂等 seed 默认规则（仅空表时写入）
+    seed_cert_rule()
+    seed_backup_rule()                    # 幂等 seed 默认规则（仅空表时写入）
     # Migrate groups.json to per-server format if needed
     _migrate_groups_json()
     # Auto-assign groups on startup

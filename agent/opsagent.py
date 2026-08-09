@@ -336,6 +336,19 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             matches = scanner.scan_log_pattern(log_path, pattern, tail_lines)
             self._json_response({'matches': matches, 'count': len(matches)})
 
+        elif path == '/api/v1/backup/check':
+            if not self._check_auth():
+                return
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            target = (q.get('path') or [''])[0]
+            min_size = int((q.get('min_size') or ['0'])[0])
+            if not target:
+                self._json_response({'error': 'path required', 'check': None})
+                return
+            result = scanner.check_backup_path(target, min_size)
+            self._json_response({'check': result})
+
         elif path == '/api/v1/network/ping':
             if not self._check_auth():
                 return
