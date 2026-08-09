@@ -60,6 +60,9 @@
   <div class="section-title">服务</div>
   <div class="card" id="services"></div>
 
+  <div class="section-title">近 7 天可用性</div>
+  <div class="card" id="availability"></div>
+
   <footer>OpsCenter Status Page · 数据每 60 秒自动刷新</footer>
 </div>
 
@@ -90,6 +93,14 @@ async function load() {
         <span class="meta">Agent: ${esc(x.agent)}</span>
         <span class="badge ${badgeCls[x.status] || 'down'}">${x.status === 'up' ? '正常' : x.status === 'degraded' ? '部分异常' : '离线'}</span>
       </div>`).join('') || '<div class="row"><span class="name">暂无服务器</span></div>';
+
+    const av = document.getElementById('availability');
+    av.innerHTML = (d.availability || []).map(x => `
+      <div class="row">
+        <span class="name">${esc(x.name)}</span>
+        <span class="progress"><i style="width:${x.availability_7d || 0}%"></i></span>
+        <span class="meta">${x.availability_7d || 0}% (${x.samples || 0} 样本)</span>
+      </div>`).join('') || '<div class="row"><span class="name">暂无数据</span></div>';
 
     const svc = document.getElementById('services');
     svc.innerHTML = (d.services || []).map(x => {

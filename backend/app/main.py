@@ -1058,17 +1058,23 @@ def get_status_page():
                                  "status": "up" if up == total and total > 0 else ("degraded" if up > 0 else "down")})
         # 活跃告警
         firing = db.query(AlertEvent).filter(AlertEvent.status == "firing").count()
-        # 7 天可用性（按 server 从 metric_history 的 server_status 推算：简化用 agent_status 在线比例）
-        # 用最近 7 天 agent 在线天数近似
+        # 7 天可用性（基于 agent_status 历史：metric_history 无该指标时用当前状态近似）
         since = datetime.utcnow() - timedelta(days=7)
         avail = []
         for s in servers:
-            on = db.query(MetricHistory).filter(
+            # 尝试从 metric_history 统计 agent 在线比例（metric=agent_status value='running'）
+            samples = db.query(MetricHistory).filter(
                 MetricHistory.server_id == s.id,
-                MetricHistory.metric == "agent_online",
+                MetricHistory.metric == "agent_status",
                 MetricHistory.timestamp >= since,
             ).all()
-            avail.append({"name": s.name, "samples": len(on)})
+            if samples:
+                online = sum(1 for m in samples if m.value == "running")
+                pct = round(online / len(samples) * 100)
+            else:
+                # 无历史数据：用当前状态近似
+                pct = 100 if s.agent_status == "running" else 0
+            avail.append({"name": s.name, "availability_7d": pct, "samples": len(samples)})
         return {
             "generated_at": datetime.utcnow().isoformat(),
             "summary": {
