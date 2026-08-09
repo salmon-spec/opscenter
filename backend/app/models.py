@@ -240,3 +240,16 @@ class BackupCheck(Base):
     enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class ImageStatus(Base):
+    """Docker 镜像更新检测（v3.27, D4）：记录运行容器镜像与远端 digest 对比。"""
+    __tablename__ = "image_status"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    container_name = Column(String(100), nullable=False)
+    image = Column(String(200), nullable=False)
+    local_digest = Column(String(100), nullable=True)
+    remote_digest = Column(String(100), nullable=True)
+    outdated = Column(Boolean, default=False)
+    checked_at = Column(DateTime, default=datetime.utcnow)
+

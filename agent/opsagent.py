@@ -336,6 +336,11 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
             matches = scanner.scan_log_pattern(log_path, pattern, tail_lines)
             self._json_response({'matches': matches, 'count': len(matches)})
 
+        elif path == '/api/v1/images':
+            if not self._check_auth():
+                return
+            self._json_response({'images': scanner.collect_images(), 'timestamp': time.time()})
+
         elif path == '/api/v1/backup/check':
             if not self._check_auth():
                 return

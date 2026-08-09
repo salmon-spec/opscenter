@@ -387,6 +387,7 @@ createApp({
     const newSilence = ref({rule_id:'', server_id:'', starts_at:'', ends_at:'', reason:''});
     const certChecks = ref([]);
     const newCert = ref({domain:'', port:443, server_id:''});
+    const imageRows = ref([]);
     const alertRules = ref([]);
     const alertEvents = ref([]);
     const alertSummary = ref({firing:0, today:0, recovered:0});
@@ -1405,6 +1406,23 @@ createApp({
       } catch(e) { console.warn('delete cert failed:', e.message); }
     }
 
+    // ===== Image Status (v3.27, D4) =====
+    async function loadImages() {
+      try {
+        const data = await apiGet(`${API}/images`);
+        imageRows.value = data || [];
+      } catch(e) { console.warn('loadImages failed:', e.message); }
+    }
+
+    async function scanImages() {
+      try {
+        const r = await apiPost(`${API}/images/scan`, {});
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        await loadImages();
+        showToast('镜像检查完成', 'ok');
+      } catch(e) { showToast('检查失败: ' + e.message, 'err'); }
+    }
+
     // ========== Init ==========
     onMounted(async () => {
       updateClock();
@@ -1444,8 +1462,8 @@ createApp({
         if (autoRefreshTimer) clearInterval(autoRefreshTimer);
         autoRefreshTimer = setInterval(() => { loadMonitor(); loadNetwork(); }, 15000);
       } else if (val === 'alerts') {
-        // 进入告警页：并行加载规则+事件，并启动轮询
-        await Promise.all([loadAlertRules(), loadAlertEvents()]);
+        // 进入告警页：并行加载规则+事件+静默+证书+镜像，并启动轮询
+        await Promise.all([loadAlertRules(), loadAlertEvents(), loadAlertSilences(), loadCertChecks(), loadImages()]);
         if (alertTimer) clearInterval(alertTimer);
         alertTimer = setInterval(refreshAlerts, 15000);
       } else {
@@ -1864,6 +1882,7 @@ createApp({
       createRule, toggleRule, deleteRule, ackEvent,
       alertSilences, newSilence, loadAlertSilences, createSilence, deleteSilence,
       certChecks, newCert, loadCertChecks, createCertCheck, scanCerts, deleteCertCheck, certStatus,
+      imageRows, loadImages, scanImages,
     };
   },
 
@@ -2134,6 +2153,7 @@ createApp({
         <button class="btn-sm" :class="alertTab==='events'?'primary':''" @click="alertTab='events'">事件列表</button>
         <button class="btn-sm" :class="alertTab==='silences'?'primary':''" @click="alertTab='silences'">静默管理</button>
         <button class="btn-sm" :class="alertTab==='certs'?'primary':''" @click="alertTab='certs'">证书监控</button>
+        <button class="btn-sm" :class="alertTab==='images'?'primary':''" @click="alertTab='images'">镜像检查</button>
         <button class="btn-sm" @click="refreshAlerts" style="margin-left:auto">刷新</button>
       </div>
 
@@ -2270,6 +2290,33 @@ createApp({
                 <td><button class="btn-sm danger" @click="deleteCertCheck(ch.id)">删除</button></td>
               </tr>
               <tr v-if="!certChecks.length"><td colspan="7" style="padding:14px;color:var(--text2)">暂无证书检查项（添加域名后自动探测）</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div v-if="alertTab==='images'">
+        <div class="card" style="padding:14px;margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-weight:600">运行容器镜像</span>
+            <span style="color:var(--text2);font-size:12px">每日 03:30 自动检查；registry 不可达时仅记录本地镜像</span>
+            <button class="btn-sm" @click="scanImages" style="margin-left:auto">立即检查</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="tbl" style="width:100%;border-collapse:collapse">
+            <thead><tr style="text-align:left;color:var(--text2);font-size:12px">
+              <th style="padding:10px">服务器</th><th>容器</th><th>镜像</th><th>状态</th><th>检查时间</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="im in imageRows" :key="im.id" style="border-top:1px solid var(--border)">
+                <td style="padding:10px">{{im.server_name}}</td>
+                <td>{{im.container_name}}</td>
+                <td>{{im.image}}</td>
+                <td><span class="badge" :class="im.outdated?'danger':'on'">{{im.outdated?'有更新':'最新'}}</span></td>
+                <td>{{im.checked_at ? im.checked_at.slice(0,16).replace('T',' ') : '-'}}</td>
+              </tr>
+              <tr v-if="!imageRows.length"><td colspan="5" style="padding:14px;color:var(--text2)">暂无镜像记录（点击「立即检查」采集）</td></tr>
             </tbody>
           </table>
         </div>

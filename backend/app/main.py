@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -21,6 +21,7 @@ from app.ssh_terminal import create_session, get_session, remove_session, get_ac
 from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
 from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_rule
+from app.image_scanner import image_check_loop, run_image_check
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -920,6 +921,37 @@ def delete_backup_check(check_id: str):
         return {"ok": True}
 
 
+# === Image Status API (v3.27, D4) ===
+
+@app.get("/api/v2/images")
+def list_images(outdated_only: Optional[int] = None):
+    """镜像状态列表；outdated_only=1 仅返回落后镜像。"""
+    with get_db() as db:
+        q = db.query(ImageStatus)
+        if outdated_only:
+            q = q.filter(ImageStatus.outdated == True)  # noqa: E712
+        rows = q.order_by(ImageStatus.server_id, ImageStatus.container_name).all()
+        result = []
+        for img in rows:
+            srv = db.query(Server).filter(Server.id == img.server_id).first()
+            result.append({
+                "id": str(img.id),
+                "server_id": str(img.server_id), "server_name": srv.name if srv else None,
+                "container_name": img.container_name, "image": img.image,
+                "local_digest": img.local_digest, "remote_digest": img.remote_digest,
+                "outdated": img.outdated,
+                "checked_at": img.checked_at.isoformat() if img.checked_at else None,
+            })
+        return result
+
+
+@app.post("/api/v2/images/scan")
+def trigger_image_check():
+    """手动触发一轮镜像检查。"""
+    run_image_check()
+    return {"ok": True}
+
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task
@@ -1009,6 +1041,7 @@ async def startup():
     asyncio.create_task(cert_scan_loop())    # v3.27 D1 证书扫描（CERT_SCAN_ENABLED=false 关闭）
     asyncio.create_task(log_scan_loop())    # v3.27 D2 日志扫描（LOG_SCAN_ENABLED=false 关闭）
     asyncio.create_task(backup_check_loop())    # v3.27 D3 备份验证（BACKUP_CHECK_ENABLED=false 关闭）
+    asyncio.create_task(image_check_loop())    # v3.27 D4 镜像检查（IMAGE_CHECK_ENABLED=false 关闭）
     asyncio.create_task(retention_loop())   # 每天 01:00 清理过期数据
     seed_default_rules()
     seed_cert_rule()

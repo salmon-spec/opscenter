@@ -552,3 +552,64 @@ def check_backup_path(target_path, min_size_bytes=0):
         age_hours = round((time.time() - st.st_mtime) / 3600, 2)
     return {'path': target_path, 'exists': True, 'age_hours': age_hours,
             'size_bytes': st.st_size, 'error': None}
+
+def collect_images(with_registry=False):
+    """采集运行容器镜像信息（D4 镜像更新检测）。
+
+    默认本地模式（docker ps + inspect，<1s，始终可用）；
+    with_registry=True 时额外对比 Docker Hub 远端 digest
+    （强制 TLS1.2 + 短超时，registry 不可达跳过不阻塞，outdated=False）。
+    """
+    import subprocess, json, time
+    t0 = time.time()
+    try:
+        out = subprocess.run(['docker', 'ps', '--format', '{{.Names}}|{{.Image}}'],
+                             capture_output=True, text=True, timeout=8)
+        lines = [l for l in out.stdout.strip().split('\n') if l]
+    except Exception:
+        return []
+    result = []
+    budget = 8.0 if with_registry else 0.0
+    for line in lines:
+        if with_registry and time.time() - t0 > budget:
+            break
+        parts = line.split('|')
+        if len(parts) != 2:
+            continue
+        cname, image = parts[0], parts[1]
+        local_digest = None
+        try:
+            r = subprocess.run(['docker', 'image', 'inspect', image, '--format', '{{.Id}}'],
+                               capture_output=True, text=True, timeout=5)
+            local_digest = r.stdout.strip() or None
+        except Exception:
+            pass
+        remote_digest = None
+        outdated = False
+        if with_registry:
+            try:
+                import ssl as _ssl
+                import urllib.request
+                _ctx = _ssl.create_default_context()
+                _ctx.maximum_version = _ssl.TLSVersion.TLSv1_2
+                repo = image.split(':')[0]
+                if '/' not in repo:
+                    repo = 'library/' + repo
+                token_url = f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull'
+                with urllib.request.urlopen(token_url, timeout=2, context=_ctx) as resp:
+                    token = json.loads(resp.read()).get('token', '')
+                req = urllib.request.Request(
+                    f'https://registry-1.docker.io/v2/{repo}/manifests/latest',
+                    headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.docker.distribution.manifest.v2+json'})
+                with urllib.request.urlopen(req, timeout=2, context=_ctx) as resp:
+                    remote_digest = resp.headers.get('Docker-Content-Digest')
+                if local_digest and remote_digest:
+                    outdated = local_digest.split(':')[-1][:12] != remote_digest.split(':')[-1][:12]
+            except Exception:
+                pass
+        result.append({
+            'container_name': cname, 'image': image,
+            'local_digest': local_digest, 'remote_digest': remote_digest,
+            'outdated': outdated,
+        })
+    return result
