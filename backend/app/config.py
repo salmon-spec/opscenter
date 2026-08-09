@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     log_scan_enabled: bool = True                        # LOG_SCAN_ENABLED=false 关闭日志异常扫描（回滚兜底）
     backup_check_enabled: bool = True                   # BACKUP_CHECK_ENABLED=false 关闭备份验证（回滚兜底）
     image_check_enabled: bool = True                    # IMAGE_CHECK_ENABLED=false 关闭镜像更新检测（回滚兜底）
+    report_enabled: bool = True                          # REPORT_ENABLED=false 关闭巡检日报（回滚兜底）
+    report_hour_utc: int = 0                             # 日报生成小时（UTC，默认 0 = 北京 08:00）
     default_notify_webhooks: str = ""                   # 逗号分隔的飞书 webhook URL（全局默认通道，M1 修正：去掉不存在的 settings 表依赖）
 
     # ── Data Retention (v3.26, F2) ──
@@ -83,6 +85,9 @@ LOG_SCAN_ENABLED = _settings.log_scan_enabled
 BACKUP_CHECK_ENABLED = _settings.backup_check_enabled
 # v3.27 D4 镜像更新检测开关
 IMAGE_CHECK_ENABLED = _settings.image_check_enabled
+# v3.28 R1 巡检日报开关与生成时间（UTC 小时）
+REPORT_ENABLED = _settings.report_enabled
+REPORT_HOUR_UTC = _settings.report_hour_utc
 # 全局默认飞书 webhook：per-rule 的 alert_rules.notify_webhooks 优先，为空时回退到此（M1 修正）
 DEFAULT_NOTIFY_WEBHOOKS = [u.strip() for u in _settings.default_notify_webhooks.split(',') if u.strip()]
 

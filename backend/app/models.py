@@ -253,3 +253,14 @@ class ImageStatus(Base):
     outdated = Column(Boolean, default=False)
     checked_at = Column(DateTime, default=datetime.utcnow)
 
+
+class DailyReport(Base):
+    """巡检日报（v3.28, R1）：每日一次聚合多源检测数据，生成结构化摘要 + Markdown 正文。"""
+    __tablename__ = "daily_reports"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    report_date = Column(Date, nullable=False, unique=True)   # 报告日期（UTC 当日）
+    title = Column(String(200), nullable=False)
+    summary = Column(JSONB, nullable=False)                    # 结构化摘要（服务器/告警/证书/日志/备份/镜像）
+    content = Column(Text, nullable=False)                     # Markdown 正文（推送用）
+    created_at = Column(DateTime, default=datetime.utcnow)
+

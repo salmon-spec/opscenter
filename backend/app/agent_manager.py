@@ -9,7 +9,7 @@ import os
 
 
 # 动态读取Agent版本号
-_AGENT_VERSION = "2.1.0"  # 默认值
+_AGENT_VERSION = "2.2.0"  # 默认值（v3.28 起全量 2.2.0）
 try:
     _agent_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'agent', 'opsagent.py')
     with open(_agent_src) as f:

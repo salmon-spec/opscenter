@@ -1,6 +1,6 @@
 import os
 import calendar, uuid, asyncio, re, socket
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Optional, List
 from contextlib import contextmanager
 
@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -22,6 +22,7 @@ from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
 from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_rule
 from app.image_scanner import image_check_loop, run_image_check
+from app.report_engine import generate_report, report_loop
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -955,6 +956,44 @@ def trigger_image_check():
 # === Status Page API (v3.27, S3) ===
 # 公开端点：仅聚合健康摘要，不暴露 IP/端口/凭证
 
+# === Reports API (v3.28, R1) ===
+
+@app.get("/api/v2/reports")
+def list_reports(days: int = 7):
+    """最近 N 天日报列表（含结构化摘要）。"""
+    with get_db() as db:
+        since = date.today() - timedelta(days=days)
+        reports = db.query(DailyReport).filter(
+            DailyReport.report_date >= since).order_by(DailyReport.report_date.desc()).all()
+        return [{
+            "id": str(r.id), "report_date": r.report_date.isoformat(),
+            "title": r.title, "summary": r.summary,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        } for r in reports]
+
+
+@app.get("/api/v2/reports/{report_id}")
+def get_report(report_id: str):
+    """日报详情（含 Markdown 正文）。"""
+    with get_db() as db:
+        r = db.query(DailyReport).filter(DailyReport.id == uuid.UUID(report_id)).first()
+        if not r:
+            raise HTTPException(404, "Report not found")
+        return {
+            "id": str(r.id), "report_date": r.report_date.isoformat(),
+            "title": r.title, "summary": r.summary, "content": r.content,
+        }
+
+
+@app.post("/api/v2/reports/generate")
+def generate_report_now():
+    """手动生成今日日报（幂等，已存在则覆盖）。"""
+    result = generate_report()
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+    return result
+
+
 @app.get("/api/v2/status-page")
 def get_status_page():
     """聚合状态页数据：服务器健康、服务状态、活跃告警、7 天可用性。"""
@@ -1100,6 +1139,7 @@ async def startup():
     asyncio.create_task(log_scan_loop())    # v3.27 D2 日志扫描（LOG_SCAN_ENABLED=false 关闭）
     asyncio.create_task(backup_check_loop())    # v3.27 D3 备份验证（BACKUP_CHECK_ENABLED=false 关闭）
     asyncio.create_task(image_check_loop())    # v3.27 D4 镜像检查（IMAGE_CHECK_ENABLED=false 关闭）
+    asyncio.create_task(report_loop())    # v3.28 R2 日报（REPORT_ENABLED=false 关闭）
     asyncio.create_task(retention_loop())   # 每天 01:00 清理过期数据
     seed_default_rules()
     seed_cert_rule()
