@@ -304,20 +304,25 @@ def seed_default_rules(db=None) -> None:
 
 # === 数据保留清理（F2, 分批防锁表） ===
 
+# (name, model, days, time_col, is_date)
 _RETENTION = [
-    ("metric_history", MetricHistory, RETENTION_METRIC_DAYS),
-    ("network_latency", NetworkLatency, RETENTION_LATENCY_DAYS),
-    ("network_stats", NetworkStats, RETENTION_STATS_DAYS),
-    ("audit_logs", AuditLog, 90),        # v3.28 A2 审计日志保留 90 天
-    ("daily_reports", DailyReport, 90),  # v3.28 R1 日报保留 90 天
+    ("metric_history", MetricHistory, RETENTION_METRIC_DAYS, "timestamp", False),
+    ("network_latency", NetworkLatency, RETENTION_LATENCY_DAYS, "timestamp", False),
+    ("network_stats", NetworkStats, RETENTION_STATS_DAYS, "date", True),
+    ("audit_logs", AuditLog, 90, "ts", False),                # v3.28 A2 审计日志保留 90 天
+    ("daily_reports", DailyReport, 90, "report_date", True),  # v3.28 R1 日报保留 90 天
 ]
 
 
-def _delete_batched(db, model, cutoff_dt: datetime, cutoff_date=None) -> int:
-    """分批删除早于 cutoff 的行，每批 5000，避免大表一次性 DELETE 锁表。"""
-    is_stats = model is NetworkStats
-    col = model.date if is_stats else model.timestamp
-    threshold = cutoff_date if is_stats else cutoff_dt
+def _delete_batched(db, model, cutoff_dt: datetime, cutoff_date=None, time_col="timestamp") -> int:
+    """分批删除早于 cutoff 的行，每批 5000，避免大表一次性 DELETE 锁表。
+
+    time_col: 模型时间列名（默认 timestamp；network_stats 用 date，audit 用 ts，report 用 report_date）
+    is_date: 该列为 Date 类型时用日期比较
+    """
+    is_date_col = time_col == "date" or time_col == "report_date"
+    col = getattr(model, time_col)
+    threshold = cutoff_date if is_date_col else cutoff_dt
     total = 0
     while True:
         rows = db.query(model).filter(col < threshold).limit(5000).all()
@@ -340,12 +345,12 @@ def retention_cleanup(db=None) -> None:
         db = next(get_db())
     try:
         now = datetime.utcnow()
-        for name, model, days in _RETENTION:
+        for name, model, days, time_col, is_date in _RETENTION:
             if days <= 0:
                 continue
             cutoff_dt = now - timedelta(days=days)
             cutoff_date = (now - timedelta(days=days)).date()
-            deleted = _delete_batched(db, model, cutoff_dt, cutoff_date)
+            deleted = _delete_batched(db, model, cutoff_dt, cutoff_date, time_col=time_col)
             logger.info("retention: %s removed %d rows (keep %d days)", name, deleted, days)
     finally:
         if own:
