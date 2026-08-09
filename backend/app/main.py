@@ -998,6 +998,37 @@ def generate_report_now():
     return result
 
 
+# === Audit Logs API (v3.28, A2) ===
+
+@app.get("/api/v2/audit-logs")
+def list_audit_logs(action: Optional[str] = None, resource: Optional[str] = None,
+                    username: Optional[str] = None, days: int = 30,
+                    limit: int = 100, offset: int = 0):
+    """审计日志查询（筛选 + 分页）。"""
+    with get_db() as db:
+        q = db.query(AuditLog)
+        if action:
+            q = q.filter(AuditLog.action == action)
+        if resource:
+            q = q.filter(AuditLog.resource == resource)
+        if username:
+            q = q.filter(AuditLog.username == username)
+        if days and days > 0:
+            q = q.filter(AuditLog.ts >= datetime.utcnow() - timedelta(days=days))
+        total = q.count()
+        rows = q.order_by(AuditLog.ts.desc()).offset(offset).limit(limit).all()
+        return {
+            "total": total,
+            "items": [{
+                "id": str(a.id),
+                "ts": a.ts.isoformat() if a.ts else None,
+                "username": a.username, "action": a.action, "resource": a.resource,
+                "resource_id": a.resource_id, "detail": a.detail,
+                "ip": a.ip, "status": a.status,
+            } for a in rows],
+        }
+
+
 @app.get("/api/v2/status-page")
 def get_status_page():
     """聚合状态页数据：服务器健康、服务状态、活跃告警、7 天可用性。"""

@@ -29,6 +29,7 @@ from app.config import (
 )
 from app.database import get_db
 from app.models import (
+    AuditLog, DailyReport,
     AlertEvent,
     AlertRule,
     AlertSilence,
@@ -307,6 +308,8 @@ _RETENTION = [
     ("metric_history", MetricHistory, RETENTION_METRIC_DAYS),
     ("network_latency", NetworkLatency, RETENTION_LATENCY_DAYS),
     ("network_stats", NetworkStats, RETENTION_STATS_DAYS),
+    ("audit_logs", AuditLog, 90),        # v3.28 A2 审计日志保留 90 天
+    ("daily_reports", DailyReport, 90),  # v3.28 R1 日报保留 90 天
 ]
 
 

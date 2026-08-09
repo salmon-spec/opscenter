@@ -392,6 +392,8 @@ createApp({
     const imageRows = ref([]);
     const reports = ref([]);
     const activeReport = ref(null);
+    const auditRows = ref([]);
+    const auditFilter = ref({action:'', resource:'', days:30});
     const alertRules = ref([]);
     const alertEvents = ref([]);
     const alertSummary = ref({firing:0, today:0, recovered:0});
@@ -1252,7 +1254,7 @@ createApp({
     }
 
     async function refreshAlerts() {
-      await Promise.all([loadAlertRules(), loadAlertEvents(), loadAlertSilences(), loadCertChecks()]);
+      await Promise.all([loadAlertRules(), loadAlertEvents(), loadAlertSilences(), loadCertChecks(), loadImages(), loadReports(), loadAuditLogs()]);
     }
 
     async function createRule() {
@@ -1456,6 +1458,18 @@ createApp({
       } catch(e) { showToast('生成失败: ' + e.message, 'err'); }
     }
 
+    // ===== Audit Logs (v3.28, A2) =====
+    async function loadAuditLogs() {
+      try {
+        const f = auditFilter.value;
+        let url = `${API}/audit-logs?days=${f.days || 30}&limit=200`;
+        if (f.action) url += `&action=${f.action}`;
+        if (f.resource) url += `&resource=${f.resource}`;
+        const d = await apiGet(url);
+        auditRows.value = (d && d.items) || [];
+      } catch(e) { console.warn('loadAuditLogs failed:', e.message); }
+    }
+
     // ========== Init ==========
     onMounted(async () => {
       updateClock();
@@ -1495,8 +1509,8 @@ createApp({
         if (autoRefreshTimer) clearInterval(autoRefreshTimer);
         autoRefreshTimer = setInterval(() => { loadMonitor(); loadNetwork(); }, 15000);
       } else if (val === 'alerts') {
-        // 进入告警页：并行加载规则+事件+静默+证书+镜像，并启动轮询
-        await Promise.all([loadAlertRules(), loadAlertEvents(), loadAlertSilences(), loadCertChecks(), loadImages()]);
+        // 进入告警页：并行加载规则+事件+静默+证书+镜像+日报+审计，并启动轮询
+        await Promise.all([loadAlertRules(), loadAlertEvents(), loadAlertSilences(), loadCertChecks(), loadImages(), loadReports(), loadAuditLogs()]);
         if (alertTimer) clearInterval(alertTimer);
         alertTimer = setInterval(refreshAlerts, 15000);
       } else {
@@ -1917,6 +1931,7 @@ createApp({
       certChecks, newCert, loadCertChecks, createCertCheck, scanCerts, deleteCertCheck, certStatus,
       imageRows, loadImages, scanImages,
       reports, activeReport, loadReports, showReport, generateReport,
+      auditRows, auditFilter, loadAuditLogs,
     };
   },
 
@@ -2385,6 +2400,58 @@ createApp({
             </template>
             <div v-else style="color:var(--text2);padding:40px;text-align:center">选择左侧日报查看详情</div>
           </div>
+        </div>
+      </div>
+
+      <div v-if="alertTab==='audit'">
+        <div class="card" style="padding:14px;margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-weight:600">操作审计</span>
+            <select class="inp" v-model="auditFilter.action" style="width:110px" @change="loadAuditLogs">
+              <option value="">全部动作</option>
+              <option value="create">create</option>
+              <option value="update">update</option>
+              <option value="delete">delete</option>
+              <option value="generate">generate</option>
+              <option value="login">login</option>
+            </select>
+            <select class="inp" v-model="auditFilter.resource" style="width:120px" @change="loadAuditLogs">
+              <option value="">全部资源</option>
+              <option value="alert-rule">告警规则</option>
+              <option value="silence">静默</option>
+              <option value="cert">证书</option>
+              <option value="log-rule">日志规则</option>
+              <option value="backup">备份</option>
+              <option value="image">镜像</option>
+              <option value="server">服务器</option>
+              <option value="report">日报</option>
+            </select>
+            <select class="inp" v-model="auditFilter.days" style="width:100px" @change="loadAuditLogs">
+              <option :value="7">近 7 天</option>
+              <option :value="30">近 30 天</option>
+              <option :value="90">近 90 天</option>
+            </select>
+            <button class="btn-sm" @click="loadAuditLogs" style="margin-left:auto">刷新</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="tbl" style="width:100%;border-collapse:collapse">
+            <thead><tr style="text-align:left;color:var(--text2);font-size:12px">
+              <th style="padding:10px">时间</th><th>用户</th><th>动作</th><th>资源</th><th>详情</th><th>IP</th><th>状态</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="a in auditRows" :key="a.id" style="border-top:1px solid var(--border)">
+                <td style="padding:10px">{{a.ts ? a.ts.slice(0,19).replace('T',' ') : '-'}}</td>
+                <td>{{a.username}}</td>
+                <td><span class="badge" :class="a.action==='delete'?'danger':(a.action==='create'?'on':'')">{{a.action}}</span></td>
+                <td>{{a.resource}}</td>
+                <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="a.detail">{{a.detail || '-'}}</td>
+                <td>{{a.ip || '-'}}</td>
+                <td><span class="badge" :class="a.status==='success'?'on':'danger'">{{a.status}}</span></td>
+              </tr>
+              <tr v-if="!auditRows.length"><td colspan="7" style="padding:14px;color:var(--text2)">暂无审计记录</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
