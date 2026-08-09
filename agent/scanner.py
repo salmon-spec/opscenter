@@ -507,3 +507,28 @@ def ping_latency(target, count=4):
         lat = float(m.group(1))
         jitter = float(m.group(2))
     return {'target': target, 'latency_ms': lat, 'loss_pct': loss, 'jitter_ms': jitter}
+
+
+def scan_log_pattern(log_path, pattern, tail_lines=200, max_matches=50):
+    """扫描日志尾部匹配正则，返回命中的最近若干行（D2 日志异常检测）。
+
+    Args:
+        log_path: 日志文件绝对路径
+        pattern: 正则表达式（如 'OOM|Out of memory'）
+        tail_lines: 扫描文件尾部行数
+        max_matches: 最多返回命中行数
+    Returns:
+        list[str]: 命中的原始日志行（从旧到新）
+    """
+    import re as _re
+    try:
+        with open(log_path, 'r', errors='replace') as f:
+            lines = f.readlines()[-tail_lines:]
+    except Exception:
+        return []
+    try:
+        rx = _re.compile(pattern)
+    except Exception:
+        return []
+    hits = [ln.rstrip('\n') for ln in lines if rx.search(ln)]
+    return hits[-max_matches:]

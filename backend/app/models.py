@@ -204,3 +204,26 @@ class CertCheck(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+class LogRule(Base):
+    """日志异常检测规则（v3.27, D2）：对服务器指定日志尾部做正则匹配。"""
+    __tablename__ = "log_rules"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    log_path = Column(String(255), nullable=False)
+    pattern = Column(String(255), nullable=False)
+    tail_lines = Column(Integer, default=200)
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class LogMatch(Base):
+    """日志命中明细（v3.27, D2）：保留最近命中行用于回溯。"""
+    __tablename__ = "log_matches"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id = Column(UUID(as_uuid=True), ForeignKey("log_rules.id", ondelete="CASCADE"), nullable=False)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    matched_line = Column(Text, nullable=True)
+    matched_at = Column(DateTime, default=datetime.utcnow)
+

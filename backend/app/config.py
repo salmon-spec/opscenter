@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     silence_enabled: bool = True                        # SILENCE_ENABLED=false 跳过静默判断（回滚兜底）
     cert_scan_enabled: bool = True                      # CERT_SCAN_ENABLED=false 关闭证书采集（回滚兜底）
     cert_scan_interval_hours: int = 6                   # 证书探测周期（小时）
+    log_scan_enabled: bool = True                        # LOG_SCAN_ENABLED=false 关闭日志异常扫描（回滚兜底）
     default_notify_webhooks: str = ""                   # 逗号分隔的飞书 webhook URL（全局默认通道，M1 修正：去掉不存在的 settings 表依赖）
 
     # ── Data Retention (v3.26, F2) ──
@@ -74,6 +75,8 @@ SILENCE_ENABLED = _settings.silence_enabled
 # v3.27 D1 证书监控开关与周期
 CERT_SCAN_ENABLED = _settings.cert_scan_enabled
 CERT_SCAN_INTERVAL_HOURS = _settings.cert_scan_interval_hours
+# v3.27 D2 日志异常扫描开关
+LOG_SCAN_ENABLED = _settings.log_scan_enabled
 # 全局默认飞书 webhook：per-rule 的 alert_rules.notify_webhooks 优先，为空时回退到此（M1 修正）
 DEFAULT_NOTIFY_WEBHOOKS = [u.strip() for u in _settings.default_notify_webhooks.split(',') if u.strip()]
 

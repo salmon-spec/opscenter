@@ -12,13 +12,14 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
 from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
+from app.log_scanner import log_scan_loop, run_log_scan
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -771,6 +772,93 @@ def delete_cert_check(check_id: str):
         return {"ok": True}
 
 
+# === Log Watch API (v3.27, D2) ===
+
+class LogRuleCreate(BaseModel):
+    name: str
+    server_id: str
+    log_path: str
+    pattern: str
+    tail_lines: int = 200
+    enabled: bool = True
+
+
+@app.get("/api/v2/log-rules")
+def list_log_rules():
+    """日志规则列表（含 server 名与最近命中数）。"""
+    with get_db() as db:
+        rules = db.query(LogRule).all()
+        result = []
+        for r in rules:
+            srv = db.query(Server).filter(Server.id == r.server_id).first()
+            recent = db.query(LogMatch).filter(
+                LogMatch.rule_id == r.id,
+                LogMatch.matched_at >= datetime.utcnow() - timedelta(hours=24),
+            ).count()
+            result.append({
+                "id": str(r.id), "name": r.name,
+                "server_id": str(r.server_id),
+                "server_name": srv.name if srv else None,
+                "log_path": r.log_path, "pattern": r.pattern,
+                "tail_lines": r.tail_lines, "enabled": r.enabled,
+                "matches_24h": recent,
+            })
+        return result
+
+
+@app.post("/api/v2/log-rules")
+def create_log_rule(req: LogRuleCreate):
+    with get_db() as db:
+        rule = LogRule(
+            name=req.name, server_id=uuid.UUID(req.server_id),
+            log_path=req.log_path, pattern=req.pattern,
+            tail_lines=req.tail_lines, enabled=req.enabled,
+        )
+        db.add(rule); db.commit(); db.refresh(rule)
+        return {"id": str(rule.id), "name": rule.name}
+
+
+@app.delete("/api/v2/log-rules/{rule_id}")
+def delete_log_rule(rule_id: str):
+    with get_db() as db:
+        rule = db.query(LogRule).filter(LogRule.id == uuid.UUID(rule_id)).first()
+        if not rule:
+            raise HTTPException(404, "Log rule not found")
+        db.delete(rule); db.commit()
+        return {"ok": True}
+
+
+@app.post("/api/v2/log-rules/scan")
+def trigger_log_scan():
+    """手动触发一轮日志扫描。"""
+    run_log_scan()
+    return {"ok": True}
+
+
+@app.get("/api/v2/log-matches")
+def list_log_matches(rule_id: Optional[str] = None, days: int = 1, limit: int = 100):
+    """日志命中明细。"""
+    with get_db() as db:
+        q = db.query(LogMatch)
+        if rule_id:
+            q = q.filter(LogMatch.rule_id == uuid.UUID(rule_id))
+        if days and days > 0:
+            q = q.filter(LogMatch.matched_at >= datetime.utcnow() - timedelta(days=days))
+        matches = q.order_by(LogMatch.matched_at.desc()).limit(limit).all()
+        result = []
+        for m in matches:
+            rule = db.query(LogRule).filter(LogRule.id == m.rule_id).first()
+            srv = db.query(Server).filter(Server.id == m.server_id).first()
+            result.append({
+                "id": str(m.id),
+                "rule_id": str(m.rule_id), "rule_name": rule.name if rule else None,
+                "server_id": str(m.server_id), "server_name": srv.name if srv else None,
+                "matched_line": m.matched_line,
+                "matched_at": m.matched_at.isoformat() if m.matched_at else None,
+            })
+        return result
+
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task
@@ -858,6 +946,7 @@ async def startup():
     # v3.26: 告警引擎 + 数据保留后台任务
     asyncio.create_task(alerting_loop())    # 每 60s 一轮评估（ALERTING_ENABLED=false 关闭）
     asyncio.create_task(cert_scan_loop())    # v3.27 D1 证书扫描（CERT_SCAN_ENABLED=false 关闭）
+    asyncio.create_task(log_scan_loop())    # v3.27 D2 日志扫描（LOG_SCAN_ENABLED=false 关闭）
     asyncio.create_task(retention_loop())   # 每天 01:00 清理过期数据
     seed_default_rules()
     seed_cert_rule()                    # 幂等 seed 默认规则（仅空表时写入）

@@ -322,6 +322,20 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 'timestamp': time.time(),
             })
 
+        elif path == '/api/v1/log/scan':
+            if not self._check_auth():
+                return
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            log_path = (q.get('path') or [''])[0]
+            pattern = (q.get('pattern') or [''])[0]
+            tail_lines = int((q.get('tail_lines') or ['200'])[0])
+            if not log_path or not pattern:
+                self._json_response({'error': 'path and pattern required', 'matches': []})
+                return
+            matches = scanner.scan_log_pattern(log_path, pattern, tail_lines)
+            self._json_response({'matches': matches, 'count': len(matches)})
+
         elif path == '/api/v1/network/ping':
             if not self._check_auth():
                 return
