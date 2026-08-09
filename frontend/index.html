@@ -350,6 +350,8 @@ body{background:var(--bg);color:var(--text1);transition:background .3s,color .3s
 .fm-upload-status{font-size:11px;color:var(--text3)}
 .fm-loading{text-align:center;padding:20px;color:var(--text3);font-size:12px}
 .term-connecting{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.85);color:var(--accent);font-size:14px;z-index:5}
+  .report-item:hover { background:rgba(99,102,241,0.06); }
+  .report-item.active { background:rgba(99,102,241,0.12); border-left:3px solid #6366f1; }
 </style>
 <svg style="display:none" xmlns="http://www.w3.org/2000/svg">
 <symbol id="fa-server" viewBox="0 0 640 512"><path fill="currentColor" d="M480 96H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zm0 128H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zm0 128H160c-8.8 0-16-7.2-16-16s7.2-16 16-16h320c8.8 0 16 7.2 16 16s-7.2 16-16 16zM64 0C28.7 0 0 28.7 0 64v64c0 35.3 28.7 64 64 64h512c35.3 0 64-28.7 64-64V64c0-35.3-28.7-64-64-64H64zm0 256c-35.3 0-64 28.7-64 64v64c0 35.3 28.7 64 64 64h512c35.3 0 64-28.7 64-64v-64c0-35.3-28.7-64-64-64H64z"/></symbol>
@@ -388,6 +390,8 @@ createApp({
     const certChecks = ref([]);
     const newCert = ref({domain:'', port:443, server_id:''});
     const imageRows = ref([]);
+    const reports = ref([]);
+    const activeReport = ref(null);
     const alertRules = ref([]);
     const alertEvents = ref([]);
     const alertSummary = ref({firing:0, today:0, recovered:0});
@@ -1423,6 +1427,35 @@ createApp({
       } catch(e) { showToast('检查失败: ' + e.message, 'err'); }
     }
 
+    // ===== Reports (v3.28, R1) =====
+    async function loadReports() {
+      try {
+        const data = await apiGet(`${API}/reports?days=7`);
+        reports.value = data || [];
+        // 默认选中最近一份
+        if (reports.value.length && !activeReport.value) {
+          await showReport(reports.value[0].id);
+        }
+      } catch(e) { console.warn('loadReports failed:', e.message); }
+    }
+
+    async function showReport(id) {
+      try {
+        const r = await apiGet(`${API}/reports/${id}`);
+        activeReport.value = r;
+      } catch(e) { console.warn('showReport failed:', e.message); }
+    }
+
+    async function generateReport() {
+      try {
+        const r = await apiPost(`${API}/reports/generate`, {});
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        await loadReports();
+        await showReport(r.id);
+        showToast('日报已生成', 'ok');
+      } catch(e) { showToast('生成失败: ' + e.message, 'err'); }
+    }
+
     // ========== Init ==========
     onMounted(async () => {
       updateClock();
@@ -1883,6 +1916,7 @@ createApp({
       alertSilences, newSilence, loadAlertSilences, createSilence, deleteSilence,
       certChecks, newCert, loadCertChecks, createCertCheck, scanCerts, deleteCertCheck, certStatus,
       imageRows, loadImages, scanImages,
+      reports, activeReport, loadReports, showReport, generateReport,
     };
   },
 
@@ -2154,6 +2188,7 @@ createApp({
         <button class="btn-sm" :class="alertTab==='silences'?'primary':''" @click="alertTab='silences'">静默管理</button>
         <button class="btn-sm" :class="alertTab==='certs'?'primary':''" @click="alertTab='certs'">证书监控</button>
         <button class="btn-sm" :class="alertTab==='images'?'primary':''" @click="alertTab='images'">镜像检查</button>
+        <button class="btn-sm" :class="alertTab==='reports'?'primary':''" @click="alertTab='reports'">巡检日报</button>
         <button class="btn-sm" @click="refreshAlerts" style="margin-left:auto">刷新</button>
       </div>
 
@@ -2319,6 +2354,37 @@ createApp({
               <tr v-if="!imageRows.length"><td colspan="5" style="padding:14px;color:var(--text2)">暂无镜像记录（点击「立即检查」采集）</td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div v-if="alertTab==='reports'">
+        <div class="card" style="padding:14px;margin-bottom:14px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-weight:600">巡检日报</span>
+            <span style="color:var(--text2);font-size:12px">每日 08:00 自动生成，聚合服务器/告警/证书/日志/备份/镜像/服务</span>
+            <button class="btn-sm primary" @click="generateReport" style="margin-left:auto">生成今日日报</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:220px 1fr;gap:14px">
+          <div class="card" style="padding:0;overflow:hidden;max-height:60vh;overflow-y:auto">
+            <div v-for="r in reports" :key="r.id" @click="showReport(r.id)"
+                 class="report-item" :class="activeReport && activeReport.id === r.id ? 'active' : ''"
+                 style="padding:12px 14px;border-bottom:1px solid var(--border);cursor:pointer;font-size:13px">
+              <div style="font-weight:600">{{r.report_date}}</div>
+              <div style="color:var(--text2);font-size:11px;margin-top:2px">
+                🖥 {{r.summary.servers.online}}/{{r.summary.servers.total}} 在线
+                · 🔴 {{r.summary.alerts.firing}} 告警
+                · 🔐 {{r.summary.certs.expiring_30d}} 证书到期
+              </div>
+            </div>
+            <div v-if="!reports.length" style="padding:14px;color:var(--text2);font-size:13px">暂无日报（点击「生成今日日报」）</div>
+          </div>
+          <div class="card" style="padding:16px;min-height:300px;overflow:auto">
+            <template v-if="activeReport">
+              <pre style="white-space:pre-wrap;font-family:inherit;font-size:13px;line-height:1.7;margin:0">{{activeReport.content}}</pre>
+            </template>
+            <div v-else style="color:var(--text2);padding:40px;text-align:center">选择左侧日报查看详情</div>
+          </div>
         </div>
       </div>
     </div>
