@@ -32,6 +32,17 @@ class _StubHandler:
     def end_headers(self):
         pass
 
+    def _check_auth(self):
+        # 与 agent/opsagent.py AgentHandler._check_auth 保持一致
+        auth = self.headers.get('Authorization', '')
+        if opsagent.TOKEN and auth == f'Bearer {opsagent.TOKEN}':
+            return True
+        self.send_response(401)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(b'{error: unauthorized}')
+        return False
+
 
 def test_agent_version_is_2_2_0():
     # F1 引入 token 强制必填，伴随版本号升级

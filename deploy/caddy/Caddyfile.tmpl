@@ -1,0 +1,123 @@
+{
+    auto_https disable_redirects
+}
+
+# Ops Center (MFA host local)
+ops.salmon.xin:80 {
+    # /status/ 与 /status-page* 匿名放行（S3 状态页，仅聚合摘要）
+    handle /status/* {
+        root * /opt/opscenter/frontend
+        rewrite * /status.html
+        file_server
+    }
+    handle /status-page* {
+        reverse_proxy localhost:9091
+    }
+    # 其余路径（前端静态 + API + WS）全部 basic_auth
+    handle /api/v2/status-page {
+        reverse_proxy localhost:9091
+    }
+    handle /api/* {
+        basic_auth {
+            qiushui __CADDY_BASIC_AUTH_HASH__
+        }
+        reverse_proxy localhost:9091
+    }
+    handle /ws/* {
+        basic_auth {
+            qiushui __CADDY_BASIC_AUTH_HASH__
+        }
+        reverse_proxy localhost:9091
+    }
+    handle {
+        basic_auth {
+            qiushui __CADDY_BASIC_AUTH_HASH__
+        }
+        root * /opt/opscenter/frontend
+        file_server
+    }
+}
+# Vaultwarden (VM3)
+vw.salmon.xin {
+    reverse_proxy 10.66.66.6:8082
+}
+
+# 2FAuth (VM3)
+mfa.salmon.xin {
+    reverse_proxy 10.66.66.6:8000
+}
+
+# Homer Dashboard (VM3)
+homer.salmon.xin {
+    reverse_proxy 10.66.66.6:8090
+}
+
+# IT-Tools (VM3)
+tools.salmon.xin {
+    reverse_proxy 10.66.66.6:8091
+}
+
+# Stirling PDF (VM3)
+pdf.salmon.xin {
+    reverse_proxy 10.66.66.6:8092
+}
+
+# N8N (VM3)
+n8n.salmon.xin {
+    reverse_proxy 10.66.66.6:8093
+}
+
+# Affine (VM3)
+affine.salmon.xin {
+    reverse_proxy 10.66.66.6:8094
+}
+
+# 内网 IP 直接访问（2026-08-04 添加）
+http://192.168.1.153 {
+    basic_auth {
+        qiushui __CADDY_BASIC_AUTH_HASH__
+    }
+    root * /opt/opscenter/frontend
+    basic_auth {
+        qiushui __CADDY_BASIC_AUTH_HASH__
+    }
+    file_server
+
+    handle /api/* {
+        basic_auth {
+            qiushui __CADDY_BASIC_AUTH_HASH__
+        }
+        reverse_proxy localhost:9091
+    }
+    handle /ws/* {
+        basic_auth {
+            qiushui __CADDY_BASIC_AUTH_HASH__
+        }
+        reverse_proxy localhost:9091
+    }
+}
+
+http://10.66.66.5 {
+    basic_auth {
+        qiushui __CADDY_BASIC_AUTH_HASH__
+    }
+    root * /opt/opscenter/frontend
+    basic_auth {
+        qiushui __CADDY_BASIC_AUTH_HASH__
+    }
+    file_server
+
+    handle /api/* {
+        basic_auth {
+            qiushui __CADDY_BASIC_AUTH_HASH__
+        }
+        reverse_proxy localhost:9091
+    }
+    handle /ws/* {
+        basic_auth {
+            qiushui __CADDY_BASIC_AUTH_HASH__
+        }
+        reverse_proxy localhost:9091
+    }
+}
+

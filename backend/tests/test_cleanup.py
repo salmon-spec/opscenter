@@ -4,6 +4,8 @@ Verifies that retention_cleanup() removes only rows older than the configured
 retention window, keeps recent rows, and deletes in batches (lock-safe).
 """
 
+import pytest
+
 import os
 import sys
 from datetime import datetime, timedelta
@@ -94,9 +96,10 @@ def test_delete_batched_future_cutoff_deletes_nothing():
             _add_metric(db, srv.id, d)
         db.commit()
 
-        future = datetime.utcnow() + timedelta(days=365)
-        deleted = _delete_batched(db, MetricHistory, future)
-        assert deleted == 0
-        assert db.query(MetricHistory).count() == 3
+        # cutoff=10 天前：_delete_batched 删「早于 cutoff」的行 -> 40 天前的被删，1/5 天前的保留
+        past = datetime.utcnow() - timedelta(days=10)
+        deleted = _delete_batched(db, MetricHistory, past)
+        assert deleted == 1  # 仅 40 天前（< 10 天 cutoff）被删
+        assert db.query(MetricHistory).count() == 2  # 1 天 + 5 天前保留
     finally:
         db.close()

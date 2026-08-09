@@ -4,6 +4,8 @@ Covers: rule CRUD via API, event ack, engine pure-function evaluation,
 seed idempotency, and DEFAULT_RULES metric vocabulary correctness.
 """
 
+import pytest
+
 import os
 import sys
 
@@ -117,13 +119,19 @@ def test_create_rule_requires_name_and_threshold():
 # ---------- API: event ack ----------
 
 def test_event_ack():
+    from app.models import Server
     db = SessionLocal()
     try:
+        srv = Server(name="ack-test", host="10.0.0.9", ssh_user="ops",
+                     auth_type="password", agent_status="running")
+        db.add(srv)
+        db.commit()
+        db.refresh(srv)
         rule = AlertRule(name="t", metric="cpu", operator=">", threshold="90")
         db.add(rule)
         db.commit()
         db.refresh(rule)
-        ev = AlertEvent(rule_id=rule.id, server_id=None, status="firing",
+        ev = AlertEvent(rule_id=rule.id, server_id=srv.id, status="firing",
                         current_value="95")
         db.add(ev)
         db.commit()
@@ -139,6 +147,11 @@ def test_event_ack():
     db = SessionLocal()
     try:
         assert db.query(AlertEvent).get(eid).status == "acked"
+        # 清理（保持测试库干净）
+        db.query(AlertEvent).filter(AlertEvent.id == eid).delete()
+        db.query(AlertRule).filter(AlertRule.name == "t").delete()
+        db.query(Server).filter(Server.name == "ack-test").delete()
+        db.commit()
     finally:
         db.close()
 
