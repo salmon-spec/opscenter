@@ -2099,7 +2099,7 @@ createApp({
         <div class="card" style="padding:0;overflow:hidden">
           <table class="tbl" style="width:100%;border-collapse:collapse">
             <thead><tr style="text-align:left;color:var(--text2);font-size:12px">
-              <th style="padding:10px">名称</th><th>作用域</th><th>指标</th><th>条件</th><th>持续/冷却</th><th>状态</th><th></th>
+              <th style="padding:10px">名称</th><th>作用域</th><th>指标</th><th>条件</th><th>持续/冷却</th><th>通知通道</th><th>状态</th><th></th>
             </tr></thead>
             <tbody>
               <tr v-for="r in alertRules" :key="r.id" style="border-top:1px solid var(--border)">
@@ -2108,10 +2108,11 @@ createApp({
                 <td>{{r.metric}}</td>
                 <td>{{r.operator}} {{r.threshold}}</td>
                 <td>{{r.duration_sec}}s / {{r.cooldown_sec}}s</td>
+                <td><span v-if="r.notify_webhooks && r.notify_webhooks.length" class="badge on" style="cursor:default">规则级 {{r.notify_webhooks.length}}</span><span v-else class="badge off" style="cursor:default" title="未配置规则级通道，走全局 webhook（或不通知）">全局</span></td>
                 <td><span class="badge" :class="r.enabled?'on':'off'" @click="toggleRule(r)" style="cursor:pointer">{{r.enabled?'启用':'停用'}}</span></td>
                 <td><button class="btn-sm danger" @click="deleteRule(r.id)">删除</button></td>
               </tr>
-              <tr v-if="!alertRules.length"><td colspan="7" style="padding:14px;color:var(--text2)">暂无规则</td></tr>
+              <tr v-if="!alertRules.length"><td colspan="8" style="padding:14px;color:var(--text2)">暂无规则</td></tr>
             </tbody>
           </table>
         </div>
