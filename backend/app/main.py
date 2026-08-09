@@ -12,12 +12,13 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
+from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -707,6 +708,69 @@ def delete_alert_silence(silence_id: str):
         return {"ok": True}
 
 
+# === Cert Checks API (v3.27, D1) ===
+
+class CertCheckCreate(BaseModel):
+    domain: str
+    port: int = 443
+    server_id: Optional[str] = None
+    enabled: bool = True
+
+
+@app.get("/api/v2/cert-checks")
+def list_cert_checks():
+    """证书检查项列表（含最近探测结果）。"""
+    with get_db() as db:
+        checks = db.query(CertCheck).order_by(CertCheck.domain).all()
+        result = []
+        for chk in checks:
+            srv_name = None
+            if chk.server_id:
+                srv = db.query(Server).filter(Server.id == chk.server_id).first()
+                srv_name = srv.name if srv else None
+            result.append({
+                "id": str(chk.id),
+                "server_id": str(chk.server_id) if chk.server_id else None,
+                "server_name": srv_name,
+                "domain": chk.domain, "port": chk.port,
+                "days_left": chk.days_left,
+                "not_after": chk.not_after.isoformat() if chk.not_after else None,
+                "issuer": chk.issuer,
+                "last_error": chk.last_error,
+                "enabled": chk.enabled,
+            })
+        return result
+
+
+@app.post("/api/v2/cert-checks")
+def create_cert_check(req: CertCheckCreate):
+    with get_db() as db:
+        chk = CertCheck(
+            domain=req.domain, port=req.port,
+            server_id=uuid.UUID(req.server_id) if req.server_id else None,
+            enabled=req.enabled,
+        )
+        db.add(chk); db.commit(); db.refresh(chk)
+        return {"id": str(chk.id), "domain": chk.domain}
+
+
+@app.post("/api/v2/cert-checks/scan")
+def trigger_cert_scan():
+    """手动触发一轮证书扫描。"""
+    run_cert_scan()
+    return {"ok": True}
+
+
+@app.delete("/api/v2/cert-checks/{check_id}")
+def delete_cert_check(check_id: str):
+    with get_db() as db:
+        chk = db.query(CertCheck).filter(CertCheck.id == uuid.UUID(check_id)).first()
+        if not chk:
+            raise HTTPException(404, "Cert check not found")
+        db.delete(chk); db.commit()
+        return {"ok": True}
+
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task
@@ -793,8 +857,10 @@ async def startup():
     asyncio.create_task(background_agent_collector())
     # v3.26: 告警引擎 + 数据保留后台任务
     asyncio.create_task(alerting_loop())    # 每 60s 一轮评估（ALERTING_ENABLED=false 关闭）
+    asyncio.create_task(cert_scan_loop())    # v3.27 D1 证书扫描（CERT_SCAN_ENABLED=false 关闭）
     asyncio.create_task(retention_loop())   # 每天 01:00 清理过期数据
-    seed_default_rules()                    # 幂等 seed 默认规则（仅空表时写入）
+    seed_default_rules()
+    seed_cert_rule()                    # 幂等 seed 默认规则（仅空表时写入）
     # Migrate groups.json to per-server format if needed
     _migrate_groups_json()
     # Auto-assign groups on startup

@@ -188,3 +188,19 @@ class AlertSilence(Base):
     created_by = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class CertCheck(Base):
+    """SSL 证书监控（v3.27, D1）：server_id 仅表示归属，探测从后端直接发起（目标为公网域名）。"""
+    __tablename__ = "cert_checks"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=True)  # NULL=不关联主机
+    domain = Column(String(255), nullable=False)
+    port = Column(Integer, default=443)
+    days_left = Column(Integer, nullable=True)          # 剩余天数（负数=已过期）
+    not_after = Column(DateTime, nullable=True)         # 证书到期时间
+    issuer = Column(String(255), nullable=True)         # 签发机构 CN
+    last_error = Column(String(255), nullable=True)     # 最近探测错误（网络不通等）
+    enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+

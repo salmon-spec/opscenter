@@ -383,6 +383,10 @@ createApp({
 
     // ===== Alerts (v3.26, F6) =====
     const alertTab = ref('rules');
+    const alertSilences = ref([]);
+    const newSilence = ref({rule_id:'', server_id:'', starts_at:'', ends_at:'', reason:''});
+    const certChecks = ref([]);
+    const newCert = ref({domain:'', port:443, server_id:''});
     const alertRules = ref([]);
     const alertEvents = ref([]);
     const alertSummary = ref({firing:0, today:0, recovered:0});
@@ -1243,7 +1247,7 @@ createApp({
     }
 
     async function refreshAlerts() {
-      await Promise.all([loadAlertRules(), loadAlertEvents()]);
+      await Promise.all([loadAlertRules(), loadAlertEvents(), loadAlertSilences(), loadCertChecks()]);
     }
 
     async function createRule() {
@@ -1347,6 +1351,58 @@ createApp({
         alertSilences.value = alertSilences.value.filter(x => x.id !== id);
         showToast('已解除', 'ok');
       } catch(e) { console.warn('delete silence failed:', e.message); }
+    }
+
+    // ===== Cert Checks (v3.27, D1) =====
+    async function loadCertChecks() {
+      try {
+        const data = await apiGet(`${API}/cert-checks`);
+        certChecks.value = data || [];
+      } catch(e) { console.warn('loadCertChecks failed:', e.message); }
+    }
+
+    function certStatus(days) {
+      if (days === null || days === undefined) return {cls:'off', text:'未知'};
+      if (days < 0) return {cls:'danger', text:'已过期'};
+      if (days <= 7) return {cls:'danger', text: days + ' 天'};
+      if (days <= 30) return {cls:'warn', text: days + ' 天'};
+      return {cls:'on', text: days + ' 天'};
+    }
+
+    async function createCertCheck() {
+      const nc = newCert.value;
+      if (!nc.domain) { showToast('请填写域名', 'err'); return; }
+      try {
+        const r = await apiPost(`${API}/cert-checks`, {
+          domain: nc.domain,
+          port: Number(nc.port) || 443,
+          server_id: nc.server_id || null,
+          enabled: true,
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        newCert.value = {domain:'', port:443, server_id:''};
+        await loadCertChecks();
+        showToast('证书检查项已添加', 'ok');
+      } catch(e) { showToast('添加失败: ' + e.message, 'err'); }
+    }
+
+    async function scanCerts() {
+      try {
+        const r = await apiPost(`${API}/cert-checks/scan`, {});
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        await loadCertChecks();
+        showToast('扫描完成', 'ok');
+      } catch(e) { showToast('扫描失败: ' + e.message, 'err'); }
+    }
+
+    async function deleteCertCheck(id) {
+      if (!confirm('确定删除该证书检查项？')) return;
+      try {
+        const r = await apiDelete(`${API}/cert-checks/${id}`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        certChecks.value = certChecks.value.filter(x => x.id !== id);
+        showToast('已删除', 'ok');
+      } catch(e) { console.warn('delete cert failed:', e.message); }
     }
 
     // ========== Init ==========
@@ -1807,6 +1863,7 @@ createApp({
       refreshAlerts, loadAlertRules, loadAlertEvents, computeAlertSummary,
       createRule, toggleRule, deleteRule, ackEvent,
       alertSilences, newSilence, loadAlertSilences, createSilence, deleteSilence,
+      certChecks, newCert, loadCertChecks, createCertCheck, scanCerts, deleteCertCheck, certStatus,
     };
   },
 
@@ -2076,6 +2133,7 @@ createApp({
         <button class="btn-sm" :class="alertTab==='rules'?'primary':''" @click="alertTab='rules'">规则管理</button>
         <button class="btn-sm" :class="alertTab==='events'?'primary':''" @click="alertTab='events'">事件列表</button>
         <button class="btn-sm" :class="alertTab==='silences'?'primary':''" @click="alertTab='silences'">静默管理</button>
+        <button class="btn-sm" :class="alertTab==='certs'?'primary':''" @click="alertTab='certs'">证书监控</button>
         <button class="btn-sm" @click="refreshAlerts" style="margin-left:auto">刷新</button>
       </div>
 
@@ -2174,6 +2232,44 @@ createApp({
                 <td><button class="btn-sm danger" @click="deleteSilence(s.id)">解除</button></td>
               </tr>
               <tr v-if="!alertSilences.length"><td colspan="7" style="padding:14px;color:var(--text2)">暂无静默</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div v-if="alertTab==='certs'">
+        <div class="card" style="padding:14px;margin-bottom:14px">
+          <div style="font-weight:600;margin-bottom:10px">添加证书检查项</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label>域名<input class="inp" v-model="newCert.domain" placeholder="如 ops.salmon.xin" style="width:180px"></label>
+            <label>端口<input class="inp" v-model.number="newCert.port" style="width:70px"></label>
+            <label>关联服务器<select class="inp" v-model="newCert.server_id" style="width:150px">
+              <option value="">不关联</option>
+              <option v-for="s in servers" :key="s.id" :value="s.id">{{s.name}}</option>
+            </select></label>
+            <button class="btn-sm primary" @click="createCertCheck">添加</button>
+            <button class="btn-sm" @click="scanCerts" style="margin-left:auto">立即扫描</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="tbl" style="width:100%;border-collapse:collapse">
+            <thead><tr style="text-align:left;color:var(--text2);font-size:12px">
+              <th style="padding:10px">域名</th><th>端口</th><th>剩余</th><th>到期时间</th><th>签发机构</th><th>状态</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="ch in certChecks" :key="ch.id" style="border-top:1px solid var(--border)">
+                <td style="padding:10px">{{ch.domain}}</td>
+                <td>{{ch.port}}</td>
+                <td>{{ch.days_left !== null ? ch.days_left + ' 天' : '-'}}</td>
+                <td>{{ch.not_after ? ch.not_after.slice(0,10) : '-'}}</td>
+                <td>{{ch.issuer || '-'}}</td>
+                <td>
+                  <span v-if="ch.last_error" class="badge off" :title="ch.last_error">异常</span>
+                  <span v-else class="badge" :class="certStatus(ch.days_left).cls">{{certStatus(ch.days_left).text}}</span>
+                </td>
+                <td><button class="btn-sm danger" @click="deleteCertCheck(ch.id)">删除</button></td>
+              </tr>
+              <tr v-if="!certChecks.length"><td colspan="7" style="padding:14px;color:var(--text2)">暂无证书检查项（添加域名后自动探测）</td></tr>
             </tbody>
           </table>
         </div>
