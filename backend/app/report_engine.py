@@ -180,6 +180,41 @@ OpsCenter v3.28 · 每日 {REPORT_HOUR_UTC + 8}:00 自动生成
 """
 
 
+def _notify_report(summary: dict) -> None:
+    """推送日报到全局 webhook（复用 DEFAULT_NOTIFY_WEBHOOKS；为空跳过）。"""
+    import requests
+    from app.alerting import DEFAULT_NOTIFY_WEBHOOKS
+    if not DEFAULT_NOTIFY_WEBHOOKS:
+        return
+    srv, al, cert = summary["servers"], summary["alerts"], summary["certs"]
+    logs, bkp, img, svc = summary["logs"], summary["backups"], summary["images"], summary["services"]
+    card = {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {"title": {"tag": "plain_text", "content": f"📊 OpsCenter 巡检日报 {date.today()}"}, "template": "blue"},
+            "elements": [
+                {"tag": "div", "text": {"tag": "lark_md", "content": (
+                    f"**服务器**：{srv['online']}/{srv['total']} 在线\n"
+                    f"**告警**：活跃 {al['firing']} | 昨日发生 {al['fired_yesterday']} | 恢复 {al['recovered_yesterday']}\n"
+                    f"**证书**：{cert['total']} 项，{cert['expiring_30d']} 项 30 天内到期，{cert['expired']} 项已过期\n"
+                    f"**日志**：昨日 {logs['total_matches']} 条命中 / {logs['matched_rules']} 规则\n"
+                    f"**备份**：{bkp['total']} 项，{bkp['stale']} 项超期\n"
+                    f"**镜像**：{img['total']} 容器，{img['outdated']} 项落后\n"
+                    f"**服务**：{svc['up']}/{svc['total']} 在线，{svc['down']} 项宕机\n"
+                )}},
+                {"tag": "div", "text": {"tag": "lark_md", "content": f"*生成时间 {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC · 详情见 OpsCenter 状态页*"}},
+            ],
+        },
+    }
+    for url in DEFAULT_NOTIFY_WEBHOOKS:
+        try:
+            requests.post(url, json=card, timeout=5)
+            logger.info("report pushed to webhook")
+        except Exception as e:
+            logger.warning("report push failed: %s", e)
+
+
 def generate_report(db=None) -> dict:
     """生成当日日报（幂等：同日期存在则覆盖更新）。返回 report 摘要。"""
     if not REPORT_ENABLED:
@@ -215,6 +250,7 @@ def generate_report(db=None) -> dict:
         sess.commit()
         sess.refresh(report)
         logger.info("report generated for %s", today)
+        _notify_report(summary)
         return {"id": str(report.id), "report_date": today.isoformat(), "summary": summary}
 
     if db is not None:
