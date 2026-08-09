@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>OpsCenter v3.25.0-dev 运维工作台</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="vue.global.prod.js"></script>
 <link rel="stylesheet" href="/assets/xterm/xterm.min.css">
 <script src="/assets/xterm/xterm.min.js"></script>
 <script src="/assets/xterm/xterm-addon-fit.min.js"></script>
@@ -945,7 +945,7 @@ createApp({
       if (echartsLib) return echartsLib;
       return new Promise((resolve) => {
         const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js';
+        s.src = 'echarts.min.js';
         s.onload = () => { echartsLib = window.echarts; resolve(echartsLib); };
         s.onerror = () => { console.error('ECharts load failed'); resolve(null); };
         document.head.appendChild(s);
@@ -1298,6 +1298,55 @@ createApp({
         if (ev) ev.status = 'acked';
         showToast('已确认', 'ok');
       } catch(e) { showToast('确认失败: ' + e.message, 'err'); }
+    }
+
+    // ===== Alert Silences (v3.27, S1) =====
+    async function loadAlertSilences() {
+      try {
+        const data = await apiGet(`${API}/alert-silences`);
+        alertSilences.value = data || [];
+      } catch(e) { console.warn('loadAlertSilences failed:', e.message); }
+    }
+
+    function silenceLocalNow(offsetMin = 0) {
+      const d = new Date(Date.now() + offsetMin * 60000);
+      return d.toISOString().slice(0, 16);
+    }
+
+    // datetime-local(本地) -> UTC ISO（后端按 UTC 存储）
+    function silenceToUtc(localStr) {
+      if (!localStr) return '';
+      const d = new Date(localStr);
+      if (isNaN(d.getTime())) return localStr;
+      return d.toISOString().slice(0, 16);
+    }
+
+    async function createSilence() {
+      const ns = newSilence.value;
+      if (!ns.starts_at || !ns.ends_at) { showToast('请填写开始/结束时间', 'err'); return; }
+      try {
+        const r = await apiPost(`${API}/alert-silences`, {
+          rule_id: ns.rule_id || null,
+          server_id: ns.server_id || null,
+          starts_at: silenceToUtc(ns.starts_at),
+          ends_at: silenceToUtc(ns.ends_at),
+          reason: ns.reason || '',
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        newSilence.value = {rule_id:'', server_id:'', starts_at: silenceLocalNow(), ends_at: silenceLocalNow(60), reason:''};
+        await loadAlertSilences();
+        showToast('静默已创建', 'ok');
+      } catch(e) { showToast('创建失败: ' + e.message, 'err'); }
+    }
+
+    async function deleteSilence(id) {
+      if (!confirm('确定解除该静默？')) return;
+      try {
+        const r = await apiDelete(`${API}/alert-silences/${id}`);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        alertSilences.value = alertSilences.value.filter(x => x.id !== id);
+        showToast('已解除', 'ok');
+      } catch(e) { console.warn('delete silence failed:', e.message); }
     }
 
     // ========== Init ==========
@@ -1752,6 +1801,12 @@ createApp({
       addServer, testSsh, deleteServer,
       showEditServerModal, editServerForm, editSshTestResult,
       openEditServer, saveEditServer, testEditSsh,
+
+      // ===== Alerts (v3.26, F6) =====
+      alertTab, alertRules, alertEvents, alertSummary, newRule,
+      refreshAlerts, loadAlertRules, loadAlertEvents, computeAlertSummary,
+      createRule, toggleRule, deleteRule, ackEvent,
+      alertSilences, newSilence, loadAlertSilences, createSilence, deleteSilence,
     };
   },
 
@@ -1781,6 +1836,9 @@ createApp({
       <div class="nav-item" :class="{active:currentPage==='alerts'}" @click="currentPage='alerts'">
         <svg class="nav-icon"><use href="#fa-bell"/></svg><span>告警中心</span>
       </div>
+      <div class="nav-item" :class="{active:currentPage==='network'}" @click="currentPage='network'">
+        <svg class="nav-icon"><use href="#fa-globe"/></svg><span>网络监控</span>
+      </div>
 
     </nav>
     <div class="sidebar-footer">
@@ -1795,7 +1853,7 @@ createApp({
         <button class="icon-btn" @click="collapsed=!collapsed" :title="collapsed?'展开':'折叠'">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12v1.5H2zm0 4.25h12v1.5H2zm0 4.25h8v1.5H2z"/></svg>
         </button>
-        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':currentPage==='resources'?'资源管理':currentPage==='alerts'?'告警中心':'终端'}}</h2>
+        <h2>{{currentPage==='nav'?'服务导航':currentPage==='monitor'?'监控中心':currentPage==='resources'?'资源管理':currentPage==='alerts'?'告警中心':currentPage==='network'?'网络监控':'终端'}}</h2>
       </div>
       <div class="topbar-right">
         <div class="search-box" v-if="currentPage==='nav'">
@@ -2017,6 +2075,7 @@ createApp({
       <div class="seg" style="display:flex;gap:8px;margin-bottom:14px">
         <button class="btn-sm" :class="alertTab==='rules'?'primary':''" @click="alertTab='rules'">规则管理</button>
         <button class="btn-sm" :class="alertTab==='events'?'primary':''" @click="alertTab='events'">事件列表</button>
+        <button class="btn-sm" :class="alertTab==='silences'?'primary':''" @click="alertTab='silences'">静默管理</button>
         <button class="btn-sm" @click="refreshAlerts" style="margin-left:auto">刷新</button>
       </div>
 
@@ -2079,9 +2138,52 @@ createApp({
           </table>
         </div>
       </div>
+
+      <div v-if="alertTab==='silences'">
+        <div class="card" style="padding:14px;margin-bottom:14px">
+          <div style="font-weight:600;margin-bottom:10px">新建静默（维护窗口）</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">
+            <label>规则<select class="inp" v-model="newSilence.rule_id" style="width:150px">
+              <option value="">全部规则</option>
+              <option v-for="r in alertRules" :key="r.id" :value="r.id">{{r.name}}</option>
+            </select></label>
+            <label>服务器<select class="inp" v-model="newSilence.server_id" style="width:150px">
+              <option value="">全部服务器</option>
+              <option v-for="s in servers" :key="s.id" :value="s.id">{{s.name}}</option>
+            </select></label>
+            <label>开始<input type="datetime-local" class="inp" v-model="newSilence.starts_at" style="width:170px"></label>
+            <label>结束<input type="datetime-local" class="inp" v-model="newSilence.ends_at" style="width:170px"></label>
+            <label>原因<input class="inp" v-model="newSilence.reason" placeholder="如 升级维护" style="width:130px"></label>
+            <button class="btn-sm primary" @click="createSilence">创建静默</button>
+          </div>
+        </div>
+        <div class="card" style="padding:0;overflow:hidden">
+          <table class="tbl" style="width:100%;border-collapse:collapse">
+            <thead><tr style="text-align:left;color:var(--text2);font-size:12px">
+              <th style="padding:10px">规则</th><th>服务器</th><th>开始</th><th>结束</th><th>原因</th><th>状态</th><th></th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="s in alertSilences" :key="s.id" style="border-top:1px solid var(--border)">
+                <td style="padding:10px">{{s.rule_name || '全部规则'}}</td>
+                <td>{{s.server_name || '全部服务器'}}</td>
+                <td>{{s.starts_at ? silenceToLocal(s.starts_at) : '-'}}</td>
+                <td>{{s.ends_at ? silenceToLocal(s.ends_at) : '-'}}</td>
+                <td>{{s.reason || '-'}}</td>
+                <td><span class="badge" :class="s.active?'on':'off'">{{s.active?'生效中':'已结束'}}</span></td>
+                <td><button class="btn-sm danger" @click="deleteSilence(s.id)">解除</button></td>
+              </tr>
+              <tr v-if="!alertSilences.length"><td colspan="7" style="padding:14px;color:var(--text2)">暂无静默</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
 
     <!-- ===== TERMINAL PAGE ===== -->
+    <div class="content" v-if="currentPage==='network'" style="padding:20px 24px">
+      <iframe src="network.html" title="网络监控中心" style="width:100%;height:calc(100vh - 110px);border:0;border-radius:12px;background:var(--bg)"></iframe>
+    </div>
+
     <div class="content" v-show="currentPage==='terminal'" style="padding:0">
       <div class="term-page" @click="termPickOutside">
         <div class="term-tabs">
@@ -2528,6 +2630,3 @@ createApp({
 </script>
 </body>
 </html>
-
-
-AI生成

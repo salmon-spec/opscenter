@@ -21,6 +21,7 @@ from sqlalchemy import desc
 
 from app.config import (
     ALERTING_ENABLED,
+    SILENCE_ENABLED,
     DEFAULT_NOTIFY_WEBHOOKS,
     RETENTION_LATENCY_DAYS,
     RETENTION_METRIC_DAYS,
@@ -30,6 +31,7 @@ from app.database import get_db
 from app.models import (
     AlertEvent,
     AlertRule,
+    AlertSilence,
     MetricHistory,
     NetworkLatency,
     NetworkStats,
@@ -107,6 +109,24 @@ def _resolve_webhooks(rule: AlertRule) -> List[str]:
     return out
 
 
+def _is_silenced(rule: AlertRule, server: Server, db, now: datetime = None) -> bool:
+    """v3.27 S1：检查规则是否处于静默/维护窗口内。
+
+    命中 alert_silences 中 rule_id(或NULL=全局) + server_id(或NULL=全部) + [starts_at, ends_at) 的记录即静默。
+    SILENCE_ENABLED=false 时直接返回 False（回滚兜底）。
+    """
+    if not SILENCE_ENABLED:
+        return False
+    now = now or datetime.utcnow()
+    q = db.query(AlertSilence).filter(AlertSilence.starts_at <= now, AlertSilence.ends_at > now)
+    # 规则级匹配：rule_id 相等或全局(NULL)
+    from sqlalchemy import or_
+    q = q.filter(or_(AlertSilence.rule_id == rule.id, AlertSilence.rule_id.is_(None)))
+    # 服务器级匹配：server_id 相等或全局(NULL)
+    q = q.filter(or_(AlertSilence.server_id == server.id, AlertSilence.server_id.is_(None)))
+    return db.query(q.exists()).scalar() or False
+
+
 def _notify(rule: AlertRule, server: Server, value: Optional[str], firing: bool) -> None:
     """发送飞书交互卡片；webhook 为空时仅落库不发送。"""
     webhooks = _resolve_webhooks(rule)
@@ -154,6 +174,9 @@ def _notify(rule: AlertRule, server: Server, value: Optional[str], firing: bool)
 
 def _evaluate_rule_for_server(rule: AlertRule, server: Server, db) -> None:
     now = datetime.utcnow()
+    if _is_silenced(rule, server, db, now):
+        logger.debug("rule %s silenced for server %s (maintenance window)", rule.name, server.name)
+        return
     value, _ = _get_current_value(server, rule, db)
     breach = _evaluate(rule, value)
 

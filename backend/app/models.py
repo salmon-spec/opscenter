@@ -174,3 +174,17 @@ class AlertEvent(Base):
     acked_by = Column(String(50), nullable=True)
     acked_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AlertSilence(Base):
+    """告警静默/维护窗口（v3.27, S1）：命中 rule_id+server_id+时间窗口的规则跳过评估，不产生事件不通知。"""
+    __tablename__ = "alert_silences"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rule_id = Column(UUID(as_uuid=True), ForeignKey("alert_rules.id", ondelete="CASCADE"), nullable=True)  # NULL=全局静默
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=True)    # NULL=全部服务器
+    starts_at = Column(DateTime, nullable=False)
+    ends_at = Column(DateTime, nullable=False)
+    reason = Column(String(255), default="")
+    created_by = Column(String(50), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+

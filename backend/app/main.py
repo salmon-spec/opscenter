@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent
+from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -625,6 +625,86 @@ def ack_alert_event(event_id: str, acked_by: str = "admin"):
         ev.acked_at = datetime.utcnow()
         db.commit()
         return {"ok": True, "status": "acked"}
+
+
+# === Alert Silences API (v3.27, S1) ===
+
+class AlertSilenceCreate(BaseModel):
+    rule_id: Optional[str] = None           # NULL=全局静默
+    server_id: Optional[str] = None         # NULL=全部服务器
+    starts_at: str                          # ISO 8601
+    ends_at: str                            # ISO 8601
+    reason: str = ""
+
+
+@app.get("/api/v2/alert-silences")
+def list_alert_silences(active: Optional[int] = None):
+    """静默列表；active=1 仅返回生效中的（starts<=now<ends）。"""
+    now = datetime.utcnow()
+    with get_db() as db:
+        q = db.query(AlertSilence)
+        if active:
+            q = q.filter(AlertSilence.starts_at <= now, AlertSilence.ends_at > now)
+        silences = q.order_by(AlertSilence.created_at.desc()).all()
+        result = []
+        for s in silences:
+            rule_name = None
+            if s.rule_id:
+                r = db.query(AlertRule).filter(AlertRule.id == s.rule_id).first()
+                rule_name = r.name if r else None
+            srv_name = None
+            if s.server_id:
+                sv = db.query(Server).filter(Server.id == s.server_id).first()
+                srv_name = sv.name if sv else None
+            result.append({
+                "id": str(s.id),
+                "rule_id": str(s.rule_id) if s.rule_id else None,
+                "rule_name": rule_name,
+                "server_id": str(s.server_id) if s.server_id else None,
+                "server_name": srv_name,
+                "starts_at": s.starts_at.isoformat(),
+                "ends_at": s.ends_at.isoformat(),
+                "reason": s.reason,
+                "created_by": s.created_by,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "active": s.starts_at <= now < s.ends_at,
+            })
+        return result
+
+
+@app.post("/api/v2/alert-silences")
+def create_alert_silence(req: AlertSilenceCreate):
+    """创建静默（rule_id/server_id 为空 = 全局匹配）。"""
+    try:
+        starts = datetime.fromisoformat(req.starts_at.replace("Z", "+00:00")).replace(tzinfo=None)
+        ends = datetime.fromisoformat(req.ends_at.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        raise HTTPException(400, "starts_at/ends_at must be ISO 8601 (e.g. 2026-08-09T12:00:00)")
+    if ends <= starts:
+        raise HTTPException(400, "ends_at must be after starts_at")
+    with get_db() as db:
+        sil = AlertSilence(
+            rule_id=uuid.UUID(req.rule_id) if req.rule_id else None,
+            server_id=uuid.UUID(req.server_id) if req.server_id else None,
+            starts_at=starts, ends_at=ends, reason=req.reason,
+            created_by="admin",
+        )
+        db.add(sil)
+        db.commit()
+        db.refresh(sil)
+        return {"id": str(sil.id), "starts_at": starts.isoformat(), "ends_at": ends.isoformat()}
+
+
+@app.delete("/api/v2/alert-silences/{silence_id}")
+def delete_alert_silence(silence_id: str):
+    """提前解除静默。"""
+    with get_db() as db:
+        sil = db.query(AlertSilence).filter(AlertSilence.id == uuid.UUID(silence_id)).first()
+        if not sil:
+            raise HTTPException(404, "Silence not found")
+        db.delete(sil)
+        db.commit()
+        return {"ok": True}
 
 
 @app.on_event("startup")

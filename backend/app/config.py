@@ -43,6 +43,7 @@ class Settings(BaseSettings):
 
     # ── Alerting (v3.26, F4/F5) ──
     alerting_enabled: bool = True                       # ALERTING_ENABLED=false 一键关停告警引擎
+    silence_enabled: bool = True                        # SILENCE_ENABLED=false 跳过静默判断（回滚兜底）
     default_notify_webhooks: str = ""                   # 逗号分隔的飞书 webhook URL（全局默认通道，M1 修正：去掉不存在的 settings 表依赖）
 
     # ── Data Retention (v3.26, F2) ──
@@ -66,6 +67,8 @@ OPS_AUTH_ENABLED = _settings.auth_enabled
 
 # ── Alerting (v3.26) ──
 ALERTING_ENABLED = _settings.alerting_enabled
+# v3.27 S1 告警静默开关
+SILENCE_ENABLED = _settings.silence_enabled
 # 全局默认飞书 webhook：per-rule 的 alert_rules.notify_webhooks 优先，为空时回退到此（M1 修正）
 DEFAULT_NOTIFY_WEBHOOKS = [u.strip() for u in _settings.default_notify_webhooks.split(',') if u.strip()]
 
