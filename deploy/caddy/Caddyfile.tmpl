@@ -18,21 +18,15 @@ ops.salmon.xin:80 {
         reverse_proxy localhost:9091
     }
     handle /api/* {
-        basic_auth {
-            qiushui __CADDY_BASIC_AUTH_HASH__
-        }
+        
         reverse_proxy localhost:9091
     }
     handle /ws/* {
-        basic_auth {
-            qiushui __CADDY_BASIC_AUTH_HASH__
-        }
+        
         reverse_proxy localhost:9091
     }
     handle {
-        basic_auth {
-            qiushui __CADDY_BASIC_AUTH_HASH__
-        }
+        
         root * /opt/opscenter/frontend
         file_server
     }
@@ -74,49 +68,33 @@ affine.salmon.xin {
 
 # 内网 IP 直接访问（2026-08-04 添加）
 http://192.168.1.153 {
-    basic_auth {
-        qiushui __CADDY_BASIC_AUTH_HASH__
-    }
+    
     root * /opt/opscenter/frontend
-    basic_auth {
-        qiushui __CADDY_BASIC_AUTH_HASH__
-    }
+    
     file_server
 
     handle /api/* {
-        basic_auth {
-            qiushui __CADDY_BASIC_AUTH_HASH__
-        }
+        
         reverse_proxy localhost:9091
     }
     handle /ws/* {
-        basic_auth {
-            qiushui __CADDY_BASIC_AUTH_HASH__
-        }
+        
         reverse_proxy localhost:9091
     }
 }
 
 http://10.66.66.5 {
-    basic_auth {
-        qiushui __CADDY_BASIC_AUTH_HASH__
-    }
+    
     root * /opt/opscenter/frontend
-    basic_auth {
-        qiushui __CADDY_BASIC_AUTH_HASH__
-    }
+    
     file_server
 
     handle /api/* {
-        basic_auth {
-            qiushui __CADDY_BASIC_AUTH_HASH__
-        }
+        
         reverse_proxy localhost:9091
     }
     handle /ws/* {
-        basic_auth {
-            qiushui __CADDY_BASIC_AUTH_HASH__
-        }
+        
         reverse_proxy localhost:9091
     }
 }
