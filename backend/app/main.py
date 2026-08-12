@@ -2300,15 +2300,27 @@ def _agent_request(server, path, timeout=5):
 
 @app.get("/api/v2/monitor/{server_id}/network")
 def monitor_network(server_id: str):
-    """实时带宽 + 今日累计流量（来自 Agent /api/v1/network）。"""
+    """实时带宽 + 今日累计流量（来自 Agent /api/v1/network）。
+
+    today_daily 为各网卡今日累计字节（daily_rx_bytes/daily_tx_bytes 汇总），
+    兼容 network.html 的契约；interfaces 保留供 index.html 与实时速率使用。
+    """
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
     data = _agent_request(srv, "/api/v1/network")
     if data is None:
-        return {"server_id": server_id, "connected": False, "interfaces": {}}
-    return {"server_id": server_id, "connected": True, **data}
+        return {"server_id": server_id, "connected": False, "interfaces": {}, "today_daily": {}}
+    ifaces = data.get("interfaces") or {}
+    today_daily = {
+        name: {
+            "rx_bytes": st.get("daily_rx_bytes", 0),
+            "tx_bytes": st.get("daily_tx_bytes", 0),
+        }
+        for name, st in ifaces.items()
+    }
+    return {"server_id": server_id, "connected": True, **data, "today_daily": today_daily}
 
 
 @app.get("/api/v2/monitor/{server_id}/network/history")
@@ -2335,18 +2347,36 @@ def monitor_network_history(server_id: str, days: int = 7):
         by_date[d]["peak_rx_mbps"] = max(by_date[d]["peak_rx_mbps"], r.peak_rx_mbps or 0)
         by_date[d]["peak_tx_mbps"] = max(by_date[d]["peak_tx_mbps"], r.peak_tx_mbps or 0)
     result = [{"date": d, **v} for d, v in sorted(by_date.items())]
-    return {"server_id": server_id, "days": days, "history": result}
+    # series 为 history 的别名（network.html 读 d.series，index.html 读 d.history，双兼容）
+    return {"server_id": server_id, "days": days, "history": result, "series": result}
 
 
 @app.get("/api/v2/monitor/{server_id}/network/latency")
-def monitor_network_latency(server_id: str, target: str = "8.8.8.8"):
-    """延迟/丢包探测（调 Agent ping + 写 network_latency 表，300s 限频防表膨胀）。"""
+def monitor_network_latency(server_id: str, target: str = "8.8.8.8", days: int = 7):
+    """延迟/丢包探测：按 days 返回历史 points（network_latency 表），300s 限频防重复探测。
+
+    - points: 近 N 天全部探测点（network.html 契约）
+    - latency_ms/loss_pct/jitter_ms/timestamp: 最新一个点（index.html 旧契约，双兼容）
+    """
     from datetime import timedelta
+    days = min(max(days, 1), 30)
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        # 限频：300s 内同 server+target 已有记录则直接返回缓存，不重复探测
+        since = datetime.utcnow() - timedelta(days=days)
+        rows = db.query(NetworkLatency).filter(
+            NetworkLatency.server_id == srv.id,
+            NetworkLatency.target == target,
+            NetworkLatency.timestamp >= since,
+        ).order_by(NetworkLatency.timestamp.asc()).all()
+        points = [{
+            "timestamp": r.timestamp.isoformat(),
+            "latency_ms": r.latency_ms,
+            "loss_pct": r.loss_pct or 0,
+            "jitter_ms": r.jitter_ms,
+        } for r in rows]
+        # 限频：300s 内已有探测记录则直接返回，不重复探测
         cutoff = datetime.utcnow() - timedelta(seconds=300)
         recent = db.query(NetworkLatency).filter(
             NetworkLatency.server_id == srv.id,
@@ -2358,13 +2388,23 @@ def monitor_network_latency(server_id: str, target: str = "8.8.8.8"):
                 "server_id": server_id, "cached": True,
                 "target": target,
                 "latency_ms": recent.latency_ms,
-                "loss_pct": recent.loss_pct,
+                "loss_pct": recent.loss_pct or 0,
                 "jitter_ms": recent.jitter_ms,
                 "timestamp": recent.timestamp.timestamp(),
+                "points": points,
             }
     data = _agent_request(srv, f"/api/v1/network/ping?target={target}", timeout=15)
     if data is None:
-        return {"server_id": server_id, "connected": False}
+        latest = points[-1] if points else None
+        return {
+            "server_id": server_id, "connected": False,
+            "target": target,
+            "latency_ms": latest["latency_ms"] if latest else None,
+            "loss_pct": latest["loss_pct"] if latest else 0,
+            "jitter_ms": latest["jitter_ms"] if latest else None,
+            "timestamp": (latest["timestamp"] if latest else None),
+            "points": points,
+        }
     with get_db() as db:
         db.add(NetworkLatency(
             server_id=srv.id,
@@ -2374,7 +2414,21 @@ def monitor_network_latency(server_id: str, target: str = "8.8.8.8"):
             jitter_ms=data.get("jitter_ms"),
         ))
         db.commit()
-    return {"server_id": server_id, "cached": False, **data}
+    points.append({
+        "timestamp": datetime.utcnow().isoformat(),
+        "latency_ms": data.get("latency_ms"),
+        "loss_pct": data.get("loss_pct", 0),
+        "jitter_ms": data.get("jitter_ms"),
+    })
+    return {
+        "server_id": server_id, "cached": False,
+        "target": target,
+        "latency_ms": data.get("latency_ms"),
+        "loss_pct": data.get("loss_pct", 0),
+        "jitter_ms": data.get("jitter_ms"),
+        "timestamp": datetime.utcnow().timestamp(),
+        "points": points,
+    }
 
 
 async def daily_network_aggregation():
