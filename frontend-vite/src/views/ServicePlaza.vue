@@ -160,14 +160,14 @@ async function reload() {
 async function ssoOpen(s) {
   try {
     const me = await api.get('/auth/me')
-    if (me?.username) { window.open(s.url, '_blank', 'noopener'); return }
+    if (me?.username) { location.href = s.url; return }
     pendingUrl = s.url
     loginForm.value = { username: 'admin', password: '' }
     loginVisible.value = true
   } catch (e) {
     if (e.status === 404) {
       // SSO 未部署（404）：免登录模式直接打开
-      window.open(s.url, '_blank', 'noopener')
+      location.href = s.url
       return
     }
     // 401 等：弹出登录框
@@ -183,7 +183,7 @@ async function doLogin() {
     await api.post('/auth/login', loginForm.value)
     loginVisible.value = false
     toast('登录成功，正在跳转…', 'ok')
-    if (pendingUrl) window.open(pendingUrl, '_blank', 'noopener')
+    if (pendingUrl) { location.href = pendingUrl }
   } catch (e) {
     toast(e.message || '登录失败', 'err')
   } finally {

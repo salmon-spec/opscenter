@@ -30,9 +30,9 @@
             </div>
           </div>
           <div class="host-bars" v-if="monitors[host.id]">
-            <div class="h-bar"><span>CPU</span><b>{{ m(host).metrics.cpu }}%</b></div>
-            <div class="h-bar"><span>内存</span><b>{{ m(host).metrics.memory }}%</b></div>
-            <div class="h-bar"><span>磁盘</span><b>{{ m(host).metrics.disk }}%</b></div>
+            <div class="h-bar"><span>CPU</span><b>{{ m(host)?.metrics?.cpu ?? '—' }}%</b></div>
+            <div class="h-bar"><span>内存</span><b>{{ m(host)?.metrics?.memory ?? '—' }}%</b></div>
+            <div class="h-bar"><span>磁盘</span><b>{{ m(host)?.metrics?.disk ?? '—' }}%</b></div>
           </div>
           <div class="host-actions" @click.stop>
             <button class="btn btn-sm btn-primary" @click="openTerminal(host)">终端连接</button>
