@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog
+from app.models import Base, Server, Service, ServiceRelation, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -29,6 +29,13 @@ from app.alerting import (
     run_alerting_cycle, retention_cleanup,
 )
 from app.config import RETENTION_METRIC_DAYS
+
+# === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康 / T5 SSO） ===
+from app.api_keys import router as api_keys_router
+from app.topology import router as topology_router
+from app.control import router as control_router
+from app.service_health import service_health_loop
+from app.sso import router as sso_router
 
 class TerminalCreateRequest(BaseModel):
     server_id: str
@@ -244,6 +251,12 @@ app.add_middleware(
 
 # v3.28 A1 操作审计中间件（写操作记录；AUDIT_ENABLED=false 关闭）
 app.add_middleware(AuditMiddleware)
+
+# === v3.29 路由挂载（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T5 SSO） ===
+app.include_router(api_keys_router)
+app.include_router(topology_router)
+app.include_router(control_router)
+app.include_router(sso_router)
 
 # === Startup ===
 
@@ -1090,16 +1103,36 @@ def get_status_page():
         }
 
 
+def _ensure_new_columns():
+    """轻量迁移（v3.29）：为已有表补充新增列；新表由 create_all 自动创建。"""
+    stmts = [
+        "ALTER TABLE services ADD COLUMN IF NOT EXISTS deploy_type VARCHAR(20)",
+        "ALTER TABLE services ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
+        "ALTER TABLE services ADD COLUMN IF NOT EXISTS version VARCHAR(60)",
+    ]
+    try:
+        with engine.connect() as conn:
+            for s in stmts:
+                conn.execute(text(s))
+            conn.commit()
+    except Exception as e:
+        # 迁移失败不阻断启动，仅记录日志（旧库缺失列时相关查询会暴露，可人工处理）
+        print(f"[migrate] ensure columns failed: {e}", flush=True)
+
+
 @app.on_event("startup")
 async def startup():
     # Start Agent health check background task
     import asyncio
     asyncio.create_task(_agent_health_check_loop())
+    # v3.29 T4: 服务健康检查后台循环（间隔/阈值走环境变量）
+    asyncio.create_task(service_health_loop())
     # Wait for DB and create tables
     import time
     for i in range(30):
         try:
             Base.metadata.create_all(bind=engine)
+            _ensure_new_columns()
             break
         except Exception:
             time.sleep(2)

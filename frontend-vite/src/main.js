@@ -1,5 +1,8 @@
 import { createApp } from 'vue'
 import App from './App.vue'
+import router from './router'
+import './styles.css'
+import '@xterm/xterm/css/xterm.css'
 
-// v3.28 F2 试点：Vite 构建 + 组件化（全量迁移顺延 v3.29）
-createApp(App).mount('#app')
+// v3.29：统一运维工作台入口（hash 路由，视图内切换）
+createApp(App).use(router).mount('#app')

@@ -1,29 +1,140 @@
 <template>
-  <div class="v3-app">
-    <h1>OpsCenter v3 (Vite 试点)</h1>
-    <p class="sub">v3.28 F1-F2 前端工程化试点页面 — 全量迁移顺延 v3.29</p>
-    <div class="demo">
-      <StatCard label="服务器" :value="3" status="up" />
-      <StatCard label="活跃告警" :value="1" status="danger" />
-      <StatusBadge status="up" text="在线" />
-      <StatusBadge status="down" text="离线" />
-      <StatusBadge status="degraded" text="部分异常" />
+  <div class="shell">
+    <!-- 侧栏：独立大屏页（standalone）隐藏 -->
+    <aside v-if="!isStandalone" class="sidebar">
+      <div class="logo">
+        <span class="logo-badge">Ops</span>
+        <div class="logo-text">
+          <div class="logo-title">运维工作台</div>
+          <div class="logo-ver">v3.29.0</div>
+        </div>
+      </div>
+      <nav class="nav">
+        <router-link
+          v-for="item in navs" :key="item.path"
+          :to="item.path" class="nav-item"
+          :class="{ active: route.path === item.path }"
+        >
+          <span class="nav-icon">{{ item.icon }}</span>
+          <span>{{ item.label }}</span>
+        </router-link>
+      </nav>
+      <div class="sidebar-foot">
+        <div v-if="hostSummary.total > 0" class="host-mini">
+          <span class="dot" :class="hostSummary.online === hostSummary.total ? 'ok' : 'warn'"></span>
+          主机 {{ hostSummary.online }}/{{ hostSummary.total }} 在线
+        </div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header v-if="!isStandalone" class="topbar">
+        <h2 class="topbar-title">{{ route.meta.title || '工作台' }}</h2>
+        <div class="topbar-right muted">{{ nowStr }}</div>
+      </header>
+      <div class="content" :class="{ standalone: isStandalone }">
+        <router-view />
+      </div>
     </div>
-    <div class="footer">OpsCenter v3.28.0 · Vite</div>
+
+    <!-- 全局 toast -->
+    <div class="toasts">
+      <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">{{ t.msg }}</div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import StatCard from './components/StatCard.vue'
-import StatusBadge from './components/StatusBadge.vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
+import { api } from './api'
+
+const route = useRoute()
+const isStandalone = computed(() => !!route.meta.standalone)
+
+const navs = [
+  { path: '/', label: '服务广场', icon: '▦' },
+  { path: '/assets', label: '资产管理', icon: '🖥' },
+  { path: '/screen', label: '监控大屏', icon: '📊' },
+  { path: '/topology', label: '拓扑架构', icon: '🔗' },
+  { path: '/alerts', label: '告警中心', icon: '🔔' },
+  { path: '/api-keys', label: '开放API', icon: '🔑' },
+]
+
+// 顶栏时钟 + 主机概览
+const nowStr = ref('')
+const hostSummary = ref({ total: 0, online: 0 })
+let clockTimer = null
+
+function tick() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  nowStr.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+async function loadHosts() {
+  try {
+    const list = await api.get('/servers')
+    hostSummary.value = {
+      total: list.length,
+      online: list.filter((s) => s.status === 'online').length,
+    }
+  } catch { /* 后端未就绪时静默 */ }
+}
+
+// 全局 toast
+const toasts = ref([])
+let toastId = 0
+function onToast(e) {
+  const t = { id: ++toastId, msg: e.detail.msg, type: e.detail.type || 'info' }
+  toasts.value.push(t)
+  setTimeout(() => { toasts.value = toasts.value.filter((x) => x.id !== t.id) }, 3200)
+}
+
+onMounted(() => {
+  tick()
+  clockTimer = setInterval(tick, 1000)
+  loadHosts()
+  window.addEventListener('ops-toast', onToast)
+})
+onUnmounted(() => {
+  clearInterval(clockTimer)
+  window.removeEventListener('ops-toast', onToast)
+})
 </script>
 
-<style>
-:root { --bg:#f8fafc; --card:#fff; --text:#0f172a; --text2:#64748b; --border:#e2e8f0; }
-body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; }
-.v3-app { max-width:720px; margin:0 auto; padding:40px 24px; }
-h1 { font-size:24px; margin-bottom:6px; }
-.sub { color:var(--text2); font-size:13px; margin-bottom:24px; }
-.demo { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
-.footer { margin-top:32px; color:var(--text2); font-size:12px; }
+<style scoped>
+.shell { display: flex; height: 100vh; overflow: hidden; }
+.sidebar {
+  width: 200px; flex-shrink: 0; background: var(--sidebar); color: var(--sidebar-text);
+  display: flex; flex-direction: column; padding: 16px 10px;
+}
+.logo { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; border-bottom: 1px solid rgba(148,163,184,.15); }
+.logo-badge {
+  width: 36px; height: 36px; border-radius: 10px; background: var(--brand);
+  color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px;
+}
+.logo-title { color: #fff; font-size: 14px; font-weight: 700; }
+.logo-ver { font-size: 11px; color: var(--sidebar-text); }
+.nav { flex: 1; margin-top: 14px; display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
+  color: var(--sidebar-text); text-decoration: none; font-size: 14px; transition: all .15s;
+}
+.nav-item:hover { background: rgba(148,163,184,.12); color: #fff; }
+.nav-item.active { background: rgba(37,99,235,.22); color: var(--sidebar-active); font-weight: 600; }
+.nav-icon { width: 20px; text-align: center; }
+.sidebar-foot { padding: 12px 8px 4px; border-top: 1px solid rgba(148,163,184,.15); }
+.host-mini { font-size: 12px; display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.topbar {
+  height: 56px; flex-shrink: 0; background: #fff; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between; padding: 0 24px;
+}
+.topbar-title { font-size: 16px; margin: 0; }
+.content { flex: 1; overflow: auto; }
+.content.standalone { overflow: hidden; background: var(--screen-bg); }
 </style>

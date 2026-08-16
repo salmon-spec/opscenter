@@ -82,6 +82,9 @@ class Service(Base):
     container_name = Column(String(100), nullable=True)
     image = Column(String(200), nullable=True)
     ports = Column(Text, nullable=True)
+    deploy_type = Column(String(20), nullable=True)  # v3.29: 部署方式 docker/systemd/compose/manual
+    started_at = Column(DateTime, nullable=True)     # v3.29: 启动时间（容器/服务扫描回填）
+    version = Column(String(60), nullable=True)      # v3.29: 版本（镜像 tag / 服务版本号）
     sort_order = Column(Integer, default=0)
     hidden = Column(Boolean, default=False)
     account = Column(String(100), nullable=True)
@@ -95,6 +98,22 @@ class Service(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     server = relationship("Server", back_populates="services")
+
+
+class ServiceRelation(Base):
+    """服务依赖关系（v3.29, 拓扑）：描述服务间数据流/调用/部署/反代关系，驱动拓扑图。"""
+    __tablename__ = "service_relations"
+    __table_args__ = (
+        UniqueConstraint("source_service_id", "target_service_id", "relation_type",
+                         name="uq_relation_src_tgt_type"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_service_id = Column(UUID(as_uuid=True), ForeignKey("services.id", ondelete="CASCADE"), nullable=False)
+    target_service_id = Column(UUID(as_uuid=True), ForeignKey("services.id", ondelete="CASCADE"), nullable=False)
+    relation_type = Column(String(20), default="data_flow")  # data_flow / invoke / deploy / proxy
+    label = Column(String(50), nullable=True)                # 连线标签（如 webhook 触发 / 制品推送）
+    scenario = Column(String(20), default="cicd")            # cicd / monitoring / gateway
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class MetricHistory(Base):
     """Historical metrics for remote servers (collected from Agent)."""
@@ -277,4 +296,17 @@ class AuditLog(Base):
     detail = Column(Text, nullable=True)
     ip = Column(String(45), nullable=True)
     status = Column(String(10), default="success")       # success/failed
+
+
+class ApiKey(Base):
+    """开放 API 密钥（v3.29, 开放 API）：存 SHA-256 哈希，仅向前端展示前缀，scope 区分读写。"""
+    __tablename__ = "api_keys"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(50), nullable=False)
+    key_hash = Column(String(128), nullable=False, unique=True)
+    prefix = Column(String(16), nullable=False)           # 展示前缀，如 oh_rt_a1b2
+    scope = Column(String(10), default="read")            # read / write
+    enabled = Column(Boolean, default=True)
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
