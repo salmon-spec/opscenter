@@ -67,13 +67,21 @@ const activeGroup = ref('all')
 const drawerVisible = ref(false)
 const selected = ref(null)
 
+const PLAZA_GROUPS = [
+  { id: 'cicd', name: '代码与CI/CD', color: '#2dd4bf' },
+  { id: 'app', name: '应用服务', color: '#f59e0b' },
+  { id: 'monitor', name: '监控与日志', color: '#3b82f6' },
+  { id: 'security_ops', name: '安全与运维', color: '#ef4444' },
+]
+
 // 分类 → 分组映射（与后端 CATEGORY_TO_GROUP 对齐）
 const CATEGORY_TO_GROUP = {
   '代码与CI/CD': 'cicd', 'CI/CD': 'cicd', '监控与日志': 'monitor', '监控': 'monitor',
   '网络与代理': 'network', '数据存储': 'database', '消息与注册': 'middleware',
   '自动化工作流': 'auto_workflow', '自动化': 'auto_workflow', '运维管理': 'ops',
   '运维面板': 'ops', '应用服务': 'app', '文档工具': 'app', '开发工具': 'app',
-  '数据平台': 'app', '前端应用': 'app', '安全与认证': 'security',
+  '数据平台': 'app', '前端应用': 'app', '安全与认证': 'security_ops',
+  '安全与运维': 'security_ops',
 }
 
 const ICONS = {
@@ -128,12 +136,9 @@ function openDetail(s) {
 async function reload() {
   loading.value = true
   try {
-    const [svc, grp] = await Promise.allSettled([
-      api.get('/services/plaza'),
-      api.get('/group-config/merged'),
-    ])
+    const [svc] = await Promise.allSettled([api.get('/services/plaza')])
     services.value = svc.status === 'fulfilled' ? svc.value : []
-    groups.value = grp.status === 'fulfilled' ? grp.value : []
+    groups.value = PLAZA_GROUPS
   } finally {
     loading.value = false
   }

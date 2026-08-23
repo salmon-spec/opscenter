@@ -1,5 +1,6 @@
 """Curated service plaza contract tests (no network or database required)."""
 
+from collections import Counter
 from contextlib import contextmanager
 from types import SimpleNamespace
 
@@ -35,6 +36,12 @@ def test_catalog_contains_exactly_the_approved_web_services():
         "grafana", "prometheus", "keycloak", "pve",
     }
     assert all(item["enabled"] for item in catalog)
+    assert Counter(item["category"] for item in catalog) == {
+        "代码与CI/CD": 5,
+        "应用服务": 5,
+        "监控与日志": 2,
+        "安全与运维": 2,
+    }
 
 
 def test_plaza_response_never_contains_credentials(monkeypatch):
@@ -52,4 +59,3 @@ def test_plaza_response_never_contains_credentials(monkeypatch):
     assert all(row["status"] == "up" for row in rows)
     assert all("password" not in row and "account" not in row and "client_secret" not in row for row in rows)
     assert {row["auth_mode"] for row in rows} == {"none", "local", "keycloak"}
-

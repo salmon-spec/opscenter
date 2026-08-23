@@ -150,7 +150,7 @@
     "server_host": "10.66.66.6",
     "entry_url": "http://10.66.66.6:8180/admin/ops/console/",
     "health_url": "http://10.66.66.6:8180/realms/ops/.well-known/openid-configuration",
-    "category": "安全与认证",
+    "category": "安全与运维",
     "icon": "shield",
     "auth_mode": "keycloak",
     "enabled": true
@@ -162,7 +162,7 @@
     "server_host": "10.66.66.3",
     "entry_url": "/api/v2/sso/pve",
     "health_url": "https://10.66.66.3:8006/",
-    "category": "运维管理",
+    "category": "安全与运维",
     "icon": "server",
     "auth_mode": "keycloak",
     "allow_insecure_tls": true,
