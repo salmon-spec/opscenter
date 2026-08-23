@@ -42,6 +42,10 @@ def test_catalog_contains_exactly_the_approved_web_services():
         "监控与日志": 2,
         "安全与运维": 2,
     }
+    by_key = {item["key"]: item for item in catalog}
+    assert by_key["sonarqube"]["auth_mode"] == "keycloak"
+    assert "/sessions/init/oidc" in by_key["sonarqube"]["entry_url"]
+    assert by_key["nexus"]["auth_mode"] == "local"
 
 
 def test_plaza_response_never_contains_credentials(monkeypatch):

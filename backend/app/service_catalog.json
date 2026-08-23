@@ -50,13 +50,13 @@
   {
     "key": "sonarqube",
     "name": "SonarQube",
-    "description": "代码质量平台",
+    "description": "代码质量平台（Keycloak SSO）",
     "server_host": "10.66.66.4",
-    "entry_url": "http://10.66.66.4:9000/",
+    "entry_url": "http://10.66.66.4:9000/sessions/init/oidc?return_to=%2F",
     "health_url": "http://10.66.66.4:9000/api/system/status",
     "category": "代码与CI/CD",
     "icon": "shield",
-    "auth_mode": "local",
+    "auth_mode": "keycloak",
     "enabled": true
   },
   {
