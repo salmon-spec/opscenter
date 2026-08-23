@@ -357,52 +357,73 @@ async def background_health_check():
         await asyncio.sleep(60)
 
 
+def _run_agent_health_check():
+    """Run one Agent reconciliation cycle for every registered server.
+
+    Remote Agents are checked even after they enter stopped/not_deployed so a
+    transient failure or stale database token cannot permanently disable
+    collection.  A running service's on-host config is authoritative for its
+    port, token and version; the token is never logged or returned to clients.
+    """
+    with get_db() as db:
+        local_srv = db.query(Server).filter(Server.agent_type == "local").first()
+        if local_srv:
+            try:
+                local_data = fetch_agent_metrics(
+                    "127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or ""
+                )
+                if local_data:
+                    local_srv.agent_status = "running"
+                    local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
+                    local_srv.last_seen = datetime.utcnow()
+                else:
+                    local_srv.agent_status = "stopped"
+            except Exception as exc:
+                print(f"[AgentHealthCheck] Local Agent error: {exc}")
+                local_srv.agent_status = "stopped"
+
+        remote_servers = db.query(Server).filter(Server.agent_type != "local").all()
+        for srv in remote_servers:
+            try:
+                result = check_agent_status(srv)
+                new_status = result.get("status", "unknown")
+                if new_status == "running":
+                    if result.get("agent_port"):
+                        srv.agent_port = result["agent_port"]
+                    if result.get("agent_token"):
+                        srv.agent_token = result["agent_token"]
+                    if result.get("agent_version"):
+                        srv.agent_version = result["agent_version"]
+
+                    probe = fetch_agent_metrics(
+                        srv.host, srv.agent_port or 19100, srv.agent_token or ""
+                    )
+                    if probe:
+                        srv.agent_status = "running"
+                        srv.last_seen = datetime.utcnow()
+                    else:
+                        srv.agent_status = "error"
+                elif new_status in ("stopped", "installed_stopped"):
+                    srv.agent_status = "stopped"
+                elif new_status in ("not_deployed", "not_installed"):
+                    srv.agent_status = "not_deployed"
+                else:
+                    srv.agent_status = "error"
+            except Exception as exc:
+                print(f"[AgentHealthCheck] Error checking {srv.host}: {exc}")
+                srv.agent_status = "error"
+        db.commit()
+
+
 async def _agent_health_check_loop():
-    """Background task: check Agent status on all remote servers every 5 minutes."""
-    import asyncio
-    await asyncio.sleep(30)  # Wait for startup to complete
+    """Reconcile Agent state every five minutes without sticky failures."""
+    await asyncio.sleep(30)
     while True:
         try:
-            with get_db() as db:
-                # Check local Agent status
-                local_srv = db.query(Server).filter(Server.agent_type == "local").first()
-                if local_srv:
-                    try:
-                        local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
-                        if local_data:
-                            local_srv.agent_status = "running"
-                            local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
-                            local_srv.last_seen = datetime.utcnow()
-                        else:
-                            local_srv.agent_status = "stopped"
-                    except Exception as e:
-                        print(f"[AgentHealthCheck] Local Agent error: {e}")
-                        local_srv.agent_status = "stopped"
-
-                remote_servers = db.query(Server).filter(Server.agent_type != "local").all()
-                for srv in remote_servers:
-                    try:
-                        if srv.agent_status in ("running", "error", "deploying"):
-                            result = check_agent_status(srv)
-                            new_status = result.get("status", "unknown")
-                            if new_status == "running":
-                                srv.agent_status = "running"
-                                if result.get("agent_port"):
-                                    srv.agent_port = result["agent_port"]
-                                if result.get("agent_token"):
-                                    srv.agent_token = result["agent_token"]
-                                if result.get("agent_version"):
-                                    srv.agent_version = result["agent_version"]
-                            elif new_status in ("stopped", "not_installed"):
-                                srv.agent_status = "stopped"
-                            else:
-                                srv.agent_status = "error"
-                    except Exception as e:
-                        print(f"[AgentHealthCheck] Error checking {srv.host}: {e}")
-                db.commit()
-        except Exception as e:
-            print(f"[AgentHealthCheck] Loop error: {e}")
-        await asyncio.sleep(300)  # 5 minutes
+            await asyncio.to_thread(_run_agent_health_check)
+        except Exception as exc:
+            print(f"[AgentHealthCheck] Loop error: {exc}")
+        await asyncio.sleep(300)
 
 
 def _migrate_groups_json():
@@ -3136,6 +3157,7 @@ def deploy_agent_api(server_id: str):
         if scan_info:
             result["message"] = (result.get("message", "") + scan_info).strip()
     
+    result.pop("agent_token", None)
     return result
 
 
@@ -3179,7 +3201,7 @@ def agent_status_api(server_id: str):
         elif result.get("status") == "not_deployed":
             s.agent_status = "not_deployed"
         db.commit()
-    return result
+    return {key: value for key, value in result.items() if key != "agent_token"}
 
 
 @app.delete("/api/v2/servers/{server_id}/agent")

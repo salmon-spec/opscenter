@@ -41,7 +41,13 @@
             :href="s.entry_url" target="_blank" rel="noopener"
             @click.stop
           >进入</a>
-          <button v-if="s.auth_mode === 'keycloak'" class="btn btn-sm" title="使用当前 Keycloak 统一账号" @click.stop="ssoOpen(s)">免密进入</button>
+          <a
+            v-if="s.auth_mode === 'keycloak'"
+            class="btn btn-sm enter-btn"
+            :href="s.entry_url" target="_blank" rel="noopener noreferrer"
+            title="在新标签页使用当前 Keycloak 统一账号"
+            @click.stop
+          >免密进入</a>
           <button class="btn btn-sm btn-ghost" title="查看详情" @click.stop="openDetail(s)">详情</button>
         </div>
       </div>
@@ -142,10 +148,6 @@ async function reload() {
   } finally {
     loading.value = false
   }
-}
-
-function ssoOpen(s) {
-  window.location.assign(s.entry_url)
 }
 
 onMounted(reload)

@@ -71,7 +71,11 @@
 
       <!-- 网络趋势 -->
       <section class="panel panel-wide">
-        <div class="panel-title">网络流量趋势（{{ netHostName }} 6h）</div>
+        <div class="panel-title">网络流量趋势（6h）
+          <select v-model="selectedNetHostId" class="screen-select" @change="loadNetworkTrend">
+            <option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</option>
+          </select>
+        </div>
         <div ref="netChartEl" class="chart"></div>
       </section>
     </div>
@@ -99,18 +103,18 @@ const healthServices = ref([])
 const events = ref([])
 const drawerVisible = ref(false)
 const selected = ref(null)
+const selectedNetHostId = ref('')
 
 let cpuChart = null
 let netChart = null
 let timer = null
+let trendsRefreshedAt = 0
 
 const healthSummary = computed(() => {
   const up = healthServices.value.filter((s) => s.status === 'up' || s.status === 'online').length
   const down = healthServices.value.filter((s) => s.status === 'down' || s.status === 'offline').length
   return { up, down, total: healthServices.value.length }
 })
-const netHostName = computed(() => hosts.value[0]?.name || '—')
-
 function levelColor(v) {
   if (v >= 90) return '#ef4444'
   if (v >= 70) return '#f59e0b'
@@ -129,6 +133,9 @@ async function loadAll() {
   // 主机 + 指标
   const sv = await api.get('/servers').catch(() => [])
   hosts.value = sv
+  if (!sv.some((h) => h.id === selectedNetHostId.value)) {
+    selectedNetHostId.value = sv[0]?.id || ''
+  }
   const mon = {}
   await Promise.allSettled(sv.map(async (h) => {
     try {
@@ -151,13 +158,16 @@ async function loadAll() {
   events.value = await api.get('/alert-events', { days: 1 }).catch(() => [])
 
   // 趋势
-  await loadTrends()
+  const now = Date.now()
+  if (now - trendsRefreshedAt >= 30000) {
+    trendsRefreshedAt = now
+    await loadTrends()
+  }
 }
 
 async function loadTrends() {
-  const top = hosts.value.slice(0, 3)
   const series = []
-  await Promise.allSettled(top.map(async (h, i) => {
+  await Promise.allSettled(hosts.value.map(async (h) => {
     const d = await api.get(`/monitor/${h.id}/history`, { metric: 'cpu', hours: 6 }).catch(() => null)
     if (d?.values?.length) {
       series.push({
@@ -177,24 +187,29 @@ async function loadTrends() {
     })
   }
 
-  // 网络趋势（第一台主机的 rx/tx 累计值）
-  if (hosts.value[0]) {
-    const h = hosts.value[0]
+  await loadNetworkTrend()
+}
+
+async function loadNetworkTrend() {
+  const h = hosts.value.find((item) => item.id === selectedNetHostId.value)
+  if (h) {
     const [rx, tx] = await Promise.allSettled([
-      api.get(`/monitor/${h.id}/history`, { metric: 'net_rx_raw', hours: 6 }),
-      api.get(`/monitor/${h.id}/history`, { metric: 'net_tx_raw', hours: 6 }),
+      api.get(`/monitor/${h.id}/history`, { metric: 'net_rx', hours: 6 }),
+      api.get(`/monitor/${h.id}/history`, { metric: 'net_tx', hours: 6 }),
     ])
-    const toGb = (v) => (v / 1024 / 1024 / 1024).toFixed(2)
+    const toKbps = (v) => Number((v / 1024).toFixed(2))
     if (netChart) {
       netChart.setOption({
         series: [
-          { name: '下行', type: 'line', smooth: true, showSymbol: false, areaStyle: { opacity: .2 }, data: rx.status === 'fulfilled' ? rx.value.values.map(([t, v]) => [t * 1000, toGb(v)]) : [] },
-          { name: '上行', type: 'line', smooth: true, showSymbol: false, areaStyle: { opacity: .2 }, data: tx.status === 'fulfilled' ? tx.value.values.map(([t, v]) => [t * 1000, toGb(v)]) : [] },
+          { name: '下行', type: 'line', smooth: true, showSymbol: false, areaStyle: { opacity: .2 }, data: rx.status === 'fulfilled' ? rx.value.values.map(([t, v]) => [t * 1000, toKbps(v)]) : [] },
+          { name: '上行', type: 'line', smooth: true, showSymbol: false, areaStyle: { opacity: .2 }, data: tx.status === 'fulfilled' ? tx.value.values.map(([t, v]) => [t * 1000, toKbps(v)]) : [] },
         ],
         xAxis: { type: 'time' },
-        yAxis: { type: 'value', name: 'GB' },
+        yAxis: { type: 'value', name: 'KB/s' },
       })
     }
+  } else if (netChart) {
+    netChart.setOption({ series: [] })
   }
 }
 
@@ -217,7 +232,7 @@ function initCharts() {
   netChart.setOption({
     ...base,
     xAxis: { type: 'time', axisLine: { lineStyle: { color: '#2a4060' } }, axisLabel: { color: '#7f95b5' } },
-    yAxis: { type: 'value', name: 'GB', axisLabel: { color: '#7f95b5' }, splitLine: { lineStyle: { color: 'rgba(90,130,190,.12)' } } },
+    yAxis: { type: 'value', name: 'KB/s', axisLabel: { color: '#7f95b5' }, splitLine: { lineStyle: { color: 'rgba(90,130,190,.12)' } } },
     series: [],
   })
 }
@@ -260,6 +275,7 @@ function resizeCharts() { cpuChart?.resize(); netChart?.resize() }
 .screen-sub { color: var(--screen-muted); font-size: 12px; margin-top: 4px; }
 .screen-tools { display: flex; gap: 8px; }
 .screen-btn { background: rgba(20,35,58,.8); border-color: var(--screen-border); color: var(--screen-text); }
+.screen-select { margin-left: auto; background: #14233a; color: var(--screen-text); border: 1px solid var(--screen-border); border-radius: 6px; padding: 4px 8px; }
 .screen-grid { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 14px; }
 .panel {
   background: var(--screen-panel); border: 1px solid var(--screen-border); border-radius: 12px;

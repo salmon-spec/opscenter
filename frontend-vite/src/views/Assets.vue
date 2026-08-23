@@ -29,10 +29,13 @@
               {{ host.host }} · {{ host.ssh_user || 'root' }} · agent: {{ host.agent_status || 'not_deployed' }} · 服务 {{ host.service_count || 0 }}
             </div>
           </div>
-          <div class="host-bars" v-if="monitors[host.id]">
-            <div class="h-bar"><span>CPU</span><b>{{ m(host)?.metrics?.cpu ?? '—' }}%</b></div>
-            <div class="h-bar"><span>内存</span><b>{{ m(host)?.metrics?.memory ?? '—' }}%</b></div>
-            <div class="h-bar"><span>磁盘</span><b>{{ m(host)?.metrics?.disk ?? '—' }}%</b></div>
+          <div class="host-bars" v-if="m(host)?.metrics && !m(host)?.error">
+            <div class="h-bar"><span>CPU</span><b>{{ metricValue(host, 'cpu') }}%</b></div>
+            <div class="h-bar"><span>内存</span><b>{{ metricValue(host, 'memory') }}%</b></div>
+            <div class="h-bar"><span>磁盘</span><b>{{ metricValue(host, 'disk') }}%</b></div>
+          </div>
+          <div class="monitor-state" :class="{ error: m(host)?.error }">
+            {{ monitorLabel(host) }}
           </div>
           <div class="host-actions" @click.stop>
             <button class="btn btn-sm btn-primary" @click="openTerminal(host)">终端连接</button>
@@ -109,6 +112,14 @@ const logs = ref('')
 const logLoading = ref(false)
 
 const m = (host) => monitors[host.id]
+const metricValue = (host, key) => m(host)?.metrics?.[key] ?? '—'
+
+function monitorLabel(host) {
+  const state = m(host)
+  if (!state) return '监控加载中'
+  if (state.error) return `监控异常：${state.error}`
+  return `监控：${state.source === 'agent' ? 'Agent' : state.source === 'ssh' ? 'SSH' : '未知'}`
+}
 
 async function reload() {
   loading.value = true
@@ -118,8 +129,10 @@ async function reload() {
     await Promise.allSettled(hosts.value.map(async (h) => {
       try {
         const data = await api.get(`/servers/${h.id}/monitor`)
-        monitors[h.id] = data.metrics || {}
-      } catch { monitors[h.id] = null }
+        monitors[h.id] = data
+      } catch (e) {
+        monitors[h.id] = { metrics: null, source: null, error: e.message || '请求失败' }
+      }
     }))
   } finally {
     loading.value = false
@@ -214,6 +227,8 @@ onMounted(reload)
 .host-name { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
 .host-meta { font-size: 12px; margin-top: 3px; }
 .host-bars { display: flex; gap: 14px; }
+.monitor-state { max-width: 220px; font-size: 11px; color: var(--muted); }
+.monitor-state.error { color: var(--err); }
 .h-bar { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .h-bar span { font-size: 11px; color: var(--muted); }
 .h-bar b { font-size: 13px; }
