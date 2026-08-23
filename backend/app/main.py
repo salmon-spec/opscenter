@@ -36,6 +36,7 @@ from app.topology import router as topology_router
 from app.control import router as control_router
 from app.service_health import service_health_loop
 from app.sso import router as sso_router
+from app.plaza import router as plaza_router
 
 class TerminalCreateRequest(BaseModel):
     server_id: str
@@ -257,6 +258,7 @@ app.include_router(api_keys_router)
 app.include_router(topology_router)
 app.include_router(control_router)
 app.include_router(sso_router)
+app.include_router(plaza_router)
 
 # === Startup ===
 
@@ -2242,8 +2244,6 @@ def list_services(server_id: Optional[str] = None, category: Optional[str] = Non
                 "source": s.source, "status": s.status, "pinned": s.pinned,
                 "health_path": s.health_path, "container_name": s.container_name,
                 "image": s.image, "ports": s.ports,
-                "account": s.account or "",
-                "password": s.password or "",
                 "url_overridden": False,  # deprecated, always False
                 "port": s.port,
                 "proto": s.proto or "tcp",
@@ -3783,8 +3783,6 @@ def list_all_services(server_id: Optional[str] = None):
                 "health_path": s.health_path, "container_name": s.container_name,
                 "image": s.image, "ports": s.ports,
                 "hidden": s.hidden or False,
-                "account": s.account or "",
-                "password": s.password or "",
                 "server_name": si.get("name", ""),
                 "server_host": si.get("host", ""),
                 "server_status": si.get("status", "unknown"),

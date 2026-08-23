@@ -6,7 +6,7 @@
         <span class="logo-badge">Ops</span>
         <div class="logo-text">
           <div class="logo-title">运维工作台</div>
-          <div class="logo-ver">v3.29.0</div>
+          <div class="logo-ver">v4.0.0</div>
         </div>
       </div>
       <nav class="nav">
@@ -30,7 +30,12 @@
     <div class="main">
       <header v-if="!isStandalone" class="topbar">
         <h2 class="topbar-title">{{ route.meta.title || '工作台' }}</h2>
-        <div class="topbar-right muted">{{ nowStr }}</div>
+        <div class="topbar-right">
+          <span class="muted">{{ nowStr }}</span>
+          <button class="account-switch" title="退出当前 Keycloak 会话并使用其他账号" @click="switchAccount">
+            {{ currentUser || '统一账号' }} · 切换账号
+          </button>
+        </div>
       </header>
       <div class="content" :class="{ standalone: isStandalone }">
         <router-view />
@@ -64,6 +69,7 @@ const navs = [
 // 顶栏时钟 + 主机概览
 const nowStr = ref('')
 const hostSummary = ref({ total: 0, online: 0 })
+const currentUser = ref('')
 let clockTimer = null
 
 function tick() {
@@ -82,6 +88,17 @@ async function loadHosts() {
   } catch { /* 后端未就绪时静默 */ }
 }
 
+async function loadAccount() {
+  try {
+    const me = await api.get('/auth/me')
+    currentUser.value = me?.username || ''
+  } catch { currentUser.value = '' }
+}
+
+function switchAccount() {
+  window.location.assign('/api/v2/sso/account-switch')
+}
+
 // 全局 toast
 const toasts = ref([])
 let toastId = 0
@@ -95,6 +112,7 @@ onMounted(() => {
   tick()
   clockTimer = setInterval(tick, 1000)
   loadHosts()
+  loadAccount()
   window.addEventListener('ops-toast', onToast)
 })
 onUnmounted(() => {
@@ -135,6 +153,12 @@ onUnmounted(() => {
   display: flex; align-items: center; justify-content: space-between; padding: 0 24px;
 }
 .topbar-title { font-size: 16px; margin: 0; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.account-switch {
+  border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--brand);
+  padding: 7px 10px; cursor: pointer; font-size: 12px;
+}
+.account-switch:hover { background: rgba(37,99,235,.06); border-color: var(--brand); }
 .content { flex: 1; overflow: auto; }
 .content.standalone { overflow: hidden; background: var(--screen-bg); }
 </style>

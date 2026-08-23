@@ -63,6 +63,16 @@ def test_logout_clears_cookie():
     assert client.get("/api/v2/auth/me").status_code == 401
 
 
+def test_account_switch_ends_keycloak_session_and_clears_cookie():
+    _login()
+    r = client.get("/api/v2/sso/account-switch")
+    assert r.status_code == 302
+    assert r.headers["location"].startswith("http://10.66.66.6:8180/realms/ops/protocol/openid-connect/logout?")
+    assert "client_id=opscenter" in r.headers["location"]
+    assert "post_logout_redirect_uri=http%3A%2F%2F10.66.66.5%2F" in r.headers["location"]
+    assert "ops_session=" in r.headers.get("set-cookie", "")
+
+
 # ── Caddy forward_auth ──
 
 def test_forward_auth_with_cookie():

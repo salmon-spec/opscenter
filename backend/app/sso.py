@@ -19,13 +19,15 @@ main.py 接线（两行）：
 from __future__ import annotations
 
 import os
+import ssl
 import threading
 import time
 import uuid
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlparse
+from urllib.request import Request as UrlRequest, urlopen
 
 import jwt
 from fastapi import APIRouter, Header, HTTPException, Query, Request
@@ -43,6 +45,10 @@ _AUTH_CODE_TTL = 60  # 授权码 60s 有效
 
 SSO_COOKIE_SECURE = os.getenv("SSO_COOKIE_SECURE", "false").strip().lower() in ("1", "true", "yes")
 OIDC_ISSUER = os.getenv("OIDC_ISSUER", "http://127.0.0.1:9091").rstrip("/")
+KEYCLOAK_BASE_URL = os.getenv("KEYCLOAK_BASE_URL", "http://10.66.66.6:8180").rstrip("/")
+KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ops")
+KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "opscenter")
+WORKBENCH_URL = os.getenv("WORKBENCH_URL", "http://10.66.66.5/")
 
 # 一次性授权码：code -> {client_id, redirect_uri, nonce, username, expires}
 _auth_codes: dict = {}
@@ -151,6 +157,52 @@ def sso_me(request: Request):
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
     return {"username": user, "role": "admin"}
+
+
+@router.get("/sso/account-switch")
+def switch_sso_account():
+    """Clear the local session and end the central Keycloak session."""
+    logout_url = (
+        f"{KEYCLOAK_BASE_URL}/realms/{quote(KEYCLOAK_REALM, safe='')}"
+        "/protocol/openid-connect/logout?"
+        + urlencode({
+            "client_id": KEYCLOAK_CLIENT_ID,
+            "post_logout_redirect_uri": WORKBENCH_URL,
+        })
+    )
+    resp = RedirectResponse(logout_url, status_code=302)
+    _delete_session_cookie(resp)
+    return resp
+
+
+# === 固定目标服务的 SSO 启动器 ===
+PVE_WEB_URL = os.getenv("PVE_WEB_URL", "https://10.66.66.3:8006").rstrip("/")
+PVE_REALM = os.getenv("PVE_REALM", "ops-sso")
+PVE_IDP_HOST = os.getenv("PVE_IDP_HOST", "10.66.66.6")
+
+
+@router.get("/sso/pve")
+def pve_sso_launch():
+    """Fetch PVE's one-time OpenID authorization URL and redirect to it."""
+    body = urlencode({"realm": PVE_REALM, "redirect-url": f"{PVE_WEB_URL}/"}).encode()
+    req = UrlRequest(
+        f"{PVE_WEB_URL}/api2/json/access/openid/auth-url",
+        data=body,
+        method="POST",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        context = ssl._create_unverified_context()
+        with urlopen(req, timeout=8, context=context) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="PVE OpenID 入口不可用") from exc
+
+    target = payload.get("data")
+    parsed = urlparse(target or "")
+    if parsed.scheme not in ("http", "https") or parsed.hostname != PVE_IDP_HOST:
+        raise HTTPException(status_code=502, detail="PVE 返回了非预期的认证地址")
+    return RedirectResponse(target, status_code=302)
 
 
 # === Caddy forward_auth 校验端点 ===

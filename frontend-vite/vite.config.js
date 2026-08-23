@@ -12,6 +12,9 @@ export default defineConfig({
     // v3.29: 拆分大体积依赖为独立 chunk，利于缓存与加载
     rollupOptions: {
       output: {
+        entryFileNames: 'assets/[name]-v4-[hash].js',
+        chunkFileNames: 'assets/[name]-v4-[hash].js',
+        assetFileNames: 'assets/[name]-v4-[hash][extname]',
         manualChunks: {
           'vendor-vue': ['vue', 'vue-router'],
           'vendor-echarts': ['echarts'],

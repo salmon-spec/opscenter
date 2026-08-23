@@ -13,9 +13,9 @@
 
     <!-- 分组标签 -->
     <div class="group-tabs">
-      <button class="g-tab" :class="{ active: activeGroup === 'all' }" @click="activeGroup = 'all'">全部 ({{ filtered.length }})</button>
+      <button class="g-tab" :class="{ active: activeGroup === 'all' }" @click="activeGroup = 'all'">全部 ({{ searched.length }})</button>
       <button
-        v-for="g in groups" :key="g.id"
+        v-for="g in visibleGroups" :key="g.id"
         class="g-tab" :class="{ active: activeGroup === g.id }"
         @click="activeGroup = g.id"
       >{{ g.name }} ({{ groupCount(g) }})</button>
@@ -38,10 +38,10 @@
         <div class="svc-actions">
           <a
             class="btn btn-primary btn-sm enter-btn"
-            :href="s.url" target="_blank" rel="noopener"
+            :href="s.entry_url" target="_blank" rel="noopener"
             @click.stop
           >进入</a>
-          <button class="btn btn-sm" @click.stop="ssoOpen(s)">免密进入</button>
+          <button v-if="s.auth_mode === 'keycloak'" class="btn btn-sm" title="使用当前 Keycloak 统一账号" @click.stop="ssoOpen(s)">免密进入</button>
           <button class="btn btn-sm btn-ghost" title="查看详情" @click.stop="openDetail(s)">详情</button>
         </div>
       </div>
@@ -50,30 +50,12 @@
     <!-- 详情抽屉 -->
     <ServiceDetailDrawer :visible="drawerVisible" :service="selected" @close="drawerVisible = false" />
 
-    <!-- 登录框（免密进入） -->
-    <Modal :visible="loginVisible" title="登录工作台（免密跳转）" width="400px" @close="loginVisible = false">
-      <div class="field">
-        <label>用户名</label>
-        <input v-model="loginForm.username" class="input" placeholder="admin" @keyup.enter="doLogin" />
-      </div>
-      <div class="field">
-        <label>密码</label>
-        <input v-model="loginForm.password" class="input" type="password" placeholder="••••••••" @keyup.enter="doLogin" />
-      </div>
-      <div style="display:flex;justify-content:flex-end;gap:8px">
-        <button class="btn" @click="loginVisible = false">取消</button>
-        <button class="btn btn-primary" :disabled="loginLoading" @click="doLogin">
-          {{ loginLoading ? '登录中…' : '登录并跳转' }}
-        </button>
-      </div>
-    </Modal>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { api, toast } from '../api'
-import Modal from '../components/Modal.vue'
+import { api } from '../api'
 import EmptyState from '../components/EmptyState.vue'
 import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'
 
@@ -84,11 +66,6 @@ const search = ref('')
 const activeGroup = ref('all')
 const drawerVisible = ref(false)
 const selected = ref(null)
-
-const loginVisible = ref(false)
-const loginLoading = ref(false)
-const loginForm = ref({ username: 'admin', password: '' })
-let pendingUrl = ''
 
 // 分类 → 分组映射（与后端 CATEGORY_TO_GROUP 对齐）
 const CATEGORY_TO_GROUP = {
@@ -119,16 +96,22 @@ function groupOf(s) {
 }
 
 function groupCount(g) {
-  return services.value.filter((s) => groupOf(s) === g.id).length
+  return searched.value.filter((s) => groupOf(s) === g.id).length
 }
 
-const filtered = computed(() => {
+const searched = computed(() => {
   const kw = search.value.trim().toLowerCase()
   return services.value
+    .filter((s) => !kw || s.name.toLowerCase().includes(kw) || (s.entry_url || '').toLowerCase().includes(kw) || (s.description || '').toLowerCase().includes(kw))
+})
+
+const filtered = computed(() => {
+  return searched.value
     .filter((s) => activeGroup.value === 'all' || groupOf(s) === activeGroup.value)
-    .filter((s) => !kw || s.name.toLowerCase().includes(kw) || (s.url || '').toLowerCase().includes(kw) || (s.description || '').toLowerCase().includes(kw))
     .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))
 })
+
+const visibleGroups = computed(() => groups.value.filter((g) => groupCount(g) > 0))
 
 function statusDotClass(st) {
   if (st === 'online' || st === 'up') return 'ok'
@@ -146,7 +129,7 @@ async function reload() {
   loading.value = true
   try {
     const [svc, grp] = await Promise.allSettled([
-      api.get('/services-with-status'),
+      api.get('/services/plaza'),
       api.get('/group-config/merged'),
     ])
     services.value = svc.status === 'fulfilled' ? svc.value : []
@@ -156,39 +139,8 @@ async function reload() {
   }
 }
 
-// 免密进入：先检查工作台会话，未登录则弹登录框
-async function ssoOpen(s) {
-  try {
-    const me = await api.get('/auth/me')
-    if (me?.username) { location.href = s.url; return }
-    pendingUrl = s.url
-    loginForm.value = { username: 'admin', password: '' }
-    loginVisible.value = true
-  } catch (e) {
-    if (e.status === 404) {
-      // SSO 未部署（404）：免登录模式直接打开
-      location.href = s.url
-      return
-    }
-    // 401 等：弹出登录框
-    pendingUrl = s.url
-    loginForm.value = { username: 'admin', password: '' }
-    loginVisible.value = true
-  }
-}
-
-async function doLogin() {
-  loginLoading.value = true
-  try {
-    await api.post('/auth/login', loginForm.value)
-    loginVisible.value = false
-    toast('登录成功，正在跳转…', 'ok')
-    if (pendingUrl) { location.href = pendingUrl }
-  } catch (e) {
-    toast(e.message || '登录失败', 'err')
-  } finally {
-    loginLoading.value = false
-  }
+function ssoOpen(s) {
+  window.location.assign(s.entry_url)
 }
 
 onMounted(reload)

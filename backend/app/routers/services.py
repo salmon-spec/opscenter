@@ -65,7 +65,6 @@ def list_all_services(server_id: Optional[str] = None, db: Session = Depends(get
         "name": s.name, "url": s.url, "category": s.category,
         "icon": s.icon, "description": s.description,
         "source": s.source, "status": s.status, "hidden": s.hidden or False,
-        "account": s.account or "", "password": s.password or "",
     } for s in services]
 
 
