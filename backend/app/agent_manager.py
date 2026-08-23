@@ -3,16 +3,16 @@ import paramiko
 import io
 import json
 import secrets
+from pathlib import Path
 from typing import Optional, Tuple, Dict
 from app.models import Server
-import os
 
 
 # 动态读取Agent版本号
 _AGENT_VERSION = "2.2.0"  # 默认值（v3.28 起全量 2.2.0）
+_AGENT_SOURCE_DIR = Path(__file__).resolve().parents[2] / "agent"
 try:
-    _agent_src = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'agent', 'opsagent.py')
-    with open(_agent_src) as f:
+    with (_AGENT_SOURCE_DIR / "opsagent.py").open(encoding="utf-8") as f:
         for line in f:
             if line.strip().startswith('AGENT_VERSION'):
                 _AGENT_VERSION = line.split('=')[1].strip().strip('"').strip("'")
@@ -74,6 +74,8 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
         return {"success": False, "message": "SSH连接失败，请检查凭证"}
 
     try:
+        sudo = "" if server.ssh_user == "root" else "sudo -n "
+
         # 1. Check Python3
         out, err, code = _ssh_exec(client, "which python3 && python3 --version")
         if code != 0:
@@ -98,51 +100,63 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             except Exception:
                 pass
             # Old version detected — stop service, will reinstall below
-            _ssh_exec(client, f"systemctl stop {AGENT_SERVICE}")
+            _ssh_exec(client, f"{sudo}systemctl stop {AGENT_SERVICE}")
             import time; time.sleep(1)
 
         # 3. Create directory and upload agent script
         token = existing_config.get('token', '') or _generate_token()
-        _ssh_exec(client, f"mkdir -p {AGENT_DIR}")
+        _, err, code = _ssh_exec(client, f"{sudo}mkdir -p {AGENT_DIR}")
+        if code != 0:
+            return {"success": False, "message": f"Agent目录创建失败: {err.strip()}"}
 
-        # Upload agent script + scanner module via SFTP
+        # Upload through a user-writable temporary path, then install with sudo.
+        # This supports non-root SSH accounts without putting the Agent token on
+        # the remote command line.
         sftp = client.open_sftp()
         files_to_upload = [AGENT_SCRIPT, "scanner.py"]
-        upload_ok = False
-        for search_dir in ["agent/", "/opt/opscenter/agent/"]:
-            try:
-                for fname in files_to_upload:
-                    local_path = f"{search_dir}{fname}"
-                    remote_path = f"{AGENT_DIR}/{fname}"
-                    with open(local_path, 'r') as local_f:
-                        content_to_write = local_f.read()
-                    with sftp.file(remote_path, 'w') as f:
-                        f.write(content_to_write)
-                upload_ok = True
-                break
-            except FileNotFoundError:
-                continue
-        sftp.close()
-        if not upload_ok:
+        missing = [fname for fname in files_to_upload if not (_AGENT_SOURCE_DIR / fname).is_file()]
+        if missing:
+            sftp.close()
             return {"success": False, "message": "Agent脚本文件未找到，请检查部署路径"}
+        for fname in files_to_upload:
+            temp_path = f"/tmp/opscenter-{secrets.token_hex(4)}-{fname}"
+            with (_AGENT_SOURCE_DIR / fname).open(encoding="utf-8") as local_f:
+                with sftp.file(temp_path, "w") as remote_f:
+                    remote_f.write(local_f.read())
+            sftp.chmod(temp_path, 0o600)
+            _, err, code = _ssh_exec(
+                client,
+                f"{sudo}install -m 0644 {temp_path} {AGENT_DIR}/{fname} && rm -f {temp_path}",
+            )
+            if code != 0:
+                sftp.close()
+                return {"success": False, "message": f"Agent文件安装失败: {err.strip()}"}
 
         # 4. Create systemd service
         service_content = _build_service_content(port, token)
-        # Write service file via python
-        _ssh_exec(client, f"python3 -c \""
-                   f"with open('/etc/systemd/system/{AGENT_SERVICE}', 'w') as f: "
-                   f"f.write('''{service_content}''')\"")
-
-        # 5. Save agent config
         config = {"port": port, "token": token, "version": _AGENT_VERSION}
-        _ssh_exec(client, f"python3 -c \""
-                   f"import json; "
-                   f"open('{AGENT_DIR}/.agent_config', 'w').write(json.dumps({config}))\"")
+        protected_files = [
+            (service_content, f"/etc/systemd/system/{AGENT_SERVICE}", "0644"),
+            (json.dumps(config), f"{AGENT_DIR}/.agent_config", "0600"),
+        ]
+        for content, destination, mode in protected_files:
+            temp_path = f"/tmp/opscenter-{secrets.token_hex(4)}-config"
+            with sftp.file(temp_path, "w") as remote_f:
+                remote_f.write(content)
+            sftp.chmod(temp_path, 0o600)
+            _, err, code = _ssh_exec(
+                client,
+                f"{sudo}install -m {mode} {temp_path} {destination} && rm -f {temp_path}",
+            )
+            if code != 0:
+                sftp.close()
+                return {"success": False, "message": f"Agent配置安装失败: {err.strip()}"}
+        sftp.close()
 
         # 6. Reload systemd, enable and start service
-        _ssh_exec(client, "systemctl daemon-reload")
-        _ssh_exec(client, f"systemctl enable {AGENT_SERVICE}")
-        out, err, code = _ssh_exec(client, f"systemctl start {AGENT_SERVICE}")
+        _ssh_exec(client, f"{sudo}systemctl daemon-reload")
+        _ssh_exec(client, f"{sudo}systemctl enable {AGENT_SERVICE}")
+        out, err, code = _ssh_exec(client, f"{sudo}systemctl start {AGENT_SERVICE}")
 
         if code != 0 and 'Job' not in err:
             return {"success": False, "message": f"Agent启动失败: {err.strip()}"}
@@ -157,7 +171,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
             return {"success": False, "message": f"Agent启动异常: {log_out[-200:]}"}
 
         # 8. Try to open firewall if ufw is active
-        _ssh_exec(client, f"ufw status | grep -q 'active' && ufw allow {port}/tcp 2>/dev/null || true")
+        _ssh_exec(client, f"{sudo}ufw status | grep -q 'active' && {sudo}ufw allow {port}/tcp 2>/dev/null || true")
 
         return {
             "success": True,
@@ -318,15 +332,13 @@ def trigger_agent_scan(host: str, port: int = AGENT_DEFAULT_PORT, token: str = "
 def upgrade_local_agent():
     """升级本机Agent：复制源码到/opt/opsagent/ + systemctl restart"""
     import shutil, subprocess
-    src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'agent')
-    dst_dir = '/opt/opsagent'
+    dst_dir = Path('/opt/opsagent')
     
     # 复制源码文件
     for fname in ['opsagent.py', 'scanner.py']:
-        src = os.path.join(src_dir, fname)
-        dst = os.path.join(dst_dir, fname)
-        if os.path.exists(src):
-            shutil.copy2(src, dst)
+        src = _AGENT_SOURCE_DIR / fname
+        if src.exists():
+            shutil.copy2(src, dst_dir / fname)
     
     # 重启服务
     result = subprocess.run(['systemctl', 'restart', 'opsagent'], capture_output=True, text=True, timeout=10)
