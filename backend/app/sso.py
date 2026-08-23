@@ -50,6 +50,17 @@ KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ops")
 KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "opscenter")
 WORKBENCH_URL = os.getenv("WORKBENCH_URL", "http://10.66.66.5/")
 
+# 账号切换只允许这些预定义的内网注销目标。前端只能读取，不能提交任意 URL。
+RESET_TARGETS = (
+    {"name": "Gitea", "url": "http://10.66.66.4:3000/user/logout", "mode": "open-and-confirm", "required": True},
+    {"name": "GitLab", "url": "http://10.66.66.4:8082/users/sign_out", "mode": "open-and-confirm", "required": True},
+    {"name": "Jenkins", "url": "http://10.66.66.4:8080/logout", "mode": "open-and-confirm", "required": True},
+    {"name": "Grafana", "url": "http://10.66.66.5:3000/logout", "mode": "open-and-confirm", "required": True},
+    {"name": "PVE", "url": "https://10.66.66.3:8006/", "mode": "manual", "required": True},
+    {"name": "Nexus", "url": "http://10.66.66.4:8081/", "mode": "manual", "required": True},
+    {"name": "SonarQube", "url": "http://10.66.66.4:9000/sessions/logout", "mode": "open-and-confirm", "required": True},
+)
+
 # 一次性授权码：code -> {client_id, redirect_uri, nonce, username, expires}
 _auth_codes: dict = {}
 _auth_codes_lock = threading.Lock()
@@ -175,6 +186,12 @@ def switch_sso_account():
     return resp
 
 
+@router.get("/sso/reset-targets")
+def sso_reset_targets():
+    """Return the controlled cross-application logout checklist without credentials."""
+    return {"targets": [dict(target) for target in RESET_TARGETS]}
+
+
 # === 固定目标服务的 SSO 启动器 ===
 PVE_WEB_URL = os.getenv("PVE_WEB_URL", "https://10.66.66.3:8006").rstrip("/")
 PVE_REALM = os.getenv("PVE_REALM", "ops-sso")
@@ -184,7 +201,7 @@ PVE_IDP_HOST = os.getenv("PVE_IDP_HOST", "10.66.66.6")
 @router.get("/sso/pve")
 def pve_sso_launch():
     """Fetch PVE's one-time OpenID authorization URL and redirect to it."""
-    body = urlencode({"realm": PVE_REALM, "redirect-url": f"{PVE_WEB_URL}/"}).encode()
+    body = urlencode({"realm": PVE_REALM, "redirect-url": PVE_WEB_URL}).encode()
     req = UrlRequest(
         f"{PVE_WEB_URL}/api2/json/access/openid/auth-url",
         data=body,

@@ -33,7 +33,7 @@
         <div class="topbar-right">
           <span class="muted">{{ nowStr }}</span>
           <button class="account-switch" title="退出当前 Keycloak 会话并使用其他账号" @click="switchAccount">
-            {{ currentUser || '统一账号' }} · 切换账号
+            统一账号 · 切换账号
           </button>
         </div>
       </header>
@@ -51,10 +51,11 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from './api'
 
 const route = useRoute()
+const router = useRouter()
 const isStandalone = computed(() => !!route.meta.standalone)
 
 const navs = [
@@ -69,7 +70,6 @@ const navs = [
 // 顶栏时钟 + 主机概览
 const nowStr = ref('')
 const hostSummary = ref({ total: 0, online: 0 })
-const currentUser = ref('')
 let clockTimer = null
 
 function tick() {
@@ -88,15 +88,8 @@ async function loadHosts() {
   } catch { /* 后端未就绪时静默 */ }
 }
 
-async function loadAccount() {
-  try {
-    const me = await api.get('/auth/me')
-    currentUser.value = me?.username || ''
-  } catch { currentUser.value = '' }
-}
-
 function switchAccount() {
-  window.location.assign('/api/v2/sso/account-switch')
+  router.push('/switch-account')
 }
 
 // 全局 toast
@@ -112,7 +105,6 @@ onMounted(() => {
   tick()
   clockTimer = setInterval(tick, 1000)
   loadHosts()
-  loadAccount()
   window.addEventListener('ops-toast', onToast)
 })
 onUnmounted(() => {

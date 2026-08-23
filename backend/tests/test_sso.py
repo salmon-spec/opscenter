@@ -4,6 +4,8 @@
 """
 
 import os
+import json
+from urllib.parse import parse_qs
 
 os.environ.setdefault("OIDC_ISSUER", "http://127.0.0.1:9091")
 os.environ.setdefault("OPS_AUTH_ENABLED", "false")
@@ -12,6 +14,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.sso import router as sso_router  # noqa: E402
+from app import sso  # noqa: E402
 
 
 def _make_app() -> FastAPI:
@@ -71,6 +74,43 @@ def test_account_switch_ends_keycloak_session_and_clears_cookie():
     assert "client_id=opscenter" in r.headers["location"]
     assert "post_logout_redirect_uri=http%3A%2F%2F10.66.66.5%2F" in r.headers["location"]
     assert "ops_session=" in r.headers.get("set-cookie", "")
+
+
+def test_reset_targets_are_controlled_and_contain_no_secrets():
+    r = client.get("/api/v2/sso/reset-targets")
+    assert r.status_code == 200
+    targets = r.json()["targets"]
+    assert [target["name"] for target in targets] == [
+        "Gitea", "GitLab", "Jenkins", "Grafana", "PVE", "Nexus", "SonarQube"
+    ]
+    assert all(target["url"].startswith(("http://10.66.66.", "https://10.66.66.")) for target in targets)
+    serialized = json.dumps(targets).lower()
+    assert "password" not in serialized
+    assert "token" not in serialized
+    assert "secret" not in serialized
+
+
+def test_pve_redirect_uri_has_no_trailing_slash(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({"data": "http://10.66.66.6/authorize"}).encode()
+
+    def fake_urlopen(request, **_kwargs):
+        captured["body"] = parse_qs(request.data.decode())
+        return FakeResponse()
+
+    monkeypatch.setattr(sso, "urlopen", fake_urlopen)
+    r = client.get("/api/v2/sso/pve")
+    assert r.status_code == 302
+    assert captured["body"]["redirect-url"] == ["https://10.66.66.3:8006"]
 
 
 # ── Caddy forward_auth ──

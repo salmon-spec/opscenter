@@ -26,7 +26,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import * as echarts from 'echarts'
 import { api } from '../api'
 import EmptyState from '../components/EmptyState.vue'
@@ -68,6 +68,7 @@ async function load() {
   } finally {
     loading.value = false
   }
+  await nextTick()
   render()
 }
 
@@ -121,6 +122,16 @@ function layout(nodes, edges) {
 }
 
 function render() {
+  const nodesSource = Array.isArray(graphData.value?.nodes) ? graphData.value.nodes : []
+  const edgesSource = Array.isArray(graphData.value?.edges) ? graphData.value.edges : []
+  if (!chartEl.value || !nodesSource.length) {
+    if (chart) { chart.dispose(); chart = null }
+    return
+  }
+  if (chart && chart.getDom() !== chartEl.value) {
+    chart.dispose()
+    chart = null
+  }
   if (!chart) {
     chart = echarts.init(chartEl.value)
     chart.on('click', (params) => {
@@ -136,8 +147,8 @@ function render() {
       }
     })
   }
-  const nodes = layout(graphData.value.nodes, graphData.value.edges)
-  const edges = graphData.value.edges.map((e) => ({
+  const nodes = layout(nodesSource, edgesSource)
+  const edges = edgesSource.map((e) => ({
     source: e.source,
     target: e.target,
     label: e.label ? { show: true, formatter: e.label, fontSize: 10, color: '#94a3b8' } : undefined,
