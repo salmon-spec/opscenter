@@ -48,7 +48,7 @@ pipeline {
                 sh '''
                     for i in 1 2 3; do
                         health=$(curl -s -o /dev/null -w "%{http_code}" http://10.66.66.5:9091/api/v2/health-check -X POST || true)
-                        plaza_count=$(curl -fsS http://10.66.66.5:9091/api/v2/services/plaza | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' || true)
+                        plaza_count=$(curl -fsS http://10.66.66.5:9091/api/v2/services/plaza | grep -o '"key"' | wc -l | tr -d ' ' || true)
                         echo "health=$health plaza_count=$plaza_count"
                         [ "$health" = "200" ] && [ "$plaza_count" = "14" ] && echo HEALTH_OK && exit 0
                         sleep 3
