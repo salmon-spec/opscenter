@@ -32,9 +32,6 @@
         <h2 class="topbar-title">{{ route.meta.title || '工作台' }}</h2>
         <div class="topbar-right">
           <span class="muted">{{ nowStr }}</span>
-          <button class="account-switch" title="退出当前 Keycloak 会话并使用其他账号" @click="switchAccount">
-            统一账号 · 切换账号
-          </button>
         </div>
       </header>
       <div class="content" :class="{ standalone: isStandalone }">
@@ -51,11 +48,10 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { api } from './api'
 
 const route = useRoute()
-const router = useRouter()
 const isStandalone = computed(() => !!route.meta.standalone)
 
 const navs = [
@@ -86,10 +82,6 @@ async function loadHosts() {
       online: list.filter((s) => s.status === 'online').length,
     }
   } catch { /* 后端未就绪时静默 */ }
-}
-
-function switchAccount() {
-  router.push('/switch-account')
 }
 
 // 全局 toast
@@ -146,11 +138,6 @@ onUnmounted(() => {
 }
 .topbar-title { font-size: 16px; margin: 0; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
-.account-switch {
-  border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--brand);
-  padding: 7px 10px; cursor: pointer; font-size: 12px;
-}
-.account-switch:hover { background: rgba(37,99,235,.06); border-color: var(--brand); }
 .content { flex: 1; overflow: auto; }
 .content.standalone { overflow: hidden; background: var(--screen-bg); }
 </style>

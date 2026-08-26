@@ -29,23 +29,24 @@ def _fake_db():
 
 def test_catalog_contains_exactly_the_approved_web_services():
     catalog = plaza.load_catalog()
-    assert len(catalog) == 14
+    assert len(catalog) == 13
     assert {item["key"] for item in catalog} == {
         "gitea", "gitlab", "jenkins", "nexus", "sonarqube",
         "opsbox", "ai-hub", "apollo-portal", "token-monitor", "sanshengliubu",
-        "grafana", "prometheus", "keycloak", "pve",
+        "grafana", "prometheus", "pve",
     }
     assert all(item["enabled"] for item in catalog)
     assert Counter(item["category"] for item in catalog) == {
         "代码与CI/CD": 5,
         "应用服务": 5,
         "监控与日志": 2,
-        "安全与运维": 2,
+        "安全与运维": 1,
     }
     by_key = {item["key"]: item for item in catalog}
-    assert by_key["sonarqube"]["auth_mode"] == "keycloak"
-    assert "/sessions/init/oidc" in by_key["sonarqube"]["entry_url"]
+    assert by_key["sonarqube"]["auth_mode"] == "local"
+    assert by_key["sonarqube"]["entry_url"].endswith("/sessions/new")
     assert by_key["nexus"]["auth_mode"] == "local"
+    assert all(item["auth_mode"] != "keycloak" for item in catalog)
 
 
 def test_plaza_response_never_contains_credentials(monkeypatch):
@@ -59,7 +60,7 @@ def test_plaza_response_never_contains_credentials(monkeypatch):
         },
     )
     rows = plaza.list_plaza_services()
-    assert len(rows) == 14
+    assert len(rows) == 13
     assert all(row["status"] == "up" for row in rows)
     assert all("password" not in row and "account" not in row and "client_secret" not in row for row in rows)
-    assert {row["auth_mode"] for row in rows} == {"none", "local", "keycloak"}
+    assert {row["auth_mode"] for row in rows} == {"none", "local"}

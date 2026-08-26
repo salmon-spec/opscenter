@@ -30,12 +30,11 @@ from app.alerting import (
 )
 from app.config import RETENTION_METRIC_DAYS
 
-# === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康 / T5 SSO） ===
+# === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康） ===
 from app.api_keys import router as api_keys_router
 from app.topology import router as topology_router
 from app.control import router as control_router
 from app.service_health import service_health_loop
-from app.sso import router as sso_router
 from app.plaza import router as plaza_router
 
 class TerminalCreateRequest(BaseModel):
@@ -253,11 +252,10 @@ app.add_middleware(
 # v3.28 A1 操作审计中间件（写操作记录；AUDIT_ENABLED=false 关闭）
 app.add_middleware(AuditMiddleware)
 
-# === v3.29 路由挂载（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T5 SSO） ===
+# === v3.29 路由挂载（T2 密钥 / T3 详情拓扑大屏 / 主机操控） ===
 app.include_router(api_keys_router)
 app.include_router(topology_router)
 app.include_router(control_router)
-app.include_router(sso_router)
 app.include_router(plaza_router)
 
 # === Startup ===

@@ -2,37 +2,37 @@
   {
     "key": "gitea",
     "name": "Gitea",
-    "description": "代码仓库（Keycloak SSO）",
+    "description": "代码仓库",
     "server_host": "10.66.66.4",
-    "entry_url": "http://10.66.66.4:3000/user/oauth2/Ops%20SSO",
+    "entry_url": "http://10.66.66.4:3000/user/login",
     "health_url": "http://10.66.66.4:3000/",
     "category": "代码与CI/CD",
     "icon": "code",
-    "auth_mode": "keycloak",
+    "auth_mode": "local",
     "enabled": true
   },
   {
     "key": "gitlab",
     "name": "GitLab",
-    "description": "代码与 CI/CD 平台（Keycloak SSO）",
+    "description": "代码与 CI/CD 平台",
     "server_host": "10.66.66.4",
-    "entry_url": "http://10.66.66.4:8082/users/sign_in?ops_sso=v4",
+    "entry_url": "http://10.66.66.4:8082/users/sign_in",
     "health_url": "http://10.66.66.4:8082/users/sign_in",
     "category": "代码与CI/CD",
     "icon": "code",
-    "auth_mode": "keycloak",
+    "auth_mode": "local",
     "enabled": true
   },
   {
     "key": "jenkins",
     "name": "Jenkins",
-    "description": "CI/CD 流水线（Keycloak SSO）",
+    "description": "CI/CD 流水线",
     "server_host": "10.66.66.4",
-    "entry_url": "http://10.66.66.4:8080/securityRealm/commenceLogin",
+    "entry_url": "http://10.66.66.4:8080/login",
     "health_url": "http://10.66.66.4:8080/login",
     "category": "代码与CI/CD",
     "icon": "hammer",
-    "auth_mode": "keycloak",
+    "auth_mode": "local",
     "enabled": true
   },
   {
@@ -50,13 +50,13 @@
   {
     "key": "sonarqube",
     "name": "SonarQube",
-    "description": "代码质量平台（Keycloak SSO）",
+    "description": "代码质量平台",
     "server_host": "10.66.66.4",
-    "entry_url": "http://10.66.66.4:9000/sessions/init/oidc?return_to=%2F",
+    "entry_url": "http://10.66.66.4:9000/sessions/new",
     "health_url": "http://10.66.66.4:9000/api/system/status",
     "category": "代码与CI/CD",
     "icon": "shield",
-    "auth_mode": "keycloak",
+    "auth_mode": "local",
     "enabled": true
   },
   {
@@ -122,13 +122,13 @@
   {
     "key": "grafana",
     "name": "Grafana",
-    "description": "监控仪表盘（Keycloak SSO）",
+    "description": "监控仪表盘",
     "server_host": "192.168.1.153",
-    "entry_url": "http://10.66.66.5:3000/login/generic_oauth",
+    "entry_url": "http://10.66.66.5:3000/login",
     "health_url": "http://10.66.66.5:3000/api/health",
     "category": "监控与日志",
     "icon": "chart",
-    "auth_mode": "keycloak",
+    "auth_mode": "local",
     "enabled": true
   },
   {
@@ -144,27 +144,15 @@
     "enabled": true
   },
   {
-    "key": "keycloak",
-    "name": "Keycloak",
-    "description": "OPS 统一身份认证",
-    "server_host": "10.66.66.6",
-    "entry_url": "http://10.66.66.6:8180/admin/ops/console/",
-    "health_url": "http://10.66.66.6:8180/realms/ops/.well-known/openid-configuration",
-    "category": "安全与运维",
-    "icon": "shield",
-    "auth_mode": "keycloak",
-    "enabled": true
-  },
-  {
     "key": "pve",
     "name": "Proxmox VE",
-    "description": "虚拟化管理平台（Keycloak SSO）",
+    "description": "虚拟化管理平台",
     "server_host": "10.66.66.3",
-    "entry_url": "/api/v2/sso/pve",
+    "entry_url": "https://10.66.66.3:8006/",
     "health_url": "https://10.66.66.3:8006/",
     "category": "安全与运维",
     "icon": "server",
-    "auth_mode": "keycloak",
+    "auth_mode": "local",
     "allow_insecure_tls": true,
     "enabled": true
   }

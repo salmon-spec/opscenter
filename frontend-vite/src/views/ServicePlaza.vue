@@ -3,7 +3,7 @@
     <div class="view-head">
       <div>
         <h1 class="view-title">服务广场</h1>
-        <p class="view-sub">统一入口 · 点击「免密进入」直达服务</p>
+        <p class="view-sub">统一入口 · 各服务使用原有账号密码登录</p>
       </div>
       <div style="display:flex;gap:8px">
         <input v-model="search" class="input" style="width:280px" placeholder="搜索服务名称 / 地址…" />
@@ -40,14 +40,7 @@
             class="btn btn-primary btn-sm enter-btn"
             :href="s.entry_url" target="_blank" rel="noopener"
             @click.stop
-          >进入</a>
-          <a
-            v-if="s.auth_mode === 'keycloak'"
-            class="btn btn-sm enter-btn"
-            :href="s.entry_url" target="_blank" rel="noopener noreferrer"
-            title="在新标签页使用当前 Keycloak 统一账号"
-            @click.stop
-          >免密进入</a>
+          >进入服务</a>
           <button class="btn btn-sm btn-ghost" title="查看详情" @click.stop="openDetail(s)">详情</button>
         </div>
       </div>
