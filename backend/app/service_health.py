@@ -23,6 +23,9 @@ SERVICE_HEALTH_INTERVAL_SEC = int(os.getenv("SERVICE_HEALTH_INTERVAL_SEC", "60")
 SERVICE_HEALTH_FAIL_THRESHOLD = int(os.getenv("SERVICE_HEALTH_FAIL_THRESHOLD", "3"))
 SERVICE_HEALTH_TIMEOUT_SEC = float(os.getenv("SERVICE_HEALTH_TIMEOUT_SEC", "5"))
 SERVICE_HEALTH_MAX_WORKERS = int(os.getenv("SERVICE_HEALTH_MAX_WORKERS", "8"))
+SERVICE_HEALTH_PROBE_UNCONFIGURED = os.getenv(
+    "SERVICE_HEALTH_PROBE_UNCONFIGURED", "false"
+).strip().lower() in ("1", "true", "yes")
 SERVICE_HEALTH_ENABLED = os.getenv("SERVICE_HEALTH_ENABLED", "true").strip().lower() in (
     "1", "true", "yes",
 )
@@ -42,7 +45,9 @@ def _build_check_url(svc) -> Optional[str]:
         return None
     if health_path:
         return url.rstrip("/") + "/" + health_path.lstrip("/")
-    return url
+    # Auto-discovery frequently assigns HTTP-looking URLs to SSH, Redis,
+    # PostgreSQL and gRPC ports. They are not authoritative probe targets.
+    return url if SERVICE_HEALTH_PROBE_UNCONFIGURED else None
 
 
 def _check_service(svc) -> Tuple[Optional[bool], str]:
@@ -152,6 +157,8 @@ def run_service_health_cycle() -> int:
             for svc in services:
                 ok, err = probe_results[str(svc.id)]
                 if ok is None:
+                    if svc.status != ServiceStatus.unknown.value:
+                        status_updates[svc.id] = ServiceStatus.unknown.value
                     continue
                 state = _health_state.setdefault(str(svc.id), {"fail_count": 0, "notified": False})
                 if ok:

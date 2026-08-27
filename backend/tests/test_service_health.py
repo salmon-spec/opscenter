@@ -5,9 +5,9 @@ from types import SimpleNamespace
 from app import service_health
 
 
-def _service(url="http://192.168.1.10:8080", status="up"):
+def _service(url="http://192.168.1.10:8080", status="up", health_path="/"):
     return SimpleNamespace(
-        id="svc-1", name="demo", url=url, health_path="",
+        id="svc-1", name="demo", url=url, health_path=health_path,
         server_id="server-1", status=status,
     )
 
@@ -25,6 +25,11 @@ def test_http_auth_responses_are_reachable(monkeypatch):
 def test_unsupported_or_placeholder_url_is_skipped():
     assert service_health._check_service(_service("#systemd:sshd"))[0] is None
     assert service_health._check_service(_service("postgresql://192.168.1.10:5432"))[0] is None
+
+
+def test_auto_discovered_url_without_health_path_is_not_authoritative(monkeypatch):
+    monkeypatch.setattr(service_health, "SERVICE_HEALTH_PROBE_UNCONFIGURED", False)
+    assert service_health._check_service(_service(health_path=""))[0] is None
 
 
 def test_snapshot_is_unknown_before_first_probe(monkeypatch):
@@ -72,7 +77,7 @@ def test_failure_threshold_controls_persisted_down_state(monkeypatch):
 
 
 def test_network_probe_runs_after_snapshot_db_session_closes(monkeypatch):
-    svc = _service()
+    svc = _service(status="unknown")
     state = {"db_open": False}
 
     class Query:
