@@ -3334,7 +3334,9 @@ def get_agent_history_api(server_id: str, metric: str = "cpu", hours: int = 24):
         
         values = []
         for r in records:
-            values.append([r.timestamp.timestamp(), r.value])
+            # Metric timestamps are stored as naive UTC. datetime.timestamp()
+            # would reinterpret them in the server's Asia/Shanghai timezone.
+            values.append([calendar.timegm(r.timestamp.utctimetuple()), r.value])
         
         return {"metric": metric, "values": _downsample_history(values, hours)}
 
