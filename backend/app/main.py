@@ -34,7 +34,7 @@ from app.config import RETENTION_METRIC_DAYS
 from app.api_keys import router as api_keys_router
 from app.topology import router as topology_router
 from app.control import router as control_router
-from app.service_health import service_health_loop
+from app.service_health import run_service_health_cycle, service_health_loop
 from app.plaza import router as plaza_router
 
 class TerminalCreateRequest(BaseModel):
@@ -261,97 +261,41 @@ app.include_router(plaza_router)
 # === Startup ===
 
 # === Background Health Check ===
-def _run_health_check():
-    """Synchronous health check - runs in thread to avoid blocking event loop."""
-    import requests as req
+def _run_server_health_check():
+    """Check host reachability without holding a DB session during socket I/O."""
     try:
         with get_db() as db:
-            # --- Check service health ---
-            services = db.query(Service).all()
-            for svc in services:
-                if not svc.url:
-                    continue
-                try:
-                    check_url = svc.url
+            targets = [
+                (srv.id, srv.agent_type, srv.host, srv.ssh_port or 22, srv.agent_port or 19100)
+                for srv in db.query(Server).all()
+            ]
 
-                    # --- Fix 1: Skip placeholder URLs (#systemd:xxx, #none, etc.) ---
-                    if check_url.startswith('#'):
-                        continue
+        results = {}
+        for server_id, agent_type, host, ssh_port, agent_port in targets:
+            check_host = "127.0.0.1" if agent_type == "local" else host
+            check_port = agent_port if agent_type == "local" else ssh_port
+            try:
+                with socket.create_connection((check_host, check_port), timeout=3):
+                    results[server_id] = True
+            except OSError:
+                results[server_id] = False
 
-                    # --- Fix 2: Non-HTTP protocols use TCP socket detection ---
-                    if not check_url.startswith(('http://', 'https://')):
-                        m = re.match(r'\w+://([^:/]+)(?::(\d+))', check_url)
-                        if m:
-                            h = m.group(1)
-
-                            # 优先使用 svc.port（宿主机映射端口），而非 URL 中解析的端口
-
-                            p = svc.port if svc.port else (int(m.group(2)) if m.group(2) else None)
-                            if p:
-                                try:
-                                    with socket.create_connection((h, p), timeout=3):
-                                        svc.status = ServiceStatus.up.value
-                                except Exception:
-                                    svc.status = ServiceStatus.down.value
-                        continue
-
-                    # --- Fix 3: Local server public IP → 127.0.0.1 ---
-                    server = db.query(Server).filter(Server.id == svc.server_id).first()
-                    if server and server.agent_type == "local" and server.host:
-                        check_url = check_url.replace(server.host, "127.0.0.1")
-
-                    # Use health_path for actual health check if available
-                    if svc.health_path:
-                        base = svc.url if svc.url.startswith("http") else ""
-                        if not base:
-                            host = server.host if server else LOCAL_HOST
-                            base = f"http://{host}"
-                        check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
-                    elif check_url.startswith("/"):
-                        host = server.host_ip if hasattr(server, 'host_ip') and server.host_ip else (server.host if server else LOCAL_HOST)
-                        check_url = f"http://{host}{check_url}"
-                    resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
-                    svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
-                except Exception:
-                    svc.status = ServiceStatus.down.value
+        now = datetime.utcnow()
+        with get_db() as db:
+            for server_id, is_online in results.items():
+                values = {Server.status: ServerStatus.online.value if is_online else ServerStatus.offline.value}
+                if is_online:
+                    values[Server.last_seen] = now
+                db.query(Server).filter(Server.id == server_id).update(values)
             db.commit()
-
-            # --- Check server reachability ---
-            servers = db.query(Server).all()
-            for srv in servers:
-                if srv.agent_type == "local":
-                    # Local server: check Agent port instead of SSH
-                    try:
-                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                        sock.settimeout(3)
-                        result = sock.connect_ex(("127.0.0.1", srv.agent_port or 19100))
-                        sock.close()
-                        srv.status = ServerStatus.online.value if result == 0 else ServerStatus.offline.value
-                    except Exception:
-                        srv.status = ServerStatus.offline.value
-                    srv.last_seen = datetime.utcnow()
-                    continue
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(3)
-                    result = sock.connect_ex((srv.host, srv.ssh_port or 22))
-                    sock.close()
-                    if result == 0:
-                        srv.status = ServerStatus.online.value
-                        srv.last_seen = datetime.utcnow()
-                    else:
-                        srv.status = ServerStatus.offline.value
-                except Exception:
-                    srv.status = ServerStatus.offline.value
-            db.commit()
-    except Exception as e:
-        print(f"Health check error: {e}")
+    except Exception as exc:
+        print(f"Server health check error: {exc}")
 
 
 async def background_health_check():
-    """Periodically check all services and servers health status."""
+    """Periodically check host reachability; services use service_health_loop."""
     while True:
-        await asyncio.to_thread(_run_health_check)
+        await asyncio.to_thread(_run_server_health_check)
         await asyncio.sleep(60)
 
 
@@ -2598,58 +2542,8 @@ def monitor_health_check(server_id: str):
 # === Health Check Trigger ===
 @app.post("/api/v2/health-check")
 def trigger_health_check():
-    """Manually trigger health check for all services."""
-    import requests as req
-    checked = 0
-    with get_db() as db:
-        services = db.query(Service).all()
-        for svc in services:
-            if not svc.url:
-                continue
-            try:
-                check_url = svc.url
-
-                # --- Fix 1: Skip placeholder URLs ---
-                if check_url.startswith('#'):
-                    continue
-
-                # --- Fix 2: Non-HTTP protocols use TCP socket detection ---
-                if not check_url.startswith(('http://', 'https://')):
-                    m = re.match(r'\w+://([^:/]+)(?::(\d+))', check_url)
-                    if m:
-                        h = m.group(1)
-
-                        # 优先使用 svc.port（宿主机映射端口），而非 URL 中解析的端口
-
-                        p = svc.port if svc.port else (int(m.group(2)) if m.group(2) else None)
-                        if p:
-                            try:
-                                with socket.create_connection((h, p), timeout=3):
-                                    svc.status = ServiceStatus.up.value
-                            except Exception:
-                                svc.status = ServiceStatus.down.value
-                    continue
-
-                # --- Fix 3: Local server public IP → 127.0.0.1 ---
-                srv = db.query(Server).filter(Server.id == svc.server_id).first()
-                if srv and srv.agent_type == "local" and srv.host:
-                    check_url = check_url.replace(srv.host, "127.0.0.1")
-
-                if svc.health_path:
-                    base = svc.url if svc.url.startswith("http") else ""
-                    if not base:
-                        host = srv.host if srv else LOCAL_HOST
-                        base = f"http://{host}"
-                    check_url = f"{base.rstrip('/')}/{svc.health_path.lstrip('/')}"
-                elif check_url.startswith("/"):
-                    host = srv.host_ip if hasattr(srv, 'host_ip') and srv.host_ip else (srv.host if srv else LOCAL_HOST)
-                    check_url = f"http://{host}{check_url}"
-                resp = req.head(check_url, timeout=5, allow_redirects=True, verify=False)
-                svc.status = ServiceStatus.up.value if resp.status_code < 500 else ServiceStatus.down.value
-            except Exception:
-                svc.status = ServiceStatus.down.value
-            checked += 1
-        db.commit()
+    """Manually trigger the same coordinator used by the background loop."""
+    checked = run_service_health_cycle()
     return {"checked": checked, "message": f"Health check completed for {checked} services"}
 
 

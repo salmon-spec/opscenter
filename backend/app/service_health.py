@@ -1,69 +1,71 @@
-"""服务健康检查与告警（v3.29, T4）。
-
-在现有告警引擎（服务器/资源维度）之外补充服务粒度健康检查：
-- 轮询 services 表中启用的服务（url + health_path），HTTP 探测
-- 连续失败 N 次（防抖动）触发飞书告警，恢复后自动发送恢复通知
-- 健康状态内存保存（进程内），提供 get_health_snapshot 供 /api/v2/services/health 使用
-
-设计取舍：不新增表（T1 模型已定稿），间隔/阈值走环境变量，状态进程内存；
-如需持久化历史可后续叠加 service_uptime 表。
-"""
+"""Unified service health checks and alert state management."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
 
 import requests
 
 from app.config import DEFAULT_NOTIFY_WEBHOOKS
 from app.database import get_db
-from app.models import Server, Service
+from app.models import Server, Service, ServiceStatus
 
 logger = logging.getLogger("opscenter.service_health")
 
-# 环境变量配置（默认：60s 探测一次，连续 3 次失败告警）
 SERVICE_HEALTH_INTERVAL_SEC = int(os.getenv("SERVICE_HEALTH_INTERVAL_SEC", "60"))
 SERVICE_HEALTH_FAIL_THRESHOLD = int(os.getenv("SERVICE_HEALTH_FAIL_THRESHOLD", "3"))
 SERVICE_HEALTH_TIMEOUT_SEC = float(os.getenv("SERVICE_HEALTH_TIMEOUT_SEC", "5"))
-SERVICE_HEALTH_ENABLED = os.getenv("SERVICE_HEALTH_ENABLED", "true").strip().lower() in ("1", "true", "yes")
+SERVICE_HEALTH_MAX_WORKERS = int(os.getenv("SERVICE_HEALTH_MAX_WORKERS", "8"))
+SERVICE_HEALTH_ENABLED = os.getenv("SERVICE_HEALTH_ENABLED", "true").strip().lower() in (
+    "1", "true", "yes",
+)
 
-# 健康状态：service_id(str) -> {fail_count, notified, last_ok, last_fail, last_error}
 _health_state: Dict[str, dict] = {}
+_state_lock = threading.Lock()
+_cycle_lock = threading.Lock()
 
 
-def _build_check_url(svc: Service) -> Optional[str]:
-    """构造探测 URL：health_path 优先（含 http 则直接用），否则用服务 url。"""
-    if svc.health_path:
-        hp = svc.health_path.strip()
-        if hp.lower().startswith(("http://", "https://")):
-            return hp
-        return svc.url.rstrip("/") + "/" + hp.lstrip("/")
-    return svc.url or None
+def _build_check_url(svc) -> Optional[str]:
+    """Build an HTTP health URL. Placeholder and non-HTTP URLs are skipped."""
+    url = (getattr(svc, "url", None) or "").strip()
+    health_path = (getattr(svc, "health_path", None) or "").strip()
+    if health_path.lower().startswith(("http://", "https://")):
+        return health_path
+    if not url or url.startswith("#") or not url.lower().startswith(("http://", "https://")):
+        return None
+    if health_path:
+        return url.rstrip("/") + "/" + health_path.lstrip("/")
+    return url
 
 
-def _check_service(svc: Service) -> Tuple[bool, str]:
-    """HTTP 探测单个服务，返回 (是否健康, 错误信息)。"""
+def _check_service(svc) -> Tuple[Optional[bool], str]:
+    """Probe one service; None means it has no supported HTTP endpoint."""
     url = _build_check_url(svc)
     if not url:
-        return True, "无探测地址"
+        return None, "无 HTTP 探测地址"
     try:
-        resp = requests.get(url, timeout=SERVICE_HEALTH_TIMEOUT_SEC, allow_redirects=True)
-        # 2xx/3xx 视为健康；健康路径显式返回 200 的按 200 处理，其余 3xx 也放行
-        if resp.status_code < 400:
+        response = requests.get(
+            url,
+            timeout=SERVICE_HEALTH_TIMEOUT_SEC,
+            allow_redirects=True,
+            headers={"User-Agent": "OpsCenter-HealthCheck/3.30"},
+        )
+        if response.status_code < 400 or response.status_code in (401, 403):
             return True, ""
-        return False, f"HTTP {resp.status_code}"
-    except requests.RequestException as e:
-        return False, str(e)[:120]
+        return False, f"HTTP {response.status_code}"
+    except requests.RequestException as exc:
+        return False, str(exc)[:120]
 
 
 def _notify_webhook(title: str, color: str, elements: list) -> None:
-    """发送飞书交互卡片到全局 webhook（复用现有通知格式）。"""
-    webhooks = DEFAULT_NOTIFY_WEBHOOKS
-    if not webhooks:
+    if not DEFAULT_NOTIFY_WEBHOOKS:
         return
     card = {
         "msg_type": "interactive",
@@ -73,40 +75,29 @@ def _notify_webhook(title: str, color: str, elements: list) -> None:
             "elements": elements,
         },
     }
-    for url in webhooks:
+    for url in DEFAULT_NOTIFY_WEBHOOKS:
         try:
             requests.post(url, json=card, timeout=5)
-        except requests.RequestException as e:
-            logger.warning("webhook 发送失败: %s", e)
+        except requests.RequestException as exc:
+            logger.warning("webhook 发送失败: %s", exc)
 
 
-def _fire_alert(svc: Service, server: Optional[Server], err: str) -> None:
-    """触发告警（飞书 + 状态标记），连续失败达到阈值时仅通知一次。"""
-    st = _health_state.setdefault(str(svc.id), {"fail_count": 0, "notified": False})
-    st["fail_count"] += 1
-    st["last_fail"] = time.time()
-    st["last_error"] = err
-    if st["fail_count"] >= SERVICE_HEALTH_FAIL_THRESHOLD and not st["notified"]:
-        st["notified"] = True
-        loc = server.name if server else svc.server_id
-        _notify_webhook(
-            f"🔴 [服务告警] {svc.name} — {loc}",
-            "red",
-            [
-                {"tag": "div", "text": {"tag": "lark_md", "content": f"**服务**：{svc.name}\n**地址**：{svc.url}\n**连续失败**：{st['fail_count']} 次\n**原因**：{err}"}},
-                {"tag": "hr"},
-                {"tag": "note", "elements": [{"tag": "plain_text", "content": f"OpsCenter 服务健康检查 · {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"}]},
-            ],
-        )
-        logger.warning("服务告警触发: %s (%s)", svc.name, err)
+def _fire_alert(svc, server, err: str, fail_count: int) -> None:
+    loc = server.name if server else getattr(svc, "server_id", "")
+    _notify_webhook(
+        f"🔴 [服务告警] {svc.name} — {loc}",
+        "red",
+        [
+            {"tag": "div", "text": {"tag": "lark_md", "content": f"**服务**：{svc.name}\n**地址**：{svc.url}\n**连续失败**：{fail_count} 次\n**原因**：{err}"}},
+            {"tag": "hr"},
+            {"tag": "note", "elements": [{"tag": "plain_text", "content": f"OpsCenter 服务健康检查 · {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"}]},
+        ],
+    )
+    logger.warning("服务告警触发: %s (%s)", svc.name, err)
 
 
-def _fire_recovery(svc: Service, server: Optional[Server]) -> None:
-    """服务恢复通知。"""
-    st = _health_state.setdefault(str(svc.id), {"fail_count": 0, "notified": False})
-    st["notified"] = False
-    st["last_ok"] = time.time()
-    loc = server.name if server else svc.server_id
+def _fire_recovery(svc, server) -> None:
+    loc = server.name if server else getattr(svc, "server_id", "")
     _notify_webhook(
         f"✅ [服务恢复] {svc.name} — {loc}",
         "green",
@@ -119,70 +110,119 @@ def _fire_recovery(svc: Service, server: Optional[Server]) -> None:
     logger.info("服务恢复: %s", svc.name)
 
 
-def run_service_health_cycle() -> int:
-    """单轮健康检查：遍历启用服务探测，返回检查数量。"""
-    checked = 0
+def _snapshot_targets():
+    """Read scalar target data and close the DB session before network I/O."""
     with get_db() as db:
-        services = db.query(Service).filter(Service.hidden == False).all()  # noqa: E712
-        server_map = {s.id: s for s in db.query(Server).all()}
-        for svc in services:
-            ok, err = _check_service(svc)
-            st = _health_state.setdefault(str(svc.id), {"fail_count": 0, "notified": False})
-            server = server_map.get(svc.server_id)
-            if ok:
-                st["fail_count"] = 0
-                st["last_ok"] = time.time()
-                st["last_error"] = ""
-                if st["notified"]:
-                    _fire_recovery(svc, server)
+        services = [
+            SimpleNamespace(
+                id=svc.id, name=svc.name, url=svc.url, health_path=svc.health_path,
+                server_id=svc.server_id, status=svc.status,
+            )
+            for svc in db.query(Service).filter(Service.hidden == False).all()  # noqa: E712
+        ]
+        servers = {
+            srv.id: SimpleNamespace(id=srv.id, name=srv.name, host=srv.host)
+            for srv in db.query(Server).all()
+        }
+    return services, servers
+
+
+def run_service_health_cycle() -> int:
+    """Run one concurrent cycle without holding a DB connection during I/O."""
+    if not _cycle_lock.acquire(blocking=False):
+        logger.info("服务健康检查仍在运行，跳过重叠周期")
+        return 0
+    try:
+        services, server_map = _snapshot_targets()
+        probe_results = {}
+        workers = max(1, min(SERVICE_HEALTH_MAX_WORKERS, len(services) or 1))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="service-health") as executor:
+            future_map = {executor.submit(_check_service, svc): svc for svc in services}
+            for future in as_completed(future_map):
+                svc = future_map[future]
+                try:
+                    probe_results[str(svc.id)] = future.result()
+                except Exception as exc:
+                    probe_results[str(svc.id)] = (False, str(exc)[:120])
+
+        status_updates = {}
+        notifications = []
+        now = time.time()
+        with _state_lock:
+            for svc in services:
+                ok, err = probe_results[str(svc.id)]
+                if ok is None:
+                    continue
+                state = _health_state.setdefault(str(svc.id), {"fail_count": 0, "notified": False})
+                if ok:
+                    was_notified = state.get("notified", False)
+                    state.update(fail_count=0, notified=False, last_ok=now, last_error="")
+                    status_updates[svc.id] = ServiceStatus.up.value
+                    if was_notified:
+                        notifications.append(("recovery", svc, server_map.get(svc.server_id), "", 0))
+                else:
+                    state["fail_count"] = state.get("fail_count", 0) + 1
+                    state.update(last_fail=now, last_error=err)
+                    if state["fail_count"] >= SERVICE_HEALTH_FAIL_THRESHOLD:
+                        status_updates[svc.id] = ServiceStatus.down.value
+                        if not state.get("notified", False):
+                            state["notified"] = True
+                            notifications.append(("alert", svc, server_map.get(svc.server_id), err, state["fail_count"]))
+                    elif not svc.status:
+                        status_updates[svc.id] = ServiceStatus.unknown.value
+
+        if status_updates:
+            with get_db() as db:
+                for service_id, status in status_updates.items():
+                    db.query(Service).filter(Service.id == service_id).update({Service.status: status})
+                db.commit()
+
+        for kind, svc, server, err, fail_count in notifications:
+            if kind == "alert":
+                _fire_alert(svc, server, err, fail_count)
             else:
-                _fire_alert(svc, server, err)
-            checked += 1
-    return checked
+                _fire_recovery(svc, server)
+        return sum(1 for result in probe_results.values() if result[0] is not None)
+    finally:
+        _cycle_lock.release()
 
 
 async def service_health_loop() -> None:
-    """后台循环：启动后每 SERVICE_HEALTH_INTERVAL_SEC 执行一轮健康检查。"""
     if not SERVICE_HEALTH_ENABLED:
         logger.info("服务健康检查已禁用（SERVICE_HEALTH_ENABLED=false）")
         return
-    # 等待应用启动完成后再开始，避免与 startup 抢占数据库
     await asyncio.sleep(30)
     while True:
         try:
-            n = await asyncio.to_thread(run_service_health_cycle)
-            logger.info("服务健康检查完成，共检查 %d 个服务", n)
-        except Exception as e:
-            logger.error("服务健康检查异常: %s", e)
+            checked = await asyncio.to_thread(run_service_health_cycle)
+            logger.info("服务健康检查完成，共检查 %d 个服务", checked)
+        except Exception as exc:
+            logger.exception("服务健康检查异常: %s", exc)
         await asyncio.sleep(SERVICE_HEALTH_INTERVAL_SEC)
 
 
 def get_health_snapshot() -> List[dict]:
-    """返回全量服务健康快照（供 /api/v2/services/health 与前端大屏使用）。"""
-    with get_db() as db:
-        services = db.query(Service).filter(Service.hidden == False).all()  # noqa: E712
-        server_map = {s.id: s for s in db.query(Server).all()}
-        out = []
-        for svc in services:
-            st = _health_state.get(str(svc.id), {"fail_count": 0, "notified": False})
-            server = server_map.get(svc.server_id)
+    services, server_map = _snapshot_targets()
+    output = []
+    with _state_lock:
+        states = {key: value.copy() for key, value in _health_state.items()}
+    for svc in services:
+        state = states.get(str(svc.id), {})
+        if not state.get("last_ok") and not state.get("last_fail"):
             status = "unknown"
-            if st.get("notified"):
-                status = "down"
-            elif st.get("fail_count", 0) > 0:
-                status = "degraded"
-            else:
-                status = "up"
-            out.append({
-                "service_id": str(svc.id),
-                "name": svc.name,
-                "url": svc.url,
-                "status": status,
-                "fail_count": st.get("fail_count", 0),
-                "last_ok": st.get("last_ok"),
-                "last_fail": st.get("last_fail"),
-                "last_error": st.get("last_error", ""),
-                "server_name": server.name if server else None,
-                "server_host": server.host if server else None,
-            })
-        return out
+        elif state.get("notified"):
+            status = "down"
+        elif state.get("fail_count", 0) > 0:
+            status = "degraded"
+        else:
+            status = "up"
+        server = server_map.get(svc.server_id)
+        output.append({
+            "service_id": str(svc.id), "name": svc.name, "url": svc.url,
+            "status": status, "fail_count": state.get("fail_count", 0),
+            "last_ok": state.get("last_ok"), "last_fail": state.get("last_fail"),
+            "last_error": state.get("last_error", ""),
+            "server_name": server.name if server else None,
+            "server_host": server.host if server else None,
+        })
+    return output
