@@ -271,7 +271,7 @@ def _run_server_health_check():
             ]
 
         results = {}
-        for server_id, agent_type, host, ssh_port, agent_port in targets:
+        for server_id, agent_type, host, ssh_port, agent_port in sorted(targets, key=lambda item: str(item[0])):
             check_host = "127.0.0.1" if agent_type == "local" else host
             check_port = agent_port if agent_type == "local" else ssh_port
             try:
@@ -3121,111 +3121,104 @@ def uninstall_agent_api(server_id: str):
 # === Agent Metrics Collection ===
 
 def _collect_agent_metrics():
-    """Synchronous: collect metrics from all running agents and store history."""
-    import requests as req
+    """Collect Agent metrics without holding DB sessions during network I/O."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from types import SimpleNamespace
+
     try:
         with get_db() as db:
-            # Create table if not exists
-            Base.metadata.create_all(bind=engine)
-            
-            servers = db.query(Server).filter(
-                Server.agent_status == "running"
-            ).all()
-            
-            for srv in servers:
+            targets = [
+                SimpleNamespace(
+                    id=srv.id, host=srv.host, agent_type=srv.agent_type,
+                    agent_port=srv.agent_port or 19100, agent_token=srv.agent_token or "",
+                )
+                for srv in db.query(Server).filter(Server.agent_status == "running").all()
+            ]
+
+        # Agent HTTP calls run concurrently after the read session has closed.
+        samples = {}
+        workers = max(1, min(8, len(targets) or 1))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="agent-metrics") as executor:
+            future_map = {
+                executor.submit(
+                    fetch_agent_metrics,
+                    "127.0.0.1" if target.agent_type == "local" else target.host,
+                    target.agent_port,
+                    target.agent_token,
+                ): target
+                for target in targets
+            }
+            for future in as_completed(future_map):
+                target = future_map[future]
                 try:
-                    data = fetch_agent_metrics("127.0.0.1" if srv.agent_type == "local" else srv.host, srv.agent_port or 19100, srv.agent_token or "")
-                    if not data:
-                        # Agent unreachable
-                        srv.agent_status = "stopped"
-                        continue
-                    
-                    # Store historical metrics
-                    from sqlalchemy import func as sa_func
-                    now = datetime.utcnow()
-                    # Get current cumulative values from agent
-                    cur_net_rx = data.get("net_rx_bytes", 0) or 0
-                    cur_net_tx = data.get("net_tx_bytes", 0) or 0
-                    cur_disk_read = data.get("disk_read_bytes", 0) or 0
-                    cur_disk_write = data.get("disk_write_bytes", 0) or 0
-                    
-                    # Calculate rates from last raw values
-                    net_rx_rate = 0.0
-                    net_tx_rate = 0.0
-                    disk_read_rate = 0.0
-                    disk_write_rate = 0.0
-                    
-                    for metric_name, raw_val in [("net_rx_raw", cur_net_rx), ("net_tx_raw", cur_net_tx), ("disk_read_raw", cur_disk_read), ("disk_write_raw", cur_disk_write)]:
-                        last_rec = db.query(MetricHistory).filter(
-                            MetricHistory.server_id == srv.id,
-                            MetricHistory.metric == metric_name,
-                        ).order_by(MetricHistory.timestamp.desc()).first()
-                        if last_rec and last_rec.value:
-                            elapsed = (now - last_rec.timestamp).total_seconds()
-                            if elapsed > 0:
-                                rate_val = max(0, (raw_val - last_rec.value) / elapsed)
-                            else:
-                                rate_val = 0
-                        else:
-                            rate_val = 0
-                        if metric_name == "net_rx_raw": net_rx_rate = rate_val
-                        elif metric_name == "net_tx_raw": net_tx_rate = rate_val
-                        elif metric_name == "disk_read_raw": disk_read_rate = rate_val
-                        elif metric_name == "disk_write_raw": disk_write_rate = rate_val
-                    
-                    metrics_to_store = {
-                        "cpu": data.get("cpu_percent", 0),
-                        "memory": data.get("memory_percent", 0),
-                        "disk": data.get("disk_percent", 0),
-                        "load1": data.get("load1", 0),
-                        "load5": data.get("load5", 0),
-                        "load15": data.get("load15", 0),
-                        "net_rx": net_rx_rate,
-                        "net_tx": net_tx_rate,
-                        "disk_read": disk_read_rate,
-                        "disk_write": disk_write_rate,
-                        "net_rx_raw": cur_net_rx,
-                        "net_tx_raw": cur_net_tx,
-                        "disk_read_raw": cur_disk_read,
-                        "disk_write_raw": cur_disk_write,
-                    }
-                    for metric_name, value in metrics_to_store.items():
-                        record = MetricHistory(
-                            server_id=srv.id,
-                            timestamp=now,
-                            metric=metric_name,
-                            value=float(value) if value else 0,
-                        )
-                        db.add(record)
-                    
-                    # Update server status
-                    srv.status = ServerStatus.online.value
-                    srv.last_seen = now
-                    srv.agent_status = "running"
-                    
-                except Exception as e:
-                    print(f"Agent metrics collection error for {srv.host}: {e}")
+                    samples[target.id] = future.result()
+                except Exception as exc:
+                    print(f"Agent metrics collection error for {target.host}: {exc}")
+                    samples[target.id] = None
+
+        # One short transaction per host avoids holding multiple server row locks.
+        for target in sorted(targets, key=lambda item: str(item.id)):
+            data = samples.get(target.id)
+            with get_db() as db:
+                srv = db.query(Server).filter(Server.id == target.id).first()
+                if not srv:
+                    continue
+                if not data:
                     srv.agent_status = "stopped"
-            
-            db.commit()
-            
-            # Cleanup old metrics (保留期由 RETENTION_METRIC_DAYS 控制，F2)
-            from datetime import timedelta
+                    db.commit()
+                    continue
+
+                now = datetime.utcnow()
+                raw_values = {
+                    "net_rx_raw": data.get("net_rx_bytes", 0) or 0,
+                    "net_tx_raw": data.get("net_tx_bytes", 0) or 0,
+                    "disk_read_raw": data.get("disk_read_bytes", 0) or 0,
+                    "disk_write_raw": data.get("disk_write_bytes", 0) or 0,
+                }
+                rates = {}
+                for metric_name, raw_value in raw_values.items():
+                    last_rec = db.query(MetricHistory).filter(
+                        MetricHistory.server_id == target.id,
+                        MetricHistory.metric == metric_name,
+                    ).order_by(MetricHistory.timestamp.desc()).first()
+                    elapsed = (now - last_rec.timestamp).total_seconds() if last_rec else 0
+                    rates[metric_name.removesuffix("_raw")] = (
+                        max(0, (raw_value - last_rec.value) / elapsed)
+                        if last_rec and last_rec.value is not None and elapsed > 0 else 0
+                    )
+
+                metrics_to_store = {
+                    "cpu": data.get("cpu_percent", 0),
+                    "memory": data.get("memory_percent", 0),
+                    "disk": data.get("disk_percent", 0),
+                    "load1": data.get("load1", 0),
+                    "load5": data.get("load5", 0),
+                    "load15": data.get("load15", 0),
+                    **rates,
+                    **raw_values,
+                }
+                for metric_name, value in metrics_to_store.items():
+                    db.add(MetricHistory(
+                        server_id=target.id, timestamp=now, metric=metric_name,
+                        value=float(value) if value else 0,
+                    ))
+                srv.status = ServerStatus.online.value
+                srv.last_seen = now
+                srv.agent_status = "running"
+                db.commit()
+
+        # Retention cleanup is isolated from metric ingestion transactions.
+        with get_db() as db:
             cutoff = datetime.utcnow() - timedelta(days=RETENTION_METRIC_DAYS)
             db.query(MetricHistory).filter(MetricHistory.timestamp < cutoff).delete()
-            db.commit()
-            
-            # Clean up old raw metrics that are older than 1 hour (rate calculation only needs recent)
             raw_cutoff = datetime.utcnow() - timedelta(hours=1)
-            for raw_m in ["net_rx_raw", "net_tx_raw", "disk_read_raw", "disk_write_raw"]:
-                db.query(MetricHistory).filter(
-                    MetricHistory.metric == raw_m,
-                    MetricHistory.timestamp < raw_cutoff,
-                ).delete()
+            db.query(MetricHistory).filter(
+                MetricHistory.metric.in_(["net_rx_raw", "net_tx_raw", "disk_read_raw", "disk_write_raw"]),
+                MetricHistory.timestamp < raw_cutoff,
+            ).delete(synchronize_session=False)
             db.commit()
-            
-    except Exception as e:
-        print(f"Agent metrics collection error: {e}")
+    except Exception as exc:
+        print(f"Agent metrics collection error: {exc}")
 
 
 async def background_agent_collector():
