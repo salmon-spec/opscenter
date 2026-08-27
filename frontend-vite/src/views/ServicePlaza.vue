@@ -38,7 +38,7 @@
         <div class="svc-actions">
           <a
             class="btn btn-primary btn-sm enter-btn"
-            :href="s.entry_url" target="_blank" rel="noopener"
+            :href="s.entry_url" target="_blank" rel="noopener noreferrer"
             @click.stop
           >进入服务</a>
           <button class="btn btn-sm btn-ghost" title="查看详情" @click.stop="openDetail(s)">详情</button>

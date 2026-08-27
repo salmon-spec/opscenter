@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import ssl
 import threading
 import time
@@ -35,12 +36,17 @@ def load_catalog() -> list[dict]:
     }
     keys: set[str] = set()
     for row in rows:
+        entry_url_env = row.get("entry_url_env")
+        if entry_url_env and os.getenv(entry_url_env):
+            row["entry_url"] = os.environ[entry_url_env]
         missing = required.difference(row)
         if missing:
             raise ValueError(f"service catalog {row.get('key', '<unknown>')} missing {sorted(missing)}")
         if row["key"] in keys:
             raise ValueError(f"duplicate service catalog key: {row['key']}")
         keys.add(row["key"])
+        if not row["entry_url"].startswith(("http://", "https://", "/")):
+            raise ValueError(f"invalid entry URL for {row['key']}")
         if not row["health_url"].startswith(("http://", "https://")):
             raise ValueError(f"invalid health URL for {row['key']}")
     return rows
