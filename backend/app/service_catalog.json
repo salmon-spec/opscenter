@@ -193,6 +193,30 @@
     "enabled": true
   },
   {
+    "key": "it-tools",
+    "name": "IT-Tools",
+    "description": "常用开发与运维工具集合",
+    "server_host": "10.66.66.6",
+    "entry_url": "http://10.66.66.6:8080/",
+    "health_url": "http://10.66.66.6:8080/",
+    "category": "应用服务",
+    "icon": "tool",
+    "auth_mode": "none",
+    "enabled": true
+  },
+  {
+    "key": "stirling-pdf",
+    "name": "Stirling PDF",
+    "description": "PDF 转换、合并、拆分与处理工具",
+    "server_host": "10.66.66.6",
+    "entry_url": "http://10.66.66.6:8081/",
+    "health_url": "http://10.66.66.6:8081/",
+    "category": "应用服务",
+    "icon": "box",
+    "auth_mode": "local",
+    "enabled": true
+  },
+  {
     "key": "1panel",
     "name": "1Panel",
     "description": "Linux 主机与容器运维面板 v1.10.34-lts",

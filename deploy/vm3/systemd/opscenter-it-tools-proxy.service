@@ -1,0 +1,11 @@
+[Unit]
+Description=Proxy IT-Tools from WireGuard to loopback
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:8080
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes

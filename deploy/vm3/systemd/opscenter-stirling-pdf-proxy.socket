@@ -1,0 +1,10 @@
+[Unit]
+Description=WireGuard listener for Stirling PDF
+
+[Socket]
+ListenStream=10.66.66.6:8081
+Accept=no
+Service=opscenter-stirling-pdf-proxy.service
+
+[Install]
+WantedBy=sockets.target

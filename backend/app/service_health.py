@@ -15,7 +15,7 @@ import requests
 
 from app.config import DEFAULT_NOTIFY_WEBHOOKS
 from app.database import get_db
-from app.models import Server, Service, ServiceStatus
+from app.models import Server, Service, ServiceProbeResult, ServiceStatus
 
 logger = logging.getLogger("opscenter.service_health")
 
@@ -50,11 +50,12 @@ def _build_check_url(svc) -> Optional[str]:
     return url if SERVICE_HEALTH_PROBE_UNCONFIGURED else None
 
 
-def _check_service(svc) -> Tuple[Optional[bool], str]:
+def _check_service(svc) -> Tuple[Optional[bool], str, Optional[int], Optional[float]]:
     """Probe one service; None means it has no supported HTTP endpoint."""
     url = _build_check_url(svc)
     if not url:
-        return None, "无 HTTP 探测地址"
+        return None, "无 HTTP 探测地址", None, None
+    started = time.monotonic()
     try:
         response = requests.get(
             url,
@@ -63,10 +64,10 @@ def _check_service(svc) -> Tuple[Optional[bool], str]:
             headers={"User-Agent": "OpsCenter-HealthCheck/3.30"},
         )
         if response.status_code < 400 or response.status_code in (401, 403):
-            return True, ""
-        return False, f"HTTP {response.status_code}"
+            return True, "", response.status_code, round((time.monotonic() - started) * 1000, 1)
+        return False, f"HTTP {response.status_code}", response.status_code, round((time.monotonic() - started) * 1000, 1)
     except requests.RequestException as exc:
-        return False, str(exc)[:120]
+        return False, str(exc)[:120], None, round((time.monotonic() - started) * 1000, 1)
 
 
 def _notify_webhook(title: str, color: str, elements: list) -> None:
@@ -146,16 +147,20 @@ def run_service_health_cycle() -> int:
             for future in as_completed(future_map):
                 svc = future_map[future]
                 try:
-                    probe_results[str(svc.id)] = future.result()
+                    raw_result = future.result()
+                    if len(raw_result) == 2:  # compatibility with injected/custom probes
+                        probe_results[str(svc.id)] = (*raw_result, None, None)
+                    else:
+                        probe_results[str(svc.id)] = raw_result
                 except Exception as exc:
-                    probe_results[str(svc.id)] = (False, str(exc)[:120])
+                    probe_results[str(svc.id)] = (False, str(exc)[:120], None, None)
 
         status_updates = {}
         notifications = []
         now = time.time()
         with _state_lock:
             for svc in services:
-                ok, err = probe_results[str(svc.id)]
+                ok, err, http_status, latency_ms = probe_results[str(svc.id)]
                 if ok is None:
                     if svc.status != ServiceStatus.unknown.value:
                         status_updates[svc.id] = ServiceStatus.unknown.value
@@ -178,10 +183,22 @@ def run_service_health_cycle() -> int:
                     elif not svc.status:
                         status_updates[svc.id] = ServiceStatus.unknown.value
 
-        if status_updates:
+        if status_updates or any(result[0] is not None for result in probe_results.values()):
             with get_db() as db:
                 for service_id, status in status_updates.items():
                     db.query(Service).filter(Service.id == service_id).update({Service.status: status})
+                for svc in services:
+                    ok, err, http_status, latency_ms = probe_results[str(svc.id)]
+                    if ok is None:
+                        continue
+                    db.add(ServiceProbeResult(
+                        service_id=svc.id,
+                        status="up" if ok else "down",
+                        http_status=http_status,
+                        latency_ms=latency_ms,
+                        error=err or None,
+                        probe_url=_build_check_url(svc),
+                    ))
                 db.commit()
 
         for kind, svc, server, err, fail_count in notifications:

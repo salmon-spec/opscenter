@@ -100,6 +100,20 @@ class Service(Base):
     server = relationship("Server", back_populates="services")
 
 
+class ServiceProbeResult(Base):
+    """Persistent result of an explicitly configured service probe."""
+    __tablename__ = "service_probe_results"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    service_id = Column(UUID(as_uuid=True), ForeignKey("services.id", ondelete="CASCADE"), nullable=False, index=True)
+    checked_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    status = Column(String(20), nullable=False)
+    http_status = Column(Integer, nullable=True)
+    latency_ms = Column(Float, nullable=True)
+    error = Column(Text, nullable=True)
+    probe_url = Column(Text, nullable=True)
+
+
 class ServiceRelation(Base):
     """服务依赖关系（v3.29, 拓扑）：描述服务间数据流/调用/部署/反代关系，驱动拓扑图。"""
     __tablename__ = "service_relations"

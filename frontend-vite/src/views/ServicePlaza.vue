@@ -7,6 +7,8 @@
       </div>
       <div style="display:flex;gap:8px">
         <input v-model="search" class="input" style="width:280px" placeholder="搜索服务名称 / 地址…" />
+        <button class="btn btn-primary" @click="openAdd">添加服务</button>
+        <button class="btn" @click="openHidden">隐藏服务<span v-if="hiddenServices.length"> ({{ hiddenServices.length }})</span></button>
         <button class="btn" @click="reload">刷新</button>
       </div>
     </div>
@@ -49,13 +51,56 @@
     <!-- 详情抽屉 -->
     <ServiceDetailDrawer :visible="drawerVisible" :service="selected" @close="drawerVisible = false" />
 
+    <Modal :visible="addVisible" title="手动添加服务" width="620px" @close="addVisible = false">
+      <div class="form-grid">
+        <div class="field full"><label>所属主机 *</label>
+          <select v-model="form.server_id" class="select">
+            <option value="">请选择主机</option>
+            <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }} · {{ host.host }}</option>
+          </select>
+        </div>
+        <div class="field"><label>服务名称 *</label><input v-model.trim="form.name" class="input" placeholder="例如：内部 Wiki" /></div>
+        <div class="field"><label>分类</label>
+          <select v-model="form.category" class="select">
+            <option v-for="category in categories" :key="category" :value="category">{{ category }}</option>
+          </select>
+        </div>
+        <div class="field full"><label>访问地址 *</label><input v-model.trim="form.url" class="input" placeholder="http://192.168.1.x:端口/" /></div>
+        <div class="field full"><label>健康检查路径</label><input v-model.trim="form.health_path" class="input" placeholder="例如 /health；留空时探测访问地址" /></div>
+        <div class="field full"><label>说明</label><textarea v-model.trim="form.description" class="textarea" rows="3" placeholder="服务用途、登录方式等（不要填写密码）"></textarea></div>
+        <label class="check-row full"><input v-model="form.pinned" type="checkbox" /> 添加后置顶</label>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" @click="addVisible = false">取消</button>
+        <button class="btn btn-primary" :disabled="saving" @click="createService">{{ saving ? '保存中…' : '保存并加入广场' }}</button>
+      </div>
+    </Modal>
+
+    <Modal :visible="hiddenVisible" title="扫描发现但已隐藏的服务" width="820px" @close="hiddenVisible = false">
+      <div v-if="hiddenLoading" class="loading"><span class="spinner"></span>正在加载…</div>
+      <EmptyState v-else-if="!hiddenServices.length" icon="👁" text="暂无隐藏的扫描服务" />
+      <table v-else class="table">
+        <thead><tr><th>服务</th><th>主机</th><th>来源</th><th>地址/端口</th><th>操作</th></tr></thead>
+        <tbody>
+          <tr v-for="service in hiddenServices" :key="service.id">
+            <td><div style="font-weight:600">{{ service.name }}</div><div class="muted">{{ service.image || service.description || '-' }}</div></td>
+            <td>{{ service.server_name || service.server_host || '-' }}</td>
+            <td><span class="tag tag-slate">{{ service.source || '-' }}</span></td>
+            <td class="mono muted">{{ service.url || service.ports || '#none' }}</td>
+            <td><button class="btn btn-sm btn-primary" @click="restoreService(service)">恢复显示</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </Modal>
+
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { api } from '../api'
+import { api, toast } from '../api'
 import EmptyState from '../components/EmptyState.vue'
+import Modal from '../components/Modal.vue'
 import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'
 
 const services = ref([])
@@ -65,6 +110,16 @@ const search = ref('')
 const activeGroup = ref('all')
 const drawerVisible = ref(false)
 const selected = ref(null)
+const hosts = ref([])
+const allServices = ref([])
+const addVisible = ref(false)
+const hiddenVisible = ref(false)
+const hiddenLoading = ref(false)
+const saving = ref(false)
+const categories = ['应用服务', '代码与CI/CD', '监控与日志', '安全与运维', '开发工具', '文档工具', '未分类']
+const emptyForm = () => ({ server_id: '', name: '', url: '', category: '应用服务', description: '', health_path: '', pinned: false })
+const form = ref(emptyForm())
+const hiddenServices = computed(() => allServices.value.filter((service) => service.hidden && service.source !== 'manual'))
 
 const PLAZA_GROUPS = [
   { id: 'cicd', name: '代码与CI/CD', color: '#2dd4bf' },
@@ -143,6 +198,62 @@ async function reload() {
   }
 }
 
+async function loadHosts() {
+  if (!hosts.value.length) hosts.value = await api.get('/servers')
+}
+
+async function openAdd() {
+  try {
+    await loadHosts()
+    form.value = emptyForm()
+    addVisible.value = true
+  } catch (error) {
+    toast(`主机列表加载失败：${error.message}`, 'error')
+  }
+}
+
+async function createService() {
+  if (!form.value.server_id || !form.value.name || !/^https?:\/\//i.test(form.value.url)) {
+    toast('请填写所属主机、服务名称和正确的 HTTP(S) 地址', 'error')
+    return
+  }
+  saving.value = true
+  try {
+    const { server_id, ...payload } = form.value
+    payload.health_path = payload.health_path || null
+    await api.post(`/services?server_id=${encodeURIComponent(server_id)}`, payload)
+    addVisible.value = false
+    toast('服务已添加到服务广场', 'success')
+    await reload()
+  } catch (error) {
+    toast(`添加失败：${error.message}`, 'error')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function openHidden() {
+  hiddenVisible.value = true
+  hiddenLoading.value = true
+  try {
+    allServices.value = await api.get('/services/all')
+  } catch (error) {
+    toast(`隐藏服务加载失败：${error.message}`, 'error')
+  } finally {
+    hiddenLoading.value = false
+  }
+}
+
+async function restoreService(service) {
+  try {
+    await api.put(`/services/${service.id}`, { hidden: false })
+    service.hidden = false
+    toast(`${service.name} 已恢复显示`, 'success')
+  } catch (error) {
+    toast(`恢复失败：${error.message}`, 'error')
+  }
+}
+
 onMounted(reload)
 </script>
 
@@ -171,4 +282,15 @@ onMounted(reload)
 .svc-actions { display: flex; gap: 6px; }
 .svc-actions .btn { flex: 1; }
 .enter-btn { text-decoration: none; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+.form-grid .full { grid-column: 1 / -1; }
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+@media (max-width: 760px) {
+  .view-head { align-items: flex-start; }
+  .view-head > div:last-child { flex-wrap: wrap; }
+  .view-head .input { width: 100% !important; }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-grid .full { grid-column: auto; }
+}
 </style>

@@ -1,0 +1,10 @@
+[Unit]
+Description=WireGuard listener for IT-Tools
+
+[Socket]
+ListenStream=10.66.66.6:8080
+Accept=no
+Service=opscenter-it-tools-proxy.service
+
+[Install]
+WantedBy=sockets.target

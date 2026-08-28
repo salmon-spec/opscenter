@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 from fastapi import APIRouter
 
 from app.database import get_db
-from app.models import Server
+from app.models import Server, Service, ServiceSource
 
 
 router = APIRouter(prefix="/api/v2", tags=["service-plaza"])
@@ -98,11 +98,42 @@ def _health_checks(catalog: list[dict]) -> dict[str, dict]:
 
 @router.get("/services/plaza")
 def list_plaza_services():
-    """Return only curated Web entries; credentials never enter this response."""
+    """Return curated and user-created Web entries without credentials."""
     catalog = load_catalog()
-    checks = _health_checks(catalog)
     with get_db() as db:
         servers = {server.host: server for server in db.query(Server).all()}
+        manual_services = db.query(Service).filter(
+            Service.source == ServiceSource.manual.value,
+            Service.hidden != True,  # noqa: E712
+            Service.url != None,  # noqa: E711
+            Service.url != "",
+        ).all()
+        catalog_urls = {item["entry_url"].rstrip("/") for item in catalog}
+        for service in manual_services:
+            if not service.url.startswith(("http://", "https://")):
+                continue
+            if service.url.rstrip("/") in catalog_urls:
+                continue
+            health_url = service.health_path or service.url
+            if not health_url.startswith(("http://", "https://")):
+                health_url = service.url.rstrip("/") + "/" + health_url.lstrip("/")
+            server = next((item for item in servers.values() if item.id == service.server_id), None)
+            catalog.append({
+                "key": f"manual-{service.id}",
+                "name": service.name,
+                "description": service.description or "手动添加的服务",
+                "server_host": server.host if server else "",
+                "entry_url": service.url,
+                "health_url": health_url,
+                "category": service.category or "未分类",
+                "icon": service.icon or "box",
+                "auth_mode": "local" if service.account else "none",
+                "enabled": True,
+                "manual": True,
+                "service_id": str(service.id),
+            })
+
+    checks = _health_checks(catalog)
 
     result = []
     for item in catalog:
@@ -124,6 +155,8 @@ def list_plaza_services():
             "icon": item.get("icon", "box"),
             "auth_mode": item["auth_mode"],
             "enabled": True,
+            "manual": item.get("manual", False),
+            "service_id": item.get("service_id"),
             "status": health["status"],
             "http_status": health["http_status"],
             "latency_ms": health["latency_ms"],

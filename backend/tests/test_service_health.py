@@ -19,7 +19,10 @@ def test_http_auth_responses_are_reachable(monkeypatch):
             "get",
             lambda *_args, status_code=status_code, **_kwargs: SimpleNamespace(status_code=status_code),
         )
-        assert service_health._check_service(_service()) == (True, "")
+        result = service_health._check_service(_service())
+        assert result[:2] == (True, "")
+        assert result[2] == status_code
+        assert result[3] >= 0
 
 
 def test_unsupported_or_placeholder_url_is_skipped():
@@ -47,6 +50,7 @@ def test_failure_threshold_controls_persisted_down_state(monkeypatch):
     monkeypatch.setattr(service_health, "_fire_alert", lambda *_args: None)
 
     updates = []
+    history = []
 
     class Query:
         def filter(self, *_args):
@@ -62,6 +66,9 @@ def test_failure_threshold_controls_persisted_down_state(monkeypatch):
         def commit(self):
             pass
 
+        def add(self, row):
+            history.append(row)
+
     @contextmanager
     def fake_db():
         yield Db()
@@ -69,10 +76,12 @@ def test_failure_threshold_controls_persisted_down_state(monkeypatch):
     monkeypatch.setattr(service_health, "get_db", fake_db)
     assert service_health.run_service_health_cycle() == 1
     assert updates == []
+    assert len(history) == 1
     assert service_health.get_health_snapshot()[0]["status"] == "degraded"
 
     assert service_health.run_service_health_cycle() == 1
     assert updates == ["down"]
+    assert len(history) == 2
     assert service_health.get_health_snapshot()[0]["status"] == "down"
 
 

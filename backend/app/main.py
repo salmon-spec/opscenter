@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServiceRelation, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
+from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -2252,6 +2252,27 @@ def update_service(service_id: str, data: ServiceUpdate):
             svc.password = pwd if pwd else ''
         db.commit()
         return {"ok": True}
+
+
+@app.get("/api/v2/services/{service_id}/probe-history")
+def get_service_probe_history(service_id: str, hours: int = 24, limit: int = 200):
+    """Return recent explicit probe results for availability and latency charts."""
+    service_uuid = uuid.UUID(service_id)
+    cutoff = datetime.utcnow() - timedelta(hours=max(1, min(hours, 24 * 90)))
+    with get_db() as db:
+        if not db.query(Service.id).filter(Service.id == service_uuid).first():
+            raise HTTPException(404, "Service not found")
+        rows = db.query(ServiceProbeResult).filter(
+            ServiceProbeResult.service_id == service_uuid,
+            ServiceProbeResult.checked_at >= cutoff,
+        ).order_by(ServiceProbeResult.checked_at.desc()).limit(max(1, min(limit, 1000))).all()
+        return [{
+            "checked_at": row.checked_at.isoformat(),
+            "status": row.status,
+            "http_status": row.http_status,
+            "latency_ms": row.latency_ms,
+            "error": row.error or "",
+        } for row in reversed(rows)]
 
 @app.delete("/api/v2/services/{service_id}")
 def delete_service(service_id: str):
