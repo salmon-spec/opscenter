@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.3.0 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.3.1 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -13,7 +13,7 @@ import argparse
 import threading
 import re
 
-AGENT_VERSION = "2.3.0"
+AGENT_VERSION = "2.3.1"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -187,6 +187,8 @@ def _collect_processes(sort_key):
         for line in result.stdout.splitlines()[:10]:
             parts = line.split(None, 7)
             if len(parts) != 8:
+                continue
+            if parts[3] == 'ps':
                 continue
             rows.append({
                 'pid': int(parts[0]), 'ppid': int(parts[1]), 'user': parts[2],
