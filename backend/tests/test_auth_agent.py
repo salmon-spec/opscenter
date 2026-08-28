@@ -44,9 +44,9 @@ class _StubHandler:
         return False
 
 
-def test_agent_version_is_2_2_0():
-    # F1 引入 token 强制必填，伴随版本号升级
-    assert opsagent.AGENT_VERSION == "2.2.0"
+def test_agent_version_is_2_3_1():
+    # 2.3.1 提供更完整的主机、网络、进程与容器监控指标。
+    assert opsagent.AGENT_VERSION == "2.3.1"
 
 
 def test_check_auth_rejects_empty_token():
