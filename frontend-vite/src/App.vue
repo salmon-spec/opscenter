@@ -6,7 +6,7 @@
         <span class="logo-badge">Ops</span>
         <div class="logo-text">
           <div class="logo-title">运维工作台</div>
-          <div class="logo-ver">v4.0.0</div>
+          <div class="logo-ver">v4.0.1</div>
         </div>
       </div>
       <nav class="nav">
