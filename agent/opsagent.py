@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.2.0 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.3.0 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -11,8 +11,9 @@ import sys
 import time
 import argparse
 import threading
+import re
 
-AGENT_VERSION = "2.2.0"
+AGENT_VERSION = "2.3.0"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -102,6 +103,128 @@ def get_cached_scan():
 
 # === Metrics collection ===
 
+_PSEUDO_FS = {
+    'proc', 'sysfs', 'devtmpfs', 'devpts', 'tmpfs', 'cgroup', 'cgroup2',
+    'overlay', 'squashfs', 'securityfs', 'pstore', 'debugfs', 'tracefs',
+    'configfs', 'fusectl', 'mqueue', 'hugetlbfs', 'autofs', 'rpc_pipefs',
+}
+
+
+def _collect_mounts():
+    """Return real mounted filesystems without pseudo/duplicate mount entries."""
+    mounts = []
+    seen = set()
+    try:
+        with open('/proc/mounts') as f:
+            rows = f.readlines()
+        for row in rows:
+            parts = row.split()
+            if len(parts) < 3:
+                continue
+            device, mountpoint, fstype = parts[:3]
+            mountpoint = mountpoint.replace('\\040', ' ')
+            if fstype in _PSEUDO_FS or mountpoint in seen or not mountpoint.startswith('/'):
+                continue
+            try:
+                st = os.statvfs(mountpoint)
+                total = st.f_blocks * st.f_frsize
+                avail = st.f_bavail * st.f_frsize
+                if total <= 0:
+                    continue
+                used = total - avail
+                mounts.append({
+                    'device': device, 'mountpoint': mountpoint, 'fstype': fstype,
+                    'total': total, 'used': used, 'avail': avail,
+                    'percent': round(used / total * 100, 1),
+                })
+                seen.add(mountpoint)
+            except (OSError, PermissionError):
+                continue
+    except Exception:
+        pass
+    return sorted(mounts, key=lambda item: item['mountpoint'])
+
+
+def _collect_disk_devices():
+    """Return cumulative IO counters for physical/virtual base block devices."""
+    devices = []
+    try:
+        with open('/proc/diskstats') as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 14:
+                    continue
+                name = parts[2]
+                is_base = (
+                    re.match(r'^(sd|vd|xvd)[a-z]+$', name)
+                    or re.match(r'^nvme\d+n\d+$', name)
+                    or re.match(r'^mmcblk\d+$', name)
+                )
+                if not is_base:
+                    continue
+                devices.append({
+                    'device': name,
+                    'read_ops': int(parts[3]),
+                    'read_bytes': int(parts[5]) * 512,
+                    'write_ops': int(parts[7]),
+                    'write_bytes': int(parts[9]) * 512,
+                    'io_ms': int(parts[12]),
+                })
+    except Exception:
+        pass
+    return devices
+
+
+def _collect_processes(sort_key):
+    """Collect top processes by CPU or resident memory using procps."""
+    sort_arg = '-%cpu' if sort_key == 'cpu' else '-rss'
+    try:
+        result = subprocess.run(
+            ['ps', '-eo', 'pid=,ppid=,user=,comm=,%cpu=,%mem=,rss=,stat=', '--sort=' + sort_arg],
+            capture_output=True, text=True, timeout=3,
+        )
+        rows = []
+        for line in result.stdout.splitlines()[:10]:
+            parts = line.split(None, 7)
+            if len(parts) != 8:
+                continue
+            rows.append({
+                'pid': int(parts[0]), 'ppid': int(parts[1]), 'user': parts[2],
+                'command': parts[3], 'cpu_percent': float(parts[4]),
+                'memory_percent': float(parts[5]), 'rss_bytes': int(parts[6]) * 1024,
+                'state': parts[7],
+            })
+        return rows
+    except Exception:
+        return []
+
+
+def _collect_container_stats():
+    """Collect a bounded Docker resource snapshot. Failure is non-fatal."""
+    try:
+        result = subprocess.run(
+            ['docker', 'stats', '--no-stream', '--format', '{{json .}}'],
+            capture_output=True, text=True, timeout=8,
+        )
+        if result.returncode != 0:
+            return []
+        rows = []
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            raw = json.loads(line)
+            rows.append({
+                'name': raw.get('Name', ''), 'container': raw.get('Container', ''),
+                'cpu_percent': raw.get('CPUPerc', '0%'),
+                'memory_usage': raw.get('MemUsage', ''),
+                'memory_percent': raw.get('MemPerc', '0%'),
+                'network_io': raw.get('NetIO', ''), 'block_io': raw.get('BlockIO', ''),
+                'pids': raw.get('PIDs', '0'),
+            })
+        return rows[:50]
+    except Exception:
+        return []
+
 def collect_metrics():
     """Collect system metrics from /proc filesystem."""
     m = {}
@@ -145,9 +268,21 @@ def collect_metrics():
         m['memory_used'] = used
         m['memory_available'] = available
         m['memory_percent'] = round(used / total * 100, 1) if total > 0 else 0
+        m['memory_cached'] = info.get('Cached', 0) + info.get('SReclaimable', 0)
+        m['memory_buffers'] = info.get('Buffers', 0)
+        swap_total = info.get('SwapTotal', 0)
+        swap_free = info.get('SwapFree', 0)
+        swap_used = max(0, swap_total - swap_free)
+        m['swap_total'] = swap_total
+        m['swap_used'] = swap_used
+        m['swap_free'] = swap_free
+        m['swap_percent'] = round(swap_used / swap_total * 100, 1) if swap_total > 0 else 0
     except Exception:
         m['memory_total'] = m['memory_used'] = m['memory_available'] = 0
         m['memory_percent'] = 0
+        m['memory_cached'] = m['memory_buffers'] = 0
+        m['swap_total'] = m['swap_used'] = m['swap_free'] = 0
+        m['swap_percent'] = 0
 
     # --- Disk ---
     try:
@@ -163,17 +298,12 @@ def collect_metrics():
         m['disk_total'] = m['disk_used'] = m['disk_avail'] = 0
         m['disk_percent'] = 0
 
+    m['disks'] = _collect_mounts()
+
     # --- Disk IO ---
-    try:
-        with open('/proc/diskstats') as f:
-            for line in f:
-                parts = line.split()
-                if len(parts) > 10 and (parts[2].startswith('vd') or parts[2].startswith('sd')):
-                    m['disk_read_bytes'] = int(parts[5]) * 512
-                    m['disk_write_bytes'] = int(parts[9]) * 512
-                    break
-    except Exception:
-        m['disk_read_bytes'] = m['disk_write_bytes'] = 0
+    m['disk_devices'] = _collect_disk_devices()
+    m['disk_read_bytes'] = sum(item['read_bytes'] for item in m['disk_devices'])
+    m['disk_write_bytes'] = sum(item['write_bytes'] for item in m['disk_devices'])
 
     # --- Load ---
     try:
@@ -239,6 +369,10 @@ def collect_metrics():
     except Exception:
         pass
 
+    m['container_stats'] = _collect_container_stats()
+    m['top_cpu_processes'] = _collect_processes('cpu')
+    m['top_memory_processes'] = _collect_processes('memory')
+
     # --- Host info ---
     m['hostname'] = platform.node()
     m['platform'] = platform.platform()
@@ -249,8 +383,10 @@ def collect_metrics():
     # 网络快照（v3.25.1）
     try:
         m['network'] = _network_snapshot()
+        m['network_interfaces'] = [dict({'interface': name}, **values) for name, values in m['network'].items()]
     except Exception:
-        pass
+        m['network'] = {}
+        m['network_interfaces'] = []
 
     return m
 
@@ -459,7 +595,9 @@ def main():
           f"{nginx} nginx services "
           f"({result['scan_duration_ms']}ms)", flush=True)
 
-    server = http.server.HTTPServer((args.bind, args.port), AgentHandler)
+    # Detailed metrics (for example docker stats) may take a moment; do not let
+    # one dashboard request block health checks or background collection.
+    server = http.server.ThreadingHTTPServer((args.bind, args.port), AgentHandler)
     print(f"OpsAgent v{VERSION} listening on {args.bind}:{args.port}", flush=True)
     try:
         server.serve_forever()

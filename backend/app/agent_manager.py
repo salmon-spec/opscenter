@@ -262,7 +262,8 @@ def fetch_agent_metrics(host: str, port: int = AGENT_DEFAULT_PORT, token: str = 
         headers = {}
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        resp = req.get(f"http://{host}:{port}/metrics", headers=headers, timeout=5)
+        # v2.3 includes a bounded Docker/process snapshot in addition to /proc.
+        resp = req.get(f"http://{host}:{port}/metrics", headers=headers, timeout=12)
         if resp.status_code == 200:
             data = resp.json()
             return _normalize_agent_metrics(data)

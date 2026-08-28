@@ -47,6 +47,64 @@
 
         <!-- 展开：主机内服务 -->
         <div v-if="expandedId === host.id" class="host-detail">
+          <div v-if="m(host)?.source === 'agent'" class="monitor-detail">
+            <div class="detail-title">
+              实时资源 <span class="muted">Agent {{ m(host)?.agent_version || host.agent_version || '-' }}</span>
+            </div>
+            <div class="metric-grid">
+              <div class="metric-card"><span>负载 1 / 5 / 15 分钟</span><b>{{ metricValue(host, 'load1') }} / {{ metricValue(host, 'load5') }} / {{ metricValue(host, 'load15') }}</b></div>
+              <div class="metric-card"><span>Swap</span><b>{{ metricValue(host, 'swap') }}%</b><small>{{ fmtBytes(m(host)?.metrics?.swap_used) }} / {{ fmtBytes(m(host)?.metrics?.swap_total) }}</small></div>
+              <div class="metric-card"><span>运行时间</span><b>{{ fmtDuration(m(host)?.metrics?.uptime) }}</b></div>
+              <div class="metric-card"><span>容器</span><b>{{ metricValue(host, 'container_running') }} 运行 / {{ metricValue(host, 'container_stopped') }} 停止</b></div>
+            </div>
+
+            <div class="detail-grid">
+              <section class="detail-panel">
+                <h3>磁盘与挂载点</h3>
+                <div v-if="!m(host)?.disks?.length" class="detail-empty">Agent 升级后将显示多磁盘信息</div>
+                <table v-else class="mini-table">
+                  <thead><tr><th>挂载点</th><th>设备</th><th>已用</th><th>使用率</th></tr></thead>
+                  <tbody><tr v-for="disk in m(host).disks" :key="`${disk.device}-${disk.mountpoint}`">
+                    <td class="mono">{{ disk.mountpoint }}</td><td class="mono">{{ disk.device }}</td>
+                    <td>{{ fmtBytes(disk.used) }} / {{ fmtBytes(disk.total) }}</td><td>{{ disk.percent }}%</td>
+                  </tr></tbody>
+                </table>
+              </section>
+              <section class="detail-panel">
+                <h3>网卡流量</h3>
+                <div v-if="!m(host)?.network_interfaces?.length" class="detail-empty">暂无网卡明细</div>
+                <table v-else class="mini-table">
+                  <thead><tr><th>网卡</th><th>接收</th><th>发送</th><th>错误</th></tr></thead>
+                  <tbody><tr v-for="nic in m(host).network_interfaces" :key="nic.interface">
+                    <td class="mono">{{ nic.interface }}</td><td>{{ nic.rx_rate_mbps }} Mbps</td><td>{{ nic.tx_rate_mbps }} Mbps</td>
+                    <td>{{ Number(nic.rx_errors || 0) + Number(nic.tx_errors || 0) }}</td>
+                  </tr></tbody>
+                </table>
+              </section>
+              <section class="detail-panel">
+                <h3>CPU Top 进程</h3>
+                <div v-if="!m(host)?.top_cpu_processes?.length" class="detail-empty">暂无进程明细</div>
+                <table v-else class="mini-table">
+                  <thead><tr><th>进程</th><th>PID</th><th>CPU</th><th>内存</th></tr></thead>
+                  <tbody><tr v-for="proc in m(host).top_cpu_processes.slice(0, 8)" :key="proc.pid">
+                    <td class="mono">{{ proc.command }}</td><td>{{ proc.pid }}</td><td>{{ proc.cpu_percent }}%</td><td>{{ proc.memory_percent }}%</td>
+                  </tr></tbody>
+                </table>
+              </section>
+              <section class="detail-panel">
+                <h3>容器资源</h3>
+                <div v-if="!m(host)?.container_stats?.length" class="detail-empty">暂无运行容器或 Docker 指标</div>
+                <table v-else class="mini-table">
+                  <thead><tr><th>容器</th><th>CPU</th><th>内存</th><th>网络 IO</th></tr></thead>
+                  <tbody><tr v-for="ctr in m(host).container_stats" :key="ctr.container || ctr.name">
+                    <td class="mono">{{ ctr.name }}</td><td>{{ ctr.cpu_percent }}</td><td>{{ ctr.memory_usage }} ({{ ctr.memory_percent }})</td><td>{{ ctr.network_io }}</td>
+                  </tr></tbody>
+                </table>
+              </section>
+            </div>
+          </div>
+
+          <div class="detail-title service-title">主机服务</div>
           <div v-if="serviceLoading[host.id]" class="loading"><span class="spinner"></span>加载服务…</div>
           <EmptyState v-else-if="!hostServices[host.id]?.length" icon="📦" text="该主机暂无服务" style="padding:20px" />
           <table v-else class="table">
@@ -113,6 +171,22 @@ const logLoading = ref(false)
 
 const m = (host) => monitors[host.id]
 const metricValue = (host, key) => m(host)?.metrics?.[key] ?? '—'
+
+function fmtBytes(value) {
+  const n = Number(value || 0)
+  if (!n) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const index = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1)
+  return `${(n / (1024 ** index)).toFixed(index > 1 ? 1 : 0)} ${units[index]}`
+}
+
+function fmtDuration(seconds) {
+  const total = Number(seconds || 0)
+  if (!total) return '—'
+  const days = Math.floor(total / 86400)
+  const hours = Math.floor((total % 86400) / 3600)
+  return days ? `${days}天 ${hours}小时` : `${hours}小时`
+}
 
 function monitorLabel(host) {
   const state = m(host)
@@ -234,6 +308,23 @@ onMounted(reload)
 .h-bar b { font-size: 13px; }
 .host-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .host-detail { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.monitor-detail { margin-bottom: 18px; }
+.detail-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; display: flex; gap: 8px; align-items: baseline; }
+.detail-title .muted { font-size: 11px; font-weight: 400; }
+.service-title { border-top: 1px solid var(--border); padding-top: 14px; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.metric-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; background: var(--bg-soft, rgba(127,127,127,.04)); }
+.metric-card span, .metric-card small { color: var(--muted); font-size: 11px; }
+.metric-card b { font-size: 14px; }
+.detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.detail-panel { border: 1px solid var(--border); border-radius: 8px; padding: 10px; min-width: 0; overflow-x: auto; }
+.detail-panel h3 { font-size: 12px; margin: 0 0 8px; }
+.mini-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.mini-table th, .mini-table td { text-align: left; padding: 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.mini-table th { color: var(--muted); font-weight: 500; }
+.detail-empty { color: var(--muted); font-size: 11px; padding: 8px 0; }
+@media (max-width: 1100px) { .metric-grid, .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { .metric-grid, .detail-grid { grid-template-columns: 1fr; } }
 .log-box { max-height: 60vh; overflow: auto; background: #0d1117; border-radius: 8px; padding: 12px; }
 .log-pre { margin: 0; color: #e6edf3; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; font-family: Consolas, 'Courier New', monospace; }
 </style>
