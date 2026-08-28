@@ -114,6 +114,15 @@ class ServiceProbeResult(Base):
     probe_url = Column(Text, nullable=True)
 
 
+class PlazaServicePreference(Base):
+    """Persistent user visibility preference for checked-in plaza entries."""
+    __tablename__ = "plaza_service_preferences"
+
+    catalog_key = Column(String(100), primary_key=True)
+    hidden = Column(Boolean, default=False, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ServiceRelation(Base):
     """服务依赖关系（v3.29, 拓扑）：描述服务间数据流/调用/部署/反代关系，驱动拓扑图。"""
     __tablename__ = "service_relations"

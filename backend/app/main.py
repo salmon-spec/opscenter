@@ -2289,8 +2289,8 @@ def delete_service(service_id: str):
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
         if not svc:
             raise HTTPException(404, "Service not found")
-        if svc.source == ServiceSource.docker_label.value:
-            raise HTTPException(400, "Cannot delete auto-discovered service (disable label instead)")
+        if svc.source != ServiceSource.manual.value:
+            raise HTTPException(400, "Cannot delete auto-discovered service; hide it instead")
         db.delete(svc)
         db.commit()
         return {"ok": True}

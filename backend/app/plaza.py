@@ -12,10 +12,11 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from app.database import get_db
-from app.models import Server, Service, ServiceSource
+from app.models import PlazaServicePreference, Server, Service, ServiceSource
 
 
 router = APIRouter(prefix="/api/v2", tags=["service-plaza"])
@@ -25,6 +26,10 @@ _CACHE_TTL = 30
 _cache_lock = threading.Lock()
 _cached_at = 0.0
 _cached_checks: dict[str, dict] = {}
+
+
+class PlazaVisibilityUpdate(BaseModel):
+    hidden: bool
 
 
 def load_catalog() -> list[dict]:
@@ -102,6 +107,11 @@ def list_plaza_services():
     catalog = load_catalog()
     with get_db() as db:
         servers = {server.host: server for server in db.query(Server).all()}
+        hidden_catalog_keys = {
+            row.catalog_key for row in db.query(PlazaServicePreference).filter(
+                PlazaServicePreference.hidden == True,  # noqa: E712
+            ).all()
+        }
         manual_services = db.query(Service).filter(
             Service.source == ServiceSource.manual.value,
             Service.hidden != True,  # noqa: E712
@@ -109,6 +119,7 @@ def list_plaza_services():
             Service.url != "",
         ).all()
         catalog_urls = {item["entry_url"].rstrip("/") for item in catalog}
+        catalog = [item for item in catalog if item["key"] not in hidden_catalog_keys]
         for service in manual_services:
             if not service.url.startswith(("http://", "https://")):
                 continue
@@ -162,5 +173,63 @@ def list_plaza_services():
             "latency_ms": health["latency_ms"],
             "health_error": health["health_error"],
         })
+    return result
+
+
+@router.put("/services/plaza/{catalog_key}/visibility")
+def update_catalog_visibility(catalog_key: str, payload: PlazaVisibilityUpdate):
+    """Hide or restore a checked-in plaza entry without modifying its catalog."""
+    catalog_keys = {item["key"] for item in load_catalog()}
+    if catalog_key not in catalog_keys:
+        raise HTTPException(404, "Plaza service not found")
+    with get_db() as db:
+        row = db.query(PlazaServicePreference).filter(
+            PlazaServicePreference.catalog_key == catalog_key,
+        ).first()
+        if row:
+            row.hidden = payload.hidden
+        else:
+            db.add(PlazaServicePreference(catalog_key=catalog_key, hidden=payload.hidden))
+        db.commit()
+    return {"ok": True, "key": catalog_key, "hidden": payload.hidden}
+
+
+@router.get("/services/plaza/hidden")
+def list_hidden_plaza_services():
+    """Return hidden catalog, manual, and scanned services without credentials."""
+    catalog = load_catalog()
+    with get_db() as db:
+        servers_by_id = {server.id: server for server in db.query(Server).all()}
+        hidden_keys = {
+            row.catalog_key for row in db.query(PlazaServicePreference).filter(
+                PlazaServicePreference.hidden == True,  # noqa: E712
+            ).all()
+        }
+        result = []
+        for item in catalog:
+            if item["key"] not in hidden_keys:
+                continue
+            server = next((server for server in servers_by_id.values() if server.host == item["server_host"]), None)
+            result.append({
+                "id": f"plaza:{item['key']}", "key": item["key"], "kind": "catalog",
+                "name": item["name"], "description": item.get("description", ""),
+                "server_name": server.name if server else item["server_host"],
+                "server_host": item["server_host"], "url": item["entry_url"],
+                "source": "catalog", "manual": False, "deletable": False,
+            })
+
+        for service in db.query(Service).filter(Service.hidden == True).all():  # noqa: E712
+            server = servers_by_id.get(service.server_id)
+            is_manual = service.source == ServiceSource.manual.value
+            result.append({
+                "id": str(service.id), "service_id": str(service.id),
+                "key": f"manual-{service.id}" if is_manual else None,
+                "kind": "manual" if is_manual else "scanned",
+                "name": service.name, "description": service.description or "",
+                "server_name": server.name if server else "",
+                "server_host": server.host if server else service.host_ip or "",
+                "url": service.url, "ports": service.ports or "", "image": service.image or "",
+                "source": service.source, "manual": is_manual, "deletable": is_manual,
+            })
     return result
 

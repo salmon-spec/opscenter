@@ -15,7 +15,7 @@ class _Query:
         return self
 
     def all(self):
-        if self.model is plaza.Service:
+        if self.model in (plaza.Service, plaza.PlazaServicePreference):
             return []
         return [
             SimpleNamespace(id="server-vm1", host="10.66.66.4", name="虚拟-ubuntu"),
@@ -99,7 +99,11 @@ def test_manual_web_service_is_merged_without_credentials(monkeypatch):
             return self
 
         def all(self):
-            return [manual] if self.model is plaza.Service else [server]
+            if self.model is plaza.Service:
+                return [manual]
+            if self.model is plaza.PlazaServicePreference:
+                return []
+            return [server]
 
     class Db:
         def query(self, model):
@@ -124,3 +128,68 @@ def test_manual_web_service_is_merged_without_credentials(monkeypatch):
     assert row["health_url"].endswith("/health")
     assert row["auth_mode"] == "local"
     assert "account" not in row and "password" not in row
+
+
+def test_catalog_visibility_is_persisted(monkeypatch):
+    created = []
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def first(self):
+            return None
+
+    class Db:
+        def query(self, _model):
+            return Query()
+
+        def add(self, row):
+            created.append(row)
+
+        def commit(self):
+            pass
+
+    @contextmanager
+    def fake_db():
+        yield Db()
+
+    monkeypatch.setattr(plaza, "get_db", fake_db)
+    result = plaza.update_catalog_visibility(
+        "gitea", plaza.PlazaVisibilityUpdate(hidden=True),
+    )
+    assert result == {"ok": True, "key": "gitea", "hidden": True}
+    assert created[0].catalog_key == "gitea"
+    assert created[0].hidden is True
+
+
+def test_hidden_catalog_entries_are_listed_without_credentials(monkeypatch):
+    preference = SimpleNamespace(catalog_key="gitea", hidden=True)
+
+    class Query:
+        def __init__(self, model):
+            self.model = model
+
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            if self.model is plaza.PlazaServicePreference:
+                return [preference]
+            return []
+
+    class Db:
+        def query(self, model):
+            return Query(model)
+
+    @contextmanager
+    def fake_db():
+        yield Db()
+
+    monkeypatch.setattr(plaza, "get_db", fake_db)
+    rows = plaza.list_hidden_plaza_services()
+    assert len(rows) == 1
+    assert rows[0]["key"] == "gitea"
+    assert rows[0]["kind"] == "catalog"
+    assert rows[0]["deletable"] is False
+    assert "password" not in rows[0] and "account" not in rows[0]

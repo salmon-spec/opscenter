@@ -44,6 +44,8 @@
             @click.stop
           >进入服务</a>
           <button class="btn btn-sm btn-ghost" title="查看详情" @click.stop="openDetail(s)">详情</button>
+          <button class="btn btn-sm btn-ghost" title="从服务广场隐藏" @click.stop="hideService(s)">隐藏</button>
+          <button v-if="s.manual" class="btn btn-sm btn-danger" title="永久删除手动服务" @click.stop="deleteManualService(s)">删除</button>
         </div>
       </div>
     </div>
@@ -65,7 +67,7 @@
             <option v-for="category in categories" :key="category" :value="category">{{ category }}</option>
           </select>
         </div>
-        <div class="field full"><label>访问地址 *</label><input v-model.trim="form.url" class="input" placeholder="http://192.168.1.x:端口/" /></div>
+        <div class="field full"><label>访问地址 *</label><input v-model.trim="form.url" class="input" placeholder="http://10.66.66.x:端口/" /></div>
         <div class="field full"><label>健康检查路径</label><input v-model.trim="form.health_path" class="input" placeholder="例如 /health；留空时探测访问地址" /></div>
         <div class="field full"><label>说明</label><textarea v-model.trim="form.description" class="textarea" rows="3" placeholder="服务用途、登录方式等（不要填写密码）"></textarea></div>
         <label class="check-row full"><input v-model="form.pinned" type="checkbox" /> 添加后置顶</label>
@@ -76,18 +78,21 @@
       </div>
     </Modal>
 
-    <Modal :visible="hiddenVisible" title="扫描发现但已隐藏的服务" width="820px" @close="hiddenVisible = false">
+    <Modal :visible="hiddenVisible" title="隐藏的服务" width="900px" @close="hiddenVisible = false">
       <div v-if="hiddenLoading" class="loading"><span class="spinner"></span>正在加载…</div>
-      <EmptyState v-else-if="!hiddenServices.length" icon="👁" text="暂无隐藏的扫描服务" />
+      <EmptyState v-else-if="!hiddenServices.length" icon="👁" text="暂无隐藏服务" />
       <table v-else class="table">
-        <thead><tr><th>服务</th><th>主机</th><th>来源</th><th>地址/端口</th><th>操作</th></tr></thead>
+        <thead><tr><th>服务</th><th>主机</th><th>类型</th><th>地址/端口</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="service in hiddenServices" :key="service.id">
             <td><div style="font-weight:600">{{ service.name }}</div><div class="muted">{{ service.image || service.description || '-' }}</div></td>
             <td>{{ service.server_name || service.server_host || '-' }}</td>
-            <td><span class="tag tag-slate">{{ service.source || '-' }}</span></td>
+            <td><span class="tag tag-slate">{{ kindLabel(service) }}</span></td>
             <td class="mono muted">{{ service.url || service.ports || '#none' }}</td>
-            <td><button class="btn btn-sm btn-primary" @click="restoreService(service)">恢复显示</button></td>
+            <td class="hidden-actions">
+              <button class="btn btn-sm btn-primary" @click="restoreService(service)">恢复显示</button>
+              <button v-if="service.deletable" class="btn btn-sm btn-danger" @click="deleteManualService(service)">删除</button>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -111,7 +116,6 @@ const activeGroup = ref('all')
 const drawerVisible = ref(false)
 const selected = ref(null)
 const hosts = ref([])
-const allServices = ref([])
 const addVisible = ref(false)
 const hiddenVisible = ref(false)
 const hiddenLoading = ref(false)
@@ -119,7 +123,7 @@ const saving = ref(false)
 const categories = ['应用服务', '代码与CI/CD', '监控与日志', '安全与运维', '开发工具', '文档工具', '未分类']
 const emptyForm = () => ({ server_id: '', name: '', url: '', category: '应用服务', description: '', health_path: '', pinned: false })
 const form = ref(emptyForm())
-const hiddenServices = computed(() => allServices.value.filter((service) => service.hidden && service.source !== 'manual'))
+const hiddenServices = ref([])
 
 const PLAZA_GROUPS = [
   { id: 'cicd', name: '代码与CI/CD', color: '#2dd4bf' },
@@ -190,8 +194,12 @@ function openDetail(s) {
 async function reload() {
   loading.value = true
   try {
-    const [svc] = await Promise.allSettled([api.get('/services/plaza')])
+    const [svc, hidden] = await Promise.allSettled([
+      api.get('/services/plaza'),
+      api.get('/services/plaza/hidden'),
+    ])
     services.value = svc.status === 'fulfilled' ? svc.value : []
+    hiddenServices.value = hidden.status === 'fulfilled' ? hidden.value : hiddenServices.value
     groups.value = PLAZA_GROUPS
   } finally {
     loading.value = false
@@ -236,7 +244,7 @@ async function openHidden() {
   hiddenVisible.value = true
   hiddenLoading.value = true
   try {
-    allServices.value = await api.get('/services/all')
+    hiddenServices.value = await api.get('/services/plaza/hidden')
   } catch (error) {
     toast(`隐藏服务加载失败：${error.message}`, 'error')
   } finally {
@@ -246,11 +254,50 @@ async function openHidden() {
 
 async function restoreService(service) {
   try {
-    await api.put(`/services/${service.id}`, { hidden: false })
-    service.hidden = false
+    if (service.kind === 'catalog') {
+      await api.put(`/services/plaza/${encodeURIComponent(service.key)}/visibility`, { hidden: false })
+    } else {
+      await api.put(`/services/${service.service_id || service.id}`, { hidden: false })
+    }
+    hiddenServices.value = hiddenServices.value.filter((item) => item.id !== service.id)
     toast(`${service.name} 已恢复显示`, 'success')
+    await reload()
   } catch (error) {
     toast(`恢复失败：${error.message}`, 'error')
+  }
+}
+
+function kindLabel(service) {
+  if (service.kind === 'catalog') return '内置服务'
+  if (service.kind === 'manual') return '手动服务'
+  return '扫描服务'
+}
+
+async function hideService(service) {
+  if (!confirm(`确认从服务广场隐藏「${service.name}」？之后可在“隐藏服务”中恢复。`)) return
+  try {
+    if (service.manual && service.service_id) {
+      await api.put(`/services/${service.service_id}`, { hidden: true })
+    } else {
+      await api.put(`/services/plaza/${encodeURIComponent(service.key)}/visibility`, { hidden: true })
+    }
+    toast(`${service.name} 已隐藏`, 'success')
+    await reload()
+  } catch (error) {
+    toast(`隐藏失败：${error.message}`, 'error')
+  }
+}
+
+async function deleteManualService(service) {
+  const serviceId = service.service_id || service.id
+  if (!serviceId || !confirm(`确认永久删除手动服务「${service.name}」？此操作不可恢复。`)) return
+  try {
+    await api.del(`/services/${serviceId}`)
+    hiddenServices.value = hiddenServices.value.filter((item) => item.id !== service.id)
+    toast(`${service.name} 已删除`, 'success')
+    await reload()
+  } catch (error) {
+    toast(`删除失败：${error.message}`, 'error')
   }
 }
 
@@ -280,12 +327,14 @@ onMounted(reload)
 .svc-desc { font-size: 12px; color: var(--muted); min-height: 32px; }
 .svc-meta { font-size: 12px; display: flex; justify-content: space-between; gap: 6px; }
 .svc-actions { display: flex; gap: 6px; }
-.svc-actions .btn { flex: 1; }
+.svc-actions { flex-wrap: wrap; }
+.svc-actions .btn { flex: 1 1 auto; }
 .enter-btn { text-decoration: none; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
 .form-grid .full { grid-column: 1 / -1; }
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.hidden-actions { display: flex; gap: 6px; white-space: nowrap; }
 @media (max-width: 760px) {
   .view-head { align-items: flex-start; }
   .view-head > div:last-child { flex-wrap: wrap; }
