@@ -41,6 +41,8 @@ class TerminalCreateRequest(BaseModel):
     server_id: str
     cols: int = 80
     rows: int = 24
+    mode: str = "host"
+    container_id: Optional[str] = None
 
 # === Config ===
 DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
@@ -3767,6 +3769,15 @@ def list_all_services(server_id: Optional[str] = None):
 @app.post("/api/v2/terminal/sessions")
 async def api_create_terminal_session(req: TerminalCreateRequest):
     """Create a new SSH terminal session"""
+    if req.mode not in ("host", "container"):
+        raise HTTPException(400, "mode 仅支持 host / container")
+    initial_command = None
+    if req.mode == "container":
+        container_id = (req.container_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", container_id):
+            raise HTTPException(400, "非法容器标识")
+        # container_id 经过白名单校验，不接受前端传入任意 shell 命令。
+        initial_command = f"docker exec -it {container_id} sh"
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(req.server_id)).first()
         if not srv:
@@ -3792,6 +3803,7 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         user=srv_user,
         password=srv_password,
         key_content=srv_key,
+        initial_command=initial_command,
     )
     if not srv_password and not srv_key:
         raise HTTPException(400, f"服务器 {srv_name} 未配置SSH密码或密钥，请先在资源管理中添加")
@@ -3805,7 +3817,14 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
     if not ok:
         remove_session(sid)
         raise HTTPException(500, f"SSH connection to {srv_host} failed")
-    return {"session_id": sid, "server_name": srv_name, "server_host": srv_host, "user": srv_user}
+    return {
+        "session_id": sid,
+        "server_name": srv_name,
+        "server_host": srv_host,
+        "user": srv_user,
+        "mode": req.mode,
+        "container_id": req.container_id if req.mode == "container" else None,
+    }
 
 
 @app.websocket("/ws/terminal/{session_id}")

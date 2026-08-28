@@ -4,7 +4,7 @@
       <div class="term-box">
         <div class="term-head">
           <span class="term-title">终端 · {{ title }}</span>
-          <div class="term-tabs">
+          <div v-if="allowFiles" class="term-tabs">
             <button class="tab" :class="{ active: tab === 'term' }" @click="switchTab('term')">终端</button>
             <button class="tab" :class="{ active: tab === 'files' }" @click="switchTab('files')">文件传输</button>
           </div>
@@ -34,6 +34,7 @@ import SftpPanel from './SftpPanel.vue'
 const props = defineProps({
   sessionId: { type: String, required: true },
   title: { type: String, default: '' },
+  allowFiles: { type: Boolean, default: true },
 })
 defineEmits(['close'])
 

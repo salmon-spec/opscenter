@@ -15,7 +15,7 @@ RECONNECT_GRACE = 30  # seconds to wait for WebSocket reconnect after disconnect
 
 class SSHTerminalSession:
     def __init__(self, session_id, server_id, server_name, host, port, user,
-                 password=None, key_content=None):
+                 password=None, key_content=None, initial_command=None):
         self.session_id = session_id
         self.server_id = server_id
         self.server_name = server_name
@@ -24,6 +24,7 @@ class SSHTerminalSession:
         self.user = user
         self.password = password
         self.key_content = key_content
+        self.initial_command = initial_command
         self.channel = None
         self.client = None
         self.connected = False
@@ -64,6 +65,8 @@ class SSHTerminalSession:
             self.channel = ch
             self.connected = True
             self.last_activity = time.time()
+            if self.initial_command:
+                ch.send(self.initial_command + "\n")
             logger.info(f"SSH session {self.session_id} connected to {self.host}:{self.port}")
             return True
         except Exception as e:
@@ -255,7 +258,7 @@ class SSHTerminalSession:
 
 
 def create_session(server_id, server_name, host, port, user,
-                   password=None, key_content=None):
+                   password=None, key_content=None, initial_command=None):
     _cleanup_dead()
     cnt = len([s for s in _sessions.values() if s.server_id == server_id and s.is_alive])
     if cnt >= MAX_SESSIONS_PER_SERVER:
@@ -263,7 +266,7 @@ def create_session(server_id, server_name, host, port, user,
     session_id = str(uuid.uuid4())
     s = SSHTerminalSession(session_id=session_id, server_id=server_id,
         server_name=server_name, host=host, port=port, user=user,
-        password=password, key_content=key_content)
+        password=password, key_content=key_content, initial_command=initial_command)
     _sessions[session_id] = s
     return session_id, ""
 
