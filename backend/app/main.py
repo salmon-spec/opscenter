@@ -1638,25 +1638,33 @@ def _sync_nginx_routes(srv, db):
 def _sync_agent_scan_to_db(srv, db, scan_data):
     """Sync Agent scan results (containers) into services table with source='agent'."""
     from app.discovery import classify_image, get_icon, get_desc
+    def bounded(value, limit=100):
+        value = str(value or '')
+        if len(value) <= limit:
+            return value
+        # Preserve both the runner/cache prefix and the unique suffix.
+        return value[:60] + '...' + value[-(limit - 63):]
+
     containers = scan_data.get("containers", [])
     synced = 0
     updated = 0
     errors = 0
     for c in containers:
         try:
-            name = c.get("name", "")
+            raw_name = c.get("name", "")
+            name = bounded(raw_name)
             image = c.get("image", "")
             is_running = c.get("status") == "running" or "Up" in c.get("status", "")
             # Use port_summary (compact) instead of str(ports) (verbose dict list)
             ports_display = c.get("port_summary", "") or ", ".join(_extract_public_ports(c))
             
             short_image = image.split(':')[0].split('/')[-1] if image else ''
-            svc_name = name.replace('-', ' ').replace('_', ' ').title()
-            svc_url = _build_svc_url_for_remote(name, srv.host, c)
+            svc_name = bounded(raw_name.replace('-', ' ').replace('_', ' ').title())
+            svc_url = _build_svc_url_for_remote(raw_name, srv.host, c)
             
             svc_category = classify_image(short_image)
             svc_icon = get_icon(short_image)
-            svc_desc = get_desc(short_image, name)
+            svc_desc = get_desc(short_image, raw_name)
             
             if not svc_url:
                 continue
@@ -1707,7 +1715,8 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
     stopped_data = scan_data.get('stopped_containers') or scan_data.get('stopped', [])
     if stopped_data:
         for cont in stopped_data:
-            cname = cont.get('name', '')
+            raw_cname = cont.get('name', '')
+            cname = bounded(raw_cname)
             if not cname:
                 continue
             existing = db.query(Service).filter(
@@ -1718,7 +1727,7 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                 short_img = cont.get('image', '').split(':')[0].split('/')[-1] if cont.get('image') else ''
                 new_svc = Service(
                     server_id=srv.id,
-                    name=f"{cname.replace('-', ' ').replace('_', ' ').title()} [已停止]",
+                    name=bounded(f"{raw_cname.replace('-', ' ').replace('_', ' ').title()} [已停止]"),
                     url="#none",
                     category=cont.get('category', '') or classify_image(short_img),
                     source='docker_auto',
