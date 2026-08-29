@@ -18,6 +18,7 @@ services:
       - OPS_JWT_SECRET=773d80b709bfd7d27229268fbb9b3b098f12453c7ed0e6928b5042bfc82e80ef
       - OPS_ADMIN_USER=admin
       - OPS_ADMIN_PASSWORD=OpsCenter@2026
+      - CREDENTIAL_KEY=change-this-to-a-stable-random-secret
     volumes:
       - /opt/opscenter/frontend:/app/frontend:ro
       - /opt/opscenter/agent:/app/agent:ro

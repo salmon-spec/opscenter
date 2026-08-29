@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     jwt_secret: str = "opscenter-default-secret-change-me-1234567890"
     admin_user: str = "admin"
     admin_password: str = "OpsCenter@2026"
+    # Must be overridden in production; deliberately independent from JWT rotation.
+    credential_key: str = "opscenter-default-database-credential-key-change-me"
     auth_enabled: bool = False
+    preview_mode: bool = False
 
     # ── Alerting (v3.26, F4/F5) ──
     alerting_enabled: bool = True                       # ALERTING_ENABLED=false 一键关停告警引擎
@@ -71,7 +74,9 @@ LOCAL_AGENT_TOKEN = _settings.local_agent_token
 JWT_SECRET = _settings.jwt_secret
 ADMIN_USER = _settings.admin_user
 ADMIN_PASSWORD = _settings.admin_password
+CREDENTIAL_KEY = _settings.credential_key
 OPS_AUTH_ENABLED = _settings.auth_enabled
+PREVIEW_MODE = _settings.preview_mode
 
 # ── Alerting (v3.26) ──
 ALERTING_ENABLED = _settings.alerting_enabled

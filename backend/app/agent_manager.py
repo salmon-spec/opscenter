@@ -272,6 +272,43 @@ def fetch_agent_metrics(host: str, port: int = AGENT_DEFAULT_PORT, token: str = 
         return None
 
 
+def fetch_agent_system_summary(host: str, port: int = AGENT_DEFAULT_PORT, token: str = "") -> Optional[Dict]:
+    """Fetch the v2.4 lightweight system profile without Docker stats."""
+    import requests as req
+    try:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        resp = req.get(f"http://{host}:{port}/api/v1/system/summary", headers=headers, timeout=5)
+        return _normalize_agent_metrics(resp.json()) if resp.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def fetch_agent_processes(
+    host: str,
+    port: int = AGENT_DEFAULT_PORT,
+    token: str = "",
+    *,
+    search: str = "",
+    user: str = "",
+    state: str = "",
+    sort: str = "cpu",
+    limit: int = 200,
+) -> Optional[Dict]:
+    """Fetch a bounded process list from Agent v2.4."""
+    import requests as req
+    try:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        resp = req.get(
+            f"http://{host}:{port}/api/v1/processes",
+            headers=headers,
+            params={"search": search, "user": user, "state": state, "sort": sort, "limit": limit},
+            timeout=6,
+        )
+        return resp.json() if resp.status_code == 200 else None
+    except Exception:
+        return None
+
+
 def uninstall_agent(server: Server, password: str = None) -> Dict:
     """Uninstall OpsAgent from a remote server."""
     client = _get_ssh_client(server, password=password)

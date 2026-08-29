@@ -7,6 +7,7 @@ AUDIT_ENABLED=false 一键关停（回滚兜底）。
 from __future__ import annotations
 
 import logging
+import json
 import re
 from urllib.parse import urlparse
 
@@ -36,11 +37,23 @@ _RESOURCE_PATTERNS = [
     (r"log-rules", "log-rule"),
     (r"backup-checks", "backup"),
     (r"images/scan", "image"),
+    (r"processes", "process"),
     (r"servers", "server"),
+    (r"databases/.*/accounts", "database-account"),
+    (r"databases", "database"),
     (r"services", "service"),
     (r"reports/generate", "report"),
     (r"auth/login", "login"),
 ]
+_SECRET_KEYS = re.compile(r"password|passwd|secret|token|ssh_key|private_key|credential", re.I)
+
+
+def _redact(value):
+    if isinstance(value, dict):
+        return {key: ("••••••••" if _SECRET_KEYS.search(str(key)) else _redact(item)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact(item) for item in value]
+    return value
 
 
 def _classify(path: str, method: str):
@@ -100,7 +113,11 @@ class AuditMiddleware(BaseHTTPMiddleware):
             try:
                 body = await request.body()
                 if body and len(body) < 300:
-                    detail = body.decode("utf-8", errors="replace")[:200]
+                    raw = body.decode("utf-8", errors="replace")
+                    try:
+                        detail = json.dumps(_redact(json.loads(raw)), ensure_ascii=False)[:200]
+                    except Exception:
+                        detail = "[non-json request body omitted]"
             except Exception:
                 pass
             client_ip = request.client.host if request.client else None

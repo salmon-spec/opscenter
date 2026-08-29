@@ -1,6 +1,6 @@
 # OpsCenter 运维工作台
 
-> **当前版本：v4.1.0** · 更新于 2026-08-28
+> **当前版本：v4.2.0** · 更新于 2026-08-28
 > 访问：https://ops.salmon.xin/ · 状态页：https://ops.salmon.xin/status/ · Vite 灰度页：https://ops.salmon.xin/v3/
 
 面向 DevOps/SRE 的自托管**统一运维工作台**：管理服务器、服务、监控、告警、证书、日志、备份、镜像与巡检日报，中文界面，免登录访问，支持 SSH 终端直连与远程 Agent 采集。
@@ -17,16 +17,16 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 - **数据价值化**：巡检日报自动生成与飞书推送，7 天可用性状态页
 - **操作审计**：写操作自动记录，90 天 TTL，可追溯
 - **远程能力**：Agent 一键部署采集 + WebSocket SSH 终端 + 文件管理
-- **资产工作台**：顶部切换主机，集中查看容器、服务、磁盘、网络与进程，并支持容器批量控制、日志、详情和终端
+- **资源控制台**：全局主机上下文；数据库、容器、系统独立分域；容器统计按需采集；系统监控、终端与进程管理独立加载
 
 ## 二、当前状态（2026-08-28）
 
 | 项 | 状态 |
 |---|---|
-| 后端测试 | **pytest 52/52 全绿**（0 失败 0 错误） |
+| 后端测试 | **pytest 106/106 全绿**（0 失败 0 错误，含 v4.2 主机/数据库/容器/系统契约） |
 | API | 11 大模块全 200（health/servers/alert-rules/alert-silences/cert-checks/log-rules/backup-checks/images/reports/audit-logs/status-page） |
-| Agent | v2.3.1 |
-| 版本里程碑 | **v4.1.0**（单主机资产工作台 + 容器批量控制、详情、日志与终端） |
+| Agent | v2.4.0 |
+| 版本里程碑 | **v4.2.0**（数据库、容器、系统分域 + 全局主机管理 + 按需资源采集） |
 | 部署 | VM2（192.168.1.153 / 10.66.66.5）systemd + Caddy 运行中 |
 | 仓库 | GitLab = GitHub = 本地 = `77ca809` |
 
@@ -83,7 +83,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | `agent_manager.py` | Agent 部署 / 卸载 / 状态 / 服务发现 |
 | `ssh_manager.py` / `ssh_terminal.py` | SSH 连接池 + WebSocket 终端 + 文件管理 |
 | `discovery.py` | 服务自动发现（Docker + Nginx + Agent） |
-| `models.py` | SQLAlchemy 模型（15 张表） |
+| `models.py` | SQLAlchemy 模型（含数据库实例、主机、服务、监控、告警与审计） |
 
 ### 4.3 数据模型（15 张表）
 

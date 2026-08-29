@@ -28,8 +28,8 @@ export default defineConfig({
     host: '0.0.0.0',
     // v3.29: 开发期代理到后端（免登录模式直连 10.66.66.5:9091）
     proxy: {
-      '/api': { target: 'http://10.66.66.5:9091', changeOrigin: true },
-      '/ws': { target: 'ws://10.66.66.5:9091', ws: true, changeOrigin: true },
+      '/api': { target: process.env.VITE_PROXY_TARGET || 'http://10.66.66.5:9091', changeOrigin: true },
+      '/ws': { target: (process.env.VITE_PROXY_TARGET || 'http://10.66.66.5:9091').replace(/^http/, 'ws'), ws: true, changeOrigin: true },
     },
   },
 })

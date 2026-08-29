@@ -2,7 +2,7 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
-async function request(path, { method = 'GET', body, query } = {}) {
+async function request(path, { method = 'GET', body, query, signal } = {}) {
   let url = API_BASE + '/api/v2' + path
   if (query) {
     const p = new URLSearchParams()
@@ -12,7 +12,7 @@ async function request(path, { method = 'GET', body, query } = {}) {
     const qs = p.toString()
     if (qs) url += '?' + qs
   }
-  const opts = { method, headers: {} }
+  const opts = { method, headers: {}, signal }
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
@@ -30,11 +30,11 @@ async function request(path, { method = 'GET', body, query } = {}) {
 }
 
 export const api = {
-  get: (path, query) => request(path, { query }),
-  post: (path, body) => request(path, { method: 'POST', body }),
-  put: (path, body) => request(path, { method: 'PUT', body }),
-  patch: (path, body) => request(path, { method: 'PATCH', body }),
-  del: (path) => request(path, { method: 'DELETE' }),
+  get: (path, query, options = {}) => request(path, { query, signal: options.signal }),
+  post: (path, body, options = {}) => request(path, { method: 'POST', body, signal: options.signal }),
+  put: (path, body, options = {}) => request(path, { method: 'PUT', body, signal: options.signal }),
+  patch: (path, body, options = {}) => request(path, { method: 'PATCH', body, signal: options.signal }),
+  del: (path, options = {}) => request(path, { method: 'DELETE', query: options.query, signal: options.signal }),
 }
 
 /* WebSocket 地址：与页面同源（开发期由 Vite 代理 /ws） */

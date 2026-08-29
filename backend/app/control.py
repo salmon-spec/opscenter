@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
+from app.config import PREVIEW_MODE
 from app.database import get_db
 from app.models import Server, Service
 from app.ssh_manager import get_ssh_client, ssh_exec
@@ -27,8 +29,11 @@ router = APIRouter(prefix="/api/v2", tags=["control"])
 _VALID_SERVICE_ACTIONS = ("restart", "start", "stop")
 _VALID_POWER_ACTIONS = ("reboot", "shutdown")
 _VALID_CONTAINER_ACTIONS = ("start", "stop", "restart", "kill", "pause", "unpause", "remove")
+_VALID_DOCKER_RESOURCES = ("images", "networks", "volumes")
 _CONTAINER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_DOCKER_RESOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,255}$")
 _SENSITIVE_ENV_RE = re.compile(r"(password|passwd|secret|token|api[_-]?key|private[_-]?key)", re.I)
+_CONTAINER_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 class ServiceControlRequest(BaseModel):
@@ -48,10 +53,23 @@ class ContainerActionRequest(BaseModel):
     force: bool = False
 
 
+class DockerResourceDeleteRequest(BaseModel):
+    """批量删除镜像、网络或存储卷。"""
+    resource_ids: List[str] = Field(..., min_length=1, max_length=100)
+    force: bool = False
+
+
 def _container_id(value: str) -> str:
     value = (value or "").strip()
     if not _CONTAINER_ID_RE.fullmatch(value):
         raise HTTPException(status_code=400, detail=f"非法容器标识: {value[:40]}")
+    return value
+
+
+def _docker_resource_id(value: str) -> str:
+    value = (value or "").strip()
+    if not _DOCKER_RESOURCE_RE.fullmatch(value):
+        raise HTTPException(status_code=400, detail=f"非法 Docker 资源标识: {value[:40]}")
     return value
 
 
@@ -125,7 +143,61 @@ def _container_summary(attrs: Dict[str, Any], stats: Optional[Dict[str, Any]] = 
     }
 
 
-def _remote_container_rows(client) -> List[Dict[str, Any]]:
+def _image_summary(attrs: Dict[str, Any], used_image_ids: Optional[set[str]] = None) -> Dict[str, Any]:
+    image_id = attrs.get("Id") or ""
+    tags = [item for item in (attrs.get("RepoTags") or []) if item != "<none>:<none>"]
+    return {
+        "id": image_id,
+        "short_id": image_id.removeprefix("sha256:")[:12],
+        "repo_tags": tags,
+        "repo_digests": attrs.get("RepoDigests") or [],
+        "created_at": attrs.get("Created") or "",
+        "size": int(attrs.get("Size") or attrs.get("VirtualSize") or 0),
+        "labels": (attrs.get("Config") or {}).get("Labels") or attrs.get("Labels") or {},
+        "dangling": not tags,
+        "in_use": image_id in (used_image_ids or set()),
+    }
+
+
+def _network_summary(attrs: Dict[str, Any]) -> Dict[str, Any]:
+    containers = attrs.get("Containers") or {}
+    ipam = attrs.get("IPAM") or {}
+    return {
+        "id": attrs.get("Id") or "",
+        "short_id": (attrs.get("Id") or "")[:12],
+        "name": attrs.get("Name") or "",
+        "driver": attrs.get("Driver") or "",
+        "scope": attrs.get("Scope") or "",
+        "created_at": attrs.get("Created") or "",
+        "internal": bool(attrs.get("Internal")),
+        "attachable": bool(attrs.get("Attachable")),
+        "ipv6": bool(attrs.get("EnableIPv6")),
+        "subnets": [item.get("Subnet") for item in (ipam.get("Config") or []) if item.get("Subnet")],
+        "container_count": len(containers),
+        "in_use": bool(containers),
+        "system": (attrs.get("Name") or "") in {"bridge", "host", "none"},
+    }
+
+
+def _volume_summary(attrs: Dict[str, Any], used_volume_names: Optional[set[str]] = None) -> Dict[str, Any]:
+    name = attrs.get("Name") or ""
+    usage = attrs.get("UsageData") or {}
+    return {
+        "id": name,
+        "name": name,
+        "driver": attrs.get("Driver") or "",
+        "scope": attrs.get("Scope") or "",
+        "mountpoint": attrs.get("Mountpoint") or "",
+        "created_at": attrs.get("CreatedAt") or "",
+        "labels": attrs.get("Labels") or {},
+        "options": attrs.get("Options") or {},
+        "size": max(0, int(usage.get("Size") or 0)),
+        "ref_count": max(0, int(usage.get("RefCount") or 0)),
+        "in_use": name in (used_volume_names or set()) or int(usage.get("RefCount") or 0) > 0,
+    }
+
+
+def _remote_container_rows(client, include_stats: bool = True) -> List[Dict[str, Any]]:
     out, err, code = ssh_exec(client, "docker ps -aq --no-trunc", timeout=20)
     if code != 0:
         raise HTTPException(status_code=502, detail=f"读取远程容器失败: {(err or out).strip()[-300:]}")
@@ -142,18 +214,19 @@ def _remote_container_rows(client) -> List[Dict[str, Any]]:
         raise HTTPException(status_code=502, detail=f"远程 Docker 返回无效数据: {exc}")
 
     stats_by_name: Dict[str, Dict[str, Any]] = {}
-    stats_out, _stats_err, stats_code = ssh_exec(
-        client,
-        "docker stats --no-stream --format '{{json .}}' 2>/dev/null",
-        timeout=40,
-    )
-    if stats_code == 0:
-        for line in stats_out.splitlines():
-            try:
-                row = json.loads(line)
-                stats_by_name[row.get("Name") or row.get("Container")] = row
-            except json.JSONDecodeError:
-                continue
+    if include_stats:
+        stats_out, _stats_err, stats_code = ssh_exec(
+            client,
+            "docker stats --no-stream --format '{{json .}}' 2>/dev/null",
+            timeout=40,
+        )
+        if stats_code == 0:
+            for line in stats_out.splitlines():
+                try:
+                    row = json.loads(line)
+                    stats_by_name[row.get("Name") or row.get("Container")] = row
+                except json.JSONDecodeError:
+                    continue
     rows = []
     for attrs in inspected:
         row = _container_summary(attrs)
@@ -168,7 +241,7 @@ def _remote_container_rows(client) -> List[Dict[str, Any]]:
     return rows
 
 
-def _load_container_rows(server: Server) -> List[Dict[str, Any]]:
+def _load_container_rows(server: Server, include_stats: bool = True) -> List[Dict[str, Any]]:
     if server.agent_type == "local":
         try:
             import docker
@@ -176,7 +249,7 @@ def _load_container_rows(server: Server) -> List[Dict[str, Any]]:
             rows = []
             for container in client.containers.list(all=True):
                 stats = None
-                if (container.attrs.get("State") or {}).get("Status") == "running":
+                if include_stats and (container.attrs.get("State") or {}).get("Status") == "running":
                     try:
                         stats = container.stats(stream=False)
                     except Exception:
@@ -189,7 +262,87 @@ def _load_container_rows(server: Server) -> List[Dict[str, Any]]:
     if client is None:
         raise HTTPException(status_code=400, detail=f"主机 {server.name} 未配置 SSH 凭证或连接失败")
     try:
-        return _remote_container_rows(client)
+        return _remote_container_rows(client, include_stats=include_stats)
+    finally:
+        client.close()
+
+
+def _remote_inspect_many(client, list_command: str, inspect_command: str, label: str) -> List[Dict[str, Any]]:
+    out, err, code = ssh_exec(client, list_command, timeout=30)
+    if code != 0:
+        raise HTTPException(status_code=502, detail=f"读取远程{label}失败: {(err or out).strip()[-300:]}")
+    identifiers = [line.strip() for line in out.splitlines() if line.strip()]
+    if not identifiers:
+        return []
+    quoted = " ".join(shlex.quote(item) for item in identifiers)
+    inspect_out, inspect_err, inspect_code = ssh_exec(client, f"{inspect_command} {quoted}", timeout=60)
+    if inspect_code != 0:
+        raise HTTPException(status_code=502, detail=f"读取{label}详情失败: {(inspect_err or inspect_out).strip()[-300:]}")
+    try:
+        data = json.loads(inspect_out)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=502, detail=f"远程 Docker {label}数据无效: {exc}")
+    return data if isinstance(data, list) else [data]
+
+
+def _remote_container_resource_usage(client) -> tuple[set[str], set[str]]:
+    """返回远程容器正在引用的镜像 ID 与卷名；失败时降级为空集合。"""
+    try:
+        containers = _remote_inspect_many(
+            client,
+            "docker ps -aq --no-trunc",
+            "docker container inspect",
+            "容器",
+        )
+    except HTTPException:
+        return set(), set()
+    image_ids = {item.get("Image") for item in containers if item.get("Image")}
+    volume_names = {
+        mount.get("Name")
+        for item in containers
+        for mount in (item.get("Mounts") or [])
+        if mount.get("Type") == "volume" and mount.get("Name")
+    }
+    return image_ids, volume_names
+
+
+def _load_docker_resources(server: Server, resource: str) -> List[Dict[str, Any]]:
+    if resource not in _VALID_DOCKER_RESOURCES:
+        raise HTTPException(status_code=404, detail="Docker 资源类型不存在")
+    if server.agent_type == "local":
+        try:
+            import docker
+            client = docker.from_env()
+            containers = client.containers.list(all=True)
+            used_images = {container.image.id for container in containers if container.image}
+            used_volumes = {
+                mount.get("Name")
+                for container in containers
+                for mount in (container.attrs.get("Mounts") or [])
+                if mount.get("Type") == "volume" and mount.get("Name")
+            }
+            if resource == "images":
+                return [_image_summary(image.attrs, used_images) for image in client.images.list(all=True)]
+            if resource == "networks":
+                return [_network_summary(network.attrs) for network in client.networks.list()]
+            return [_volume_summary(volume.attrs, used_volumes) for volume in client.volumes.list()]
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"读取本机 Docker {resource} 失败: {exc}")
+
+    client = get_ssh_client(server)
+    if client is None:
+        raise HTTPException(status_code=400, detail=f"主机 {server.name} 未配置 SSH 凭证或连接失败")
+    try:
+        if resource == "images":
+            used_images, _ = _remote_container_resource_usage(client)
+            attrs = _remote_inspect_many(client, "docker image ls -aq --no-trunc | sort -u", "docker image inspect", "镜像")
+            return [_image_summary(item, used_images) for item in attrs]
+        if resource == "networks":
+            attrs = _remote_inspect_many(client, "docker network ls -q --no-trunc", "docker network inspect", "网络")
+            return [_network_summary(item) for item in attrs]
+        _, used_volumes = _remote_container_resource_usage(client)
+        attrs = _remote_inspect_many(client, "docker volume ls -q", "docker volume inspect", "存储卷")
+        return [_volume_summary(item, used_volumes) for item in attrs]
     finally:
         client.close()
 
@@ -203,6 +356,13 @@ def _server_or_404(db, server_id: str) -> Server:
     if not server:
         raise HTTPException(status_code=404, detail="主机不存在")
     return server
+
+
+def _invalidate_container_cache(server_id: str) -> None:
+    prefix = f"{server_id}:"
+    for key in list(_CONTAINER_CACHE):
+        if key.startswith(prefix):
+            _CONTAINER_CACHE.pop(key, None)
 
 
 def _resolve_service_target(svc: Service) -> tuple:
@@ -361,15 +521,27 @@ def get_service_logs(
 @router.get("/servers/{server_id}/containers", dependencies=[Depends(get_current_user)])
 def list_server_containers(
     server_id: str,
+    include_stats: bool = Query(False, description="是否采集 Docker 实时资源占用"),
+    refresh: bool = Query(False, description="跳过短时缓存"),
     status: str = Query("all", pattern="^(all|running|paused|stopped)$"),
     search: str = Query("", max_length=120),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
 ):
     """返回一台主机的容器清单与实时资源数据。"""
+    cache_key = f"{server_id}:{'stats' if include_stats else 'basic'}"
+    ttl = 10 if include_stats else 15
+    cached_entry = _CONTAINER_CACHE.get(cache_key)
+    cache_hit = bool(cached_entry and time.time() - cached_entry["time"] < ttl and not refresh)
     with get_db() as db:
         server = _server_or_404(db, server_id)
-        rows = _load_container_rows(server)
+        if PREVIEW_MODE:
+            return {"items": [], "total": 0, "page": page, "page_size": page_size, "cached": False, "data_timestamp": time.time(), "stats_timestamp": time.time() if include_stats else None}
+        if cache_hit:
+            rows = [dict(item) for item in cached_entry["rows"]]
+        else:
+            rows = _load_container_rows(server, include_stats=include_stats)
+            _CONTAINER_CACHE[cache_key] = {"time": time.time(), "rows": [dict(item) for item in rows]}
         services = db.query(Service).filter(Service.server_id == server.id).all()
         services_by_container = {s.container_name: {"id": str(s.id), "name": s.name} for s in services if s.container_name}
 
@@ -387,7 +559,12 @@ def list_server_containers(
     rows.sort(key=lambda row: (row.get("state") != "running", row.get("name", "").lower()))
     total = len(rows)
     start = (page - 1) * page_size
-    return {"items": rows[start:start + page_size], "total": total, "page": page, "page_size": page_size}
+    timestamp = cached_entry["time"] if cache_hit else _CONTAINER_CACHE[cache_key]["time"]
+    return {
+        "items": rows[start:start + page_size], "total": total, "page": page, "page_size": page_size,
+        "cached": cache_hit, "data_timestamp": timestamp,
+        "stats_timestamp": timestamp if include_stats else None,
+    }
 
 
 @router.get("/servers/{server_id}/containers/{container_id}/inspect", dependencies=[Depends(get_current_user)])
@@ -507,6 +684,7 @@ def operate_server_containers(server_id: str, payload: ContainerActionRequest):
                     })
             finally:
                 client.close()
+    _invalidate_container_cache(server_id)
     return {"ok": all(item["ok"] for item in results), "action": payload.action, "results": results}
 
 
@@ -519,11 +697,13 @@ def prune_server_containers(server_id: str):
             try:
                 import docker
                 result = docker.from_env().containers.prune()
-                return {
+                response = {
                     "ok": True,
                     "deleted": result.get("ContainersDeleted") or [],
                     "space_reclaimed": int(result.get("SpaceReclaimed") or 0),
                 }
+                _invalidate_container_cache(server_id)
+                return response
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=f"清理本机容器失败: {exc}")
         client = get_ssh_client(server)
@@ -533,6 +713,128 @@ def prune_server_containers(server_id: str):
             out, err, code = ssh_exec(client, "docker container prune --force", timeout=60)
             if code != 0:
                 raise HTTPException(status_code=502, detail=f"清理容器失败: {(err or out).strip()[-300:]}")
+            _invalidate_container_cache(server_id)
             return {"ok": True, "output": out.strip()[-2000:]}
+        finally:
+            client.close()
+
+
+# === Docker resources (v4.2 phase 1) ===
+
+@router.get("/servers/{server_id}/docker/{resource}", dependencies=[Depends(get_current_user)])
+def list_server_docker_resources(
+    server_id: str,
+    resource: str,
+    search: str = Query("", max_length=120),
+):
+    """列出单台主机的镜像、网络或存储卷。"""
+    if resource not in _VALID_DOCKER_RESOURCES:
+        raise HTTPException(status_code=404, detail="Docker 资源类型不存在")
+    if PREVIEW_MODE:
+        return {"items": [], "total": 0, "in_use": 0, "total_size": 0}
+    with get_db() as db:
+        server = _server_or_404(db, server_id)
+        rows = _load_docker_resources(server, resource)
+    needle = search.strip().lower()
+    if needle:
+        def searchable(row: Dict[str, Any]) -> str:
+            values = [row.get("id"), row.get("name"), row.get("driver")]
+            values.extend(row.get("repo_tags") or [])
+            return " ".join(str(item or "") for item in values).lower()
+        rows = [row for row in rows if needle in searchable(row)]
+    rows.sort(key=lambda row: (not row.get("in_use"), str(row.get("name") or (row.get("repo_tags") or [""])[0]).lower()))
+    return {
+        "items": rows,
+        "total": len(rows),
+        "in_use": sum(1 for row in rows if row.get("in_use")),
+        "total_size": sum(int(row.get("size") or 0) for row in rows),
+    }
+
+
+@router.post("/servers/{server_id}/docker/{resource}/delete", dependencies=[Depends(get_current_user)])
+def delete_server_docker_resources(server_id: str, resource: str, payload: DockerResourceDeleteRequest):
+    """批量删除 Docker 资源；默认不强制删除正在使用的资源。"""
+    if resource not in _VALID_DOCKER_RESOURCES:
+        raise HTTPException(status_code=404, detail="Docker 资源类型不存在")
+    targets = list(dict.fromkeys(_docker_resource_id(item) for item in payload.resource_ids))
+    results = []
+    with get_db() as db:
+        server = _server_or_404(db, server_id)
+        if resource == "networks":
+            protected = {
+                value
+                for item in _load_docker_resources(server, "networks")
+                if item.get("system")
+                for value in (item.get("id"), item.get("name"))
+                if value
+            }
+            if any(item in protected for item in targets):
+                raise HTTPException(status_code=400, detail="Docker 默认网络不允许删除")
+        if server.agent_type == "local":
+            try:
+                import docker
+                client = docker.from_env()
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"连接本机 Docker 失败: {exc}")
+            for target in targets:
+                try:
+                    if resource == "images":
+                        client.images.remove(target, force=payload.force)
+                    elif resource == "networks":
+                        client.networks.get(target).remove()
+                    else:
+                        client.volumes.get(target).remove(force=payload.force)
+                    results.append({"resource_id": target, "ok": True})
+                except Exception as exc:
+                    results.append({"resource_id": target, "ok": False, "error": str(exc)[-300:]})
+        else:
+            client = get_ssh_client(server)
+            if client is None:
+                raise HTTPException(status_code=400, detail=f"主机 {server.name} 未配置 SSH 凭证或连接失败")
+            try:
+                command_names = {"images": "image rm", "networks": "network rm", "volumes": "volume rm"}
+                for target in targets:
+                    force = "--force " if payload.force and resource in {"images", "volumes"} else ""
+                    command = f"docker {command_names[resource]} {force}{shlex.quote(target)}"
+                    out, err, code = ssh_exec(client, command, timeout=60)
+                    results.append({
+                        "resource_id": target,
+                        "ok": code == 0,
+                        "output": out.strip()[-300:],
+                        "error": "" if code == 0 else (err or out).strip()[-300:],
+                    })
+            finally:
+                client.close()
+    return {"ok": all(item["ok"] for item in results), "resource": resource, "results": results}
+
+
+@router.post("/servers/{server_id}/docker/{resource}/prune", dependencies=[Depends(get_current_user)])
+def prune_server_docker_resources(server_id: str, resource: str):
+    """清理未使用的 Docker 镜像、网络或存储卷。镜像仅清理悬空层。"""
+    if resource not in _VALID_DOCKER_RESOURCES:
+        raise HTTPException(status_code=404, detail="Docker 资源类型不存在")
+    with get_db() as db:
+        server = _server_or_404(db, server_id)
+        if server.agent_type == "local":
+            try:
+                import docker
+                client = docker.from_env()
+                result = {
+                    "images": client.images.prune,
+                    "networks": client.networks.prune,
+                    "volumes": client.volumes.prune,
+                }[resource]()
+                return {"ok": True, "resource": resource, "result": result}
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"清理本机 Docker {resource} 失败: {exc}")
+        client = get_ssh_client(server)
+        if client is None:
+            raise HTTPException(status_code=400, detail=f"主机 {server.name} 未配置 SSH 凭证或连接失败")
+        try:
+            singular = {"images": "image", "networks": "network", "volumes": "volume"}[resource]
+            out, err, code = ssh_exec(client, f"docker {singular} prune --force", timeout=120)
+            if code != 0:
+                raise HTTPException(status_code=502, detail=f"清理 Docker {resource} 失败: {(err or out).strip()[-300:]}")
+            return {"ok": True, "resource": resource, "output": out.strip()[-3000:]}
         finally:
             client.close()

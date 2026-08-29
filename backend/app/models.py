@@ -1,10 +1,12 @@
-from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, BigInteger, Date, Enum as SAEnum, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, BigInteger, Date, Enum as SAEnum, UniqueConstraint, JSON, Uuid
+from sqlalchemy.dialects.postgresql import JSONB as PostgreSQLJSONB
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
 import uuid, enum
 
 Base = declarative_base()
+UUID = Uuid
+JSONB = JSON().with_variant(PostgreSQLJSONB(), "postgresql")
 
 class ServerStatus(str, enum.Enum):
     online = "online"
@@ -51,6 +53,7 @@ class Server(Base):
     agent_version = Column(String(20), nullable=True)
     agent_type = Column(String(20), default="remote")  # remote=SSH部署, local=本机内置
     services = relationship("Service", back_populates="server", cascade="all, delete-orphan")
+    database_instances = relationship("DatabaseInstance", back_populates="server", cascade="all, delete-orphan")
 
     # ── is_local / agent_type 一致性约束 ──
     # is_local=True  必须对应 agent_type='local'  (本机内置)
@@ -98,6 +101,34 @@ class Service(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     server = relationship("Server", back_populates="services")
+
+
+class DatabaseInstance(Base):
+    """Managed MySQL/PostgreSQL/Redis connection owned by a host context."""
+    __tablename__ = "database_instances"
+    __table_args__ = (
+        UniqueConstraint("server_id", "engine", "host", "port", name="uq_database_instance_target"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    engine = Column(String(20), nullable=False)
+    source = Column(String(20), default="manual", nullable=False)
+    connection_mode = Column(String(20), default="direct", nullable=False)
+    host = Column(String(200), nullable=False)
+    port = Column(Integer, nullable=False)
+    username = Column(String(100), nullable=True)
+    secret_ciphertext = Column(Text, nullable=True)
+    default_database = Column(String(100), nullable=True)
+    container_name = Column(String(128), nullable=True)
+    version = Column(String(100), nullable=True)
+    status = Column(String(20), default="pending", nullable=False)
+    last_error = Column(Text, nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    server = relationship("Server", back_populates="database_instances")
 
 
 class ServiceProbeResult(Base):

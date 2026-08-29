@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.3.1 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.4.0 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -13,7 +13,7 @@ import argparse
 import threading
 import re
 
-AGENT_VERSION = "2.3.1"
+AGENT_VERSION = "2.4.0"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -175,7 +175,7 @@ def _collect_disk_devices():
     return devices
 
 
-def _collect_processes(sort_key):
+def _collect_processes(sort_key, limit=10, search='', user='', state=''):
     """Collect top processes by CPU or resident memory using procps."""
     sort_arg = '-%cpu' if sort_key == 'cpu' else '-rss'
     try:
@@ -184,18 +184,27 @@ def _collect_processes(sort_key):
             capture_output=True, text=True, timeout=3,
         )
         rows = []
-        for line in result.stdout.splitlines()[:10]:
+        for line in result.stdout.splitlines():
             parts = line.split(None, 7)
             if len(parts) != 8:
                 continue
             if parts[3] == 'ps':
                 continue
-            rows.append({
+            row = {
                 'pid': int(parts[0]), 'ppid': int(parts[1]), 'user': parts[2],
                 'command': parts[3], 'cpu_percent': float(parts[4]),
                 'memory_percent': float(parts[5]), 'rss_bytes': int(parts[6]) * 1024,
                 'state': parts[7],
-            })
+            }
+            if search and search.lower() not in f"{row['pid']} {row['command']} {row['user']}".lower():
+                continue
+            if user and row['user'] != user:
+                continue
+            if state and not row['state'].startswith(state):
+                continue
+            rows.append(row)
+            if len(rows) >= max(1, min(int(limit), 500)):
+                break
         return rows
     except Exception:
         return []
@@ -227,7 +236,7 @@ def _collect_container_stats():
     except Exception:
         return []
 
-def collect_metrics():
+def collect_metrics(lightweight=False):
     """Collect system metrics from /proc filesystem."""
     m = {}
 
@@ -346,6 +355,8 @@ def collect_metrics():
     m['container_stopped'] = 0
     m['containers'] = []
     try:
+        if lightweight:
+            raise RuntimeError('skip docker in lightweight profile')
         result = subprocess.run(
             ['docker', 'ps', '-a', '--format', '{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}'],
             capture_output=True, text=True, timeout=5
@@ -371,9 +382,9 @@ def collect_metrics():
     except Exception:
         pass
 
-    m['container_stats'] = _collect_container_stats()
-    m['top_cpu_processes'] = _collect_processes('cpu')
-    m['top_memory_processes'] = _collect_processes('memory')
+    m['container_stats'] = [] if lightweight else _collect_container_stats()
+    m['top_cpu_processes'] = [] if lightweight else _collect_processes('cpu')
+    m['top_memory_processes'] = [] if lightweight else _collect_processes('memory')
 
     # --- Host info ---
     m['hostname'] = platform.node()
@@ -424,6 +435,24 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
                 return
             data = collect_metrics()
             self._json_response(data)
+
+        elif path == '/api/v1/system/summary':
+            if not self._check_auth():
+                return
+            self._json_response(collect_metrics(lightweight=True))
+
+        elif path == '/api/v1/processes':
+            if not self._check_auth():
+                return
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            sort_key = (q.get('sort') or ['cpu'])[0]
+            limit = int((q.get('limit') or ['200'])[0])
+            search = (q.get('search') or [''])[0]
+            user = (q.get('user') or [''])[0]
+            state = (q.get('state') or [''])[0]
+            rows = _collect_processes(sort_key, limit, search, user, state)
+            self._json_response({'items': rows, 'total': len(rows), 'timestamp': time.time()})
 
         elif path == '/health':
             self._json_response({"status": "ok", "version": VERSION})

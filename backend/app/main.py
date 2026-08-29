@@ -4,10 +4,10 @@ from datetime import datetime, timedelta, date
 from typing import Optional, List
 from contextlib import contextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, UploadFile, File as FastAPIFile
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, UploadFile, File as FastAPIFile
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
@@ -28,7 +28,7 @@ from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
 )
-from app.config import RETENTION_METRIC_DAYS
+from app.config import PREVIEW_MODE, RETENTION_METRIC_DAYS
 
 # === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康） ===
 from app.api_keys import router as api_keys_router
@@ -36,6 +36,8 @@ from app.topology import router as topology_router
 from app.control import router as control_router
 from app.service_health import run_service_health_cycle, service_health_loop
 from app.plaza import router as plaza_router
+from app.system_control import router as system_control_router
+from app.databases import router as databases_router
 
 class TerminalCreateRequest(BaseModel):
     server_id: str
@@ -163,7 +165,10 @@ _SKIP_PROCESSES = {"hbrclient", "hbrclientupdater", "snapd", "packagekitd", "pol
 
 
 # === Database ===
-engine = create_engine(DB_URL, poolclass=QueuePool, pool_size=5, max_overflow=10)
+_engine_options = {"poolclass": QueuePool, "pool_size": 5, "max_overflow": 10}
+if DB_URL.startswith("sqlite"):
+    _engine_options["connect_args"] = {"check_same_thread": False}
+engine = create_engine(DB_URL, **_engine_options)
 SessionLocal = sessionmaker(bind=engine)
 
 @contextmanager
@@ -176,23 +181,26 @@ def get_db():
 
 # === Schemas ===
 class ServerCreate(BaseModel):
-    name: str
-    host: str
-    ssh_port: int = 22
-    ssh_user: str = "ops"
+    name: str = Field(..., min_length=1, max_length=50)
+    host: str = Field(..., min_length=1, max_length=100)
+    ssh_port: int = Field(22, ge=1, le=65535)
+    ssh_user: str = Field("ops", min_length=1, max_length=50)
     ssh_key: Optional[str] = None
     ssh_password: Optional[str] = None
-    tags: List[str] = []
+    tags: List[str] = Field(default_factory=list)
     is_local: bool = False
+    remark: Optional[str] = None
+    auto_deploy_agent: bool = True
 
 class ServerUpdate(BaseModel):
-    name: Optional[str] = None
-    host: Optional[str] = None
-    ssh_port: Optional[int] = None
-    ssh_user: Optional[str] = None
+    name: Optional[str] = Field(None, min_length=1, max_length=50)
+    host: Optional[str] = Field(None, min_length=1, max_length=100)
+    ssh_port: Optional[int] = Field(None, ge=1, le=65535)
+    ssh_user: Optional[str] = Field(None, min_length=1, max_length=50)
     ssh_key: Optional[str] = None
     ssh_password: Optional[str] = None
     tags: Optional[List[str]] = None
+    remark: Optional[str] = None
 
 
 class SshTestRequest(BaseModel):
@@ -259,6 +267,8 @@ app.include_router(api_keys_router)
 app.include_router(topology_router)
 app.include_router(control_router)
 app.include_router(plaza_router)
+app.include_router(system_control_router)
+app.include_router(databases_router)
 
 # === Startup ===
 
@@ -1089,11 +1099,6 @@ def _ensure_new_columns():
 
 @app.on_event("startup")
 async def startup():
-    # Start Agent health check background task
-    import asyncio
-    asyncio.create_task(_agent_health_check_loop())
-    # v3.29 T4: 服务健康检查后台循环（间隔/阈值走环境变量）
-    asyncio.create_task(service_health_loop())
     # Wait for DB and create tables
     import time
     for i in range(30):
@@ -1103,6 +1108,16 @@ async def startup():
             break
         except Exception:
             time.sleep(2)
+
+    # Preview uses an isolated database and intentionally runs no scanners/timers.
+    if PREVIEW_MODE:
+        return
+
+    # Start Agent health check background task
+    import asyncio
+    asyncio.create_task(_agent_health_check_loop())
+    # v3.29 T4: 服务健康检查后台循环（间隔/阈值走环境变量）
+    asyncio.create_task(service_health_loop())
     
     # Auto-register local server and discover services
     with get_db() as db:
@@ -1217,52 +1232,65 @@ def list_servers():
                 "agent_status": s.agent_status or "not_deployed",
                 "agent_port": s.agent_port or 19100,
                 "agent_version": s.agent_version or "",
+                "remark": s.remark or "",
+                "last_error": s.last_error or "",
             })
         return result
 
+def _deploy_agent_background(server_id: str, password: Optional[str] = None):
+    """Deploy Agent after the create response so host management stays responsive."""
+    try:
+        with get_db() as db:
+            srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+            if not srv:
+                return
+            db.expunge(srv)
+        result = deploy_agent(srv, password=password)
+        with get_db() as db:
+            row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+            if not row:
+                return
+            if result.get("success"):
+                row.agent_status = "running"
+                row.agent_port = result.get("agent_port", 19100)
+                row.agent_token = result.get("agent_token", "")
+                row.agent_version = result.get("agent_version", "2.4.0")
+            else:
+                row.agent_status = "error"
+                row.last_error = result.get("message", "Agent 部署失败")[-1000:]
+            db.commit()
+    except Exception as exc:
+        with get_db() as db:
+            row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+            if row:
+                row.agent_status = "error"
+                row.last_error = str(exc)[-1000:]
+                db.commit()
+
+
 @app.post("/api/v2/servers", status_code=201)
-def create_server(data: ServerCreate):
+def create_server(data: ServerCreate, background_tasks: BackgroundTasks):
     with get_db() as db:
+        duplicate = db.query(Server).filter(Server.host == data.host.strip(), Server.ssh_port == data.ssh_port).first()
+        if duplicate:
+            raise HTTPException(409, f"主机 {data.host}:{data.ssh_port} 已存在")
         ssh_key_val = data.ssh_key
         if data.ssh_password and not data.ssh_key:
             ssh_key_val = f"__password__{data.ssh_password}"
         srv = Server(
-            name=data.name, host=data.host, ssh_port=data.ssh_port,
+            name=data.name.strip(), host=data.host.strip(), ssh_port=data.ssh_port,
             ssh_user=data.ssh_user, ssh_key=ssh_key_val,
-            tags=data.tags, is_local=data.is_local,
+            tags=data.tags, is_local=data.is_local, remark=data.remark,
+            agent_type="local" if data.is_local else "remote",
+            agent_status="deploying" if (not data.is_local and data.auto_deploy_agent and (data.ssh_password or data.ssh_key)) else "not_deployed",
         )
         db.add(srv)
         db.commit()
         db.refresh(srv)
-        result = {"id": str(srv.id), "name": srv.name, "host": srv.host}
-    
-    # Auto-deploy agent for remote servers with SSH credentials
-    if not data.is_local and (data.ssh_password or data.ssh_key):
-        try:
-            deploy_result = deploy_agent(srv, password=data.ssh_password)
-            if deploy_result.get("success"):
-                with get_db() as db2:
-                    s = db2.query(Server).filter(Server.id == srv.id).first()
-                    if s:
-                        s.agent_status = "running"
-                        s.agent_port = deploy_result.get("agent_port", 19100)
-                        s.agent_token = deploy_result.get("agent_token", "")
-                        s.agent_version = deploy_result.get("agent_version", "2.0.0")
-                        db2.commit()
-                result["agent_deployed"] = True
-                result["agent_message"] = deploy_result.get("message", "")
-            else:
-                with get_db() as db2:
-                    s = db2.query(Server).filter(Server.id == srv.id).first()
-                    if s:
-                        s.agent_status = "error"
-                        db2.commit()
-                result["agent_deployed"] = False
-                result["agent_message"] = deploy_result.get("message", "")
-        except Exception as e:
-            result["agent_deployed"] = False
-            result["agent_message"] = f"Agent部署异常: {str(e)}"
-    
+        server_id = str(srv.id)
+        result = {"id": server_id, "name": srv.name, "host": srv.host, "agent_status": srv.agent_status}
+    if result["agent_status"] == "deploying":
+        background_tasks.add_task(_deploy_agent_background, server_id, data.ssh_password)
     return result
 
 @app.get("/api/v2/servers/{server_id}")
@@ -1277,6 +1305,7 @@ def get_server(server_id: str):
             "tags": srv.tags or [], "status": srv.status,
             "docker_available": srv.docker_available, "is_local": srv.is_local, "agent_type": srv.agent_type,
             "last_seen": srv.last_seen.isoformat() if srv.last_seen else None,
+            "remark": srv.remark or "", "has_credentials": bool(srv.ssh_key),
         }
 
 @app.put("/api/v2/servers/{server_id}")
@@ -1285,9 +1314,27 @@ def update_server(server_id: str, data: ServerUpdate):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        for field, val in data.model_dump(exclude_unset=True).items():
+        values = data.model_dump(exclude_unset=True)
+        if srv.agent_type == "local" or srv.is_local:
+            protected = {"host", "ssh_port", "ssh_user", "ssh_key", "ssh_password"}
+            if protected.intersection(values):
+                raise HTTPException(400, "本地主机只允许修改名称、标签和备注")
+        new_host = values.get("host", srv.host)
+        new_port = values.get("ssh_port", srv.ssh_port)
+        duplicate = db.query(Server).filter(Server.host == new_host, Server.ssh_port == new_port, Server.id != srv.id).first()
+        if duplicate:
+            raise HTTPException(409, f"主机 {new_host}:{new_port} 已存在")
+        password = values.pop("ssh_password", None)
+        ssh_key = values.pop("ssh_key", None)
+        for field, val in values.items():
             if val is not None:
                 setattr(srv, field, val)
+        if password:
+            srv.ssh_key = f"__password__{password}"
+            srv.auth_type = "password"
+        elif ssh_key:
+            srv.ssh_key = ssh_key
+            srv.auth_type = "key"
         db.commit()
         return {"ok": True}
 
@@ -1297,6 +1344,8 @@ def delete_server(server_id: str):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
+        if srv.agent_type == "local" or srv.is_local:
+            raise HTTPException(400, "本地主机不允许删除")
         # Uninstall Agent if running (both local and remote)
         agent_info = ""
         if srv.agent_status in ("running", "error"):

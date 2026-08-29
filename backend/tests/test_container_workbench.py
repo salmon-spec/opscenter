@@ -1,10 +1,19 @@
-"""Container workbench helpers introduced in OpsCenter 4.1.0."""
+"""Container workbench helpers used by OpsCenter 4.2.0."""
 
 import pytest
 from fastapi import HTTPException
 
 from app import control
-from app.control import _container_id, _container_summary, _docker_memory, _percent
+from app.control import (
+    _container_id,
+    _container_summary,
+    _docker_memory,
+    _docker_resource_id,
+    _image_summary,
+    _network_summary,
+    _percent,
+    _volume_summary,
+)
 from app.ssh_terminal import create_session, get_session, remove_session
 
 
@@ -17,6 +26,17 @@ def test_container_identifier_allows_docker_names_and_ids():
 def test_container_identifier_rejects_shell_syntax(value):
     with pytest.raises(HTTPException):
         _container_id(value)
+
+
+def test_docker_resource_identifier_supports_image_references():
+    assert _docker_resource_id("ghcr.io/example/app:4.2") == "ghcr.io/example/app:4.2"
+    assert _docker_resource_id("sha256:" + "a" * 64).startswith("sha256:")
+
+
+@pytest.mark.parametrize("value", ["", "name with space", "name;rm", "$(id)", "../ bad"])
+def test_docker_resource_identifier_rejects_shell_syntax(value):
+    with pytest.raises(HTTPException):
+        _docker_resource_id(value)
 
 
 def test_container_summary_normalizes_network_ports_and_mounts():
@@ -45,6 +65,33 @@ def test_container_metric_parsers_are_defensive():
     assert _percent("12.34%") == 12.34
     assert _percent("n/a") == 0
     assert _docker_memory({"memory_stats": {"usage": 1000, "limit": 2000, "stats": {"inactive_file": 200}}}) == (800, 2000, 40.0)
+
+
+def test_docker_resource_summaries_mark_usage_and_protected_networks():
+    image = _image_summary({
+        "Id": "sha256:" + "c" * 64,
+        "RepoTags": ["example/app:latest"],
+        "Size": 1024,
+        "Config": {"Labels": {"org.example": "app"}},
+    }, {"sha256:" + "c" * 64})
+    assert image["in_use"] is True
+    assert image["dangling"] is False
+    assert image["size"] == 1024
+
+    network = _network_summary({
+        "Id": "d" * 64,
+        "Name": "bridge",
+        "Driver": "bridge",
+        "IPAM": {"Config": [{"Subnet": "172.17.0.0/16"}]},
+        "Containers": {"one": {}},
+    })
+    assert network["system"] is True
+    assert network["container_count"] == 1
+    assert network["subnets"] == ["172.17.0.0/16"]
+
+    volume = _volume_summary({"Name": "app-data", "Driver": "local", "UsageData": {"Size": 2048, "RefCount": 0}}, {"app-data"})
+    assert volume["in_use"] is True
+    assert volume["size"] == 2048
 
 
 def test_remote_rows_join_inspect_and_stats(monkeypatch):
