@@ -43,7 +43,7 @@ from app.api_keys import router as api_keys_router
 from app.topology import router as topology_router
 from app.control import router as control_router
 from app.service_health import run_service_health_cycle, service_health_loop
-from app.plaza import router as plaza_router
+from app.plaza import router as plaza_router, plaza_health_loop
 from app.system_control import router as system_control_router
 from app.databases import router as databases_router
 
@@ -1107,6 +1107,11 @@ def _ensure_new_columns():
         "ALTER TABLE servers ADD COLUMN IF NOT EXISTS log_agent_version VARCHAR(20)",
         "ALTER TABLE servers ADD COLUMN IF NOT EXISTS log_agent_error TEXT",
         "ALTER TABLE servers ADD COLUMN IF NOT EXISTS log_agent_checked_at TIMESTAMP",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_enabled BOOLEAN DEFAULT TRUE NOT NULL",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_interval_seconds INTEGER DEFAULT 60 NOT NULL",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_timeout_seconds DOUBLE PRECISION DEFAULT 4 NOT NULL",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_success_statuses VARCHAR(200) DEFAULT '200-399,401,403' NOT NULL",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_verify_tls BOOLEAN DEFAULT TRUE NOT NULL",
     ]
     try:
         with engine.connect() as conn:
@@ -1172,6 +1177,8 @@ async def startup():
     asyncio.create_task(_agent_health_check_loop())
     # v3.29 T4: 服务健康检查后台循环（间隔/阈值走环境变量）
     asyncio.create_task(service_health_loop())
+    # v4.5: 服务广场按每个应用的策略探活并沉淀历史数据。
+    asyncio.create_task(plaza_health_loop())
     
     # Auto-register local server and discover services
     with get_db() as db:

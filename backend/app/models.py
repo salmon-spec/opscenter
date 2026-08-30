@@ -181,8 +181,41 @@ class PlazaServiceProfile(Base):
     documentation_url = Column(Text, nullable=True)
     owner = Column(String(100), nullable=True)
     tags = Column(JSONB, default=list)
+    probe_enabled = Column(Boolean, default=True, nullable=False)
+    probe_interval_seconds = Column(Integer, default=60, nullable=False)
+    probe_timeout_seconds = Column(Float, default=4.0, nullable=False)
+    probe_success_statuses = Column(String(200), default="200-399,401,403", nullable=False)
+    probe_verify_tls = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PlazaProbeResult(Base):
+    """Persistent health result for both catalog and manual plaza entries."""
+    __tablename__ = "plaza_probe_results"
+    __table_args__ = (Index("ix_plaza_probe_lookup", "plaza_key", "checked_at"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plaza_key = Column(String(140), nullable=False)
+    checked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    status = Column(String(20), nullable=False)
+    http_status = Column(Integer, nullable=True)
+    latency_ms = Column(Float, nullable=True)
+    error = Column(Text, nullable=True)
+    probe_url = Column(Text, nullable=True)
+
+
+class PlazaCredentialAccess(Base):
+    """Credential reveal audit. Never stores the revealed value."""
+    __tablename__ = "plaza_credential_access"
+    __table_args__ = (Index("ix_plaza_credential_access_lookup", "plaza_key", "created_at"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plaza_key = Column(String(140), nullable=False)
+    action = Column(String(30), default="reveal", nullable=False)
+    actor = Column(String(100), nullable=True)
+    ip = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class ServiceRelation(Base):

@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 
 from app.credential_crypto import decrypt_secret
 from app.main import Base, SessionLocal, app, engine
-from app.models import PlazaServiceProfile
+from app.models import PlazaCredentialAccess, PlazaProbeResult, PlazaServiceProfile
+from app import plaza
 
 
 client = TestClient(app)
@@ -14,8 +15,14 @@ client = TestClient(app)
 
 @pytest.fixture(autouse=True)
 def clean_database():
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
+    with plaza._cycle_lock:
+        Base.metadata.drop_all(bind=engine)
+        Base.metadata.create_all(bind=engine)
+        with plaza._cache_lock:
+            plaza._cached_checks.clear()
+            plaza._cached_at = 0.0
+            plaza._refreshing = False
+        plaza._probe_times.clear()
     yield
 
 
@@ -59,6 +66,15 @@ def test_catalog_profile_can_be_edited_and_password_is_encrypted():
     assert reveal.status_code == 200
     assert reveal.headers["cache-control"].startswith("no-store")
     assert reveal.json() == {"username": "dev-admin", "password": "plaza-secret"}
+    with SessionLocal() as db:
+        access = db.query(PlazaCredentialAccess).filter(
+            PlazaCredentialAccess.plaza_key == "gitea",
+        ).one()
+        assert access.actor == "admin"
+        assert "plaza-secret" not in repr(access.__dict__)
+    history = client.get("/api/v2/services/plaza/gitea/credential-access-history").json()
+    assert len(history) == 1 and history[0]["actor"] == "admin"
+    assert "password" not in history[0]
 
 
 def test_blank_password_preserves_existing_and_explicit_clear_removes_it():
@@ -89,3 +105,43 @@ def test_manual_service_creation_stores_credentials_in_profile_only():
     row = next(item for item in rows if item["service_id"] == service_id)
     assert row["has_credentials"] is True
     assert "password" not in row and "credential_username" not in row
+
+
+def test_probe_policy_manual_probe_and_history(monkeypatch):
+    update = client.put("/api/v2/services/plaza/gitea", json={
+        "probe_enabled": False,
+        "probe_interval_seconds": 300,
+        "probe_timeout_seconds": 2.5,
+        "probe_success_statuses": "200-299,401",
+        "probe_verify_tls": False,
+    })
+    assert update.status_code == 200, update.text
+    detail = client.get("/api/v2/services/plaza/gitea/detail").json()
+    assert detail["probe_policy"] == {
+        "enabled": False, "interval_seconds": 300, "timeout_seconds": 2.5,
+        "success_statuses": "200-299,401", "verify_tls": False,
+    }
+
+    monkeypatch.setattr(plaza, "_probe", lambda _item: {
+        "status": "up", "http_status": 204, "latency_ms": 12,
+        "health_error": "", "checked_at": "2026-08-31T00:00:00",
+    })
+    result = client.post("/api/v2/services/plaza/gitea/probe")
+    assert result.status_code == 200, result.text
+    assert result.json()["status"] == "up"
+    with SessionLocal() as db:
+        row = db.query(PlazaProbeResult).filter(PlazaProbeResult.plaza_key == "gitea").one()
+        assert row.http_status == 204 and row.latency_ms == 12
+
+    history = client.get("/api/v2/services/plaza/gitea/probe-history?hours=24").json()
+    assert len(history) == 1 and history[0]["status"] == "up"
+    detail = client.get("/api/v2/services/plaza/gitea/detail").json()
+    assert detail["probe_summary"]["checks_24h"] == 1
+    assert detail["probe_summary"]["uptime_percent_24h"] == 100.0
+
+
+def test_probe_success_status_validation():
+    response = client.put("/api/v2/services/plaza/gitea", json={
+        "probe_success_statuses": "200-999",
+    })
+    assert response.status_code == 422

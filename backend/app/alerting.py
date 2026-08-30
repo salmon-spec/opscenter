@@ -29,7 +29,7 @@ from app.config import (
 )
 from app.database import get_db
 from app.models import (
-    AuditLog, DailyReport,
+    AuditLog, DailyReport, PlazaProbeResult, PlazaCredentialAccess,
     AlertEvent,
     AlertRule,
     AlertSilence,
@@ -310,6 +310,8 @@ _RETENTION = [
     ("network_latency", NetworkLatency, RETENTION_LATENCY_DAYS, "timestamp", False),
     ("network_stats", NetworkStats, RETENTION_STATS_DAYS, "date", True),
     ("audit_logs", AuditLog, 90, "ts", False),                # v3.28 A2 审计日志保留 90 天
+    ("plaza_probe_results", PlazaProbeResult, 90, "checked_at", False),
+    ("plaza_credential_access", PlazaCredentialAccess, 180, "created_at", False),
     ("daily_reports", DailyReport, 90, "report_date", True),  # v3.28 R1 日报保留 90 天
 ]
 
