@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     loki_url: str = ""                                  # 中央 Loki，例如 http://10.66.66.5:3100
     loki_timeout_seconds: float = 12.0
     loki_retention_days: int = 365
+    alloy_version: str = "1.18.0"
 
 
 _settings = Settings()
@@ -113,6 +114,7 @@ RETENTION_ROLLUP_1H_DAYS = _settings.retention_rollup_1h_days
 LOKI_URL = _settings.loki_url.rstrip("/")
 LOKI_TIMEOUT_SECONDS = _settings.loki_timeout_seconds
 LOKI_RETENTION_DAYS = _settings.loki_retention_days
+ALLOY_VERSION = _settings.alloy_version
 
 # ── App ──
 from app.version import VERSION  # noqa: E402

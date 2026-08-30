@@ -30,6 +30,7 @@ from app.firewall_control import router as firewall_control_router
 from app.ssh_control import router as ssh_control_router
 from app.metrics_history import router as metrics_history_router, metric_rollup_loop
 from app.log_center import router as log_center_router
+from app.alloy_manager import router as alloy_manager_router
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -281,6 +282,7 @@ app.include_router(firewall_control_router)
 app.include_router(ssh_control_router)
 app.include_router(metrics_history_router)
 app.include_router(log_center_router)
+app.include_router(alloy_manager_router)
 
 # === Startup ===
 
@@ -1098,6 +1100,10 @@ def _ensure_new_columns():
         "ALTER TABLE services ADD COLUMN IF NOT EXISTS deploy_type VARCHAR(20)",
         "ALTER TABLE services ADD COLUMN IF NOT EXISTS started_at TIMESTAMP",
         "ALTER TABLE services ADD COLUMN IF NOT EXISTS version VARCHAR(60)",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS log_agent_status VARCHAR(20) DEFAULT 'unknown'",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS log_agent_version VARCHAR(20)",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS log_agent_error TEXT",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS log_agent_checked_at TIMESTAMP",
     ]
     try:
         with engine.connect() as conn:
@@ -1247,6 +1253,10 @@ def list_servers():
                 "agent_status": s.agent_status or "not_deployed",
                 "agent_port": s.agent_port or 19100,
                 "agent_version": s.agent_version or "",
+                "log_agent_status": s.log_agent_status or "unknown",
+                "log_agent_version": s.log_agent_version or "",
+                "log_agent_error": s.log_agent_error or "",
+                "log_agent_checked_at": s.log_agent_checked_at.isoformat() if s.log_agent_checked_at else None,
                 "remark": s.remark or "",
                 "last_error": s.last_error or "",
             })

@@ -52,6 +52,10 @@ class Server(Base):
     agent_token = Column(Text, nullable=True)
     agent_version = Column(String(20), nullable=True)
     agent_type = Column(String(20), default="remote")  # remote=SSH部署, local=本机内置
+    log_agent_status = Column(String(20), default="unknown")  # unknown/checking/deploying/running/error
+    log_agent_version = Column(String(20), nullable=True)
+    log_agent_error = Column(Text, nullable=True)
+    log_agent_checked_at = Column(DateTime, nullable=True)
     services = relationship("Service", back_populates="server", cascade="all, delete-orphan")
     database_instances = relationship("DatabaseInstance", back_populates="server", cascade="all, delete-orphan")
 
