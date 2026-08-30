@@ -1,7 +1,8 @@
 """Grafana Alloy lifecycle management for long-term host log collection."""
 from __future__ import annotations
 
-from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import secrets
@@ -9,8 +10,9 @@ from urllib.parse import urlparse
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+import requests
 
-from app.config import ALLOY_VERSION, LOKI_URL
+from app.config import ALLOY_VERSION, LOKI_TIMEOUT_SECONDS, LOKI_URL
 from app.database import get_db
 from app.models import Server
 from app.ssh_manager import get_ssh_client, ssh_exec
@@ -38,6 +40,37 @@ def _push_url() -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("请先配置有效的 LOKI_URL")
     return f"{LOKI_URL}/loki/api/v1/push"
+
+
+def _probe_ingestion(server_id: str, now: datetime) -> dict:
+    """Read one recent log entry for a host; called only by an explicit UI probe."""
+    try:
+        response = requests.get(f"{LOKI_URL}/loki/api/v1/query_range", params={
+            "query": f'{{server_id="{server_id}"}}',
+            "start": str(int((now - timedelta(hours=24)).replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)),
+            "end": str(int(now.replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)),
+            "limit": 1,
+            "direction": "backward",
+        }, timeout=LOKI_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("status") == "error":
+            raise ValueError(payload.get("error", "Loki query failed"))
+        timestamps = [
+            int(value[0]) for stream in payload.get("data", {}).get("result", [])
+            for value in stream.get("values", []) if value
+        ]
+        if not timestamps:
+            return {"ingestion_status": "no_data", "last_log_at": None, "age_seconds": None}
+        latest = max(timestamps)
+        last_at = datetime.fromtimestamp(latest / 1_000_000_000, timezone.utc).replace(tzinfo=None)
+        age = max(0, int((now - last_at).total_seconds()))
+        return {
+            "ingestion_status": "fresh" if age <= 600 else "stale",
+            "last_log_at": last_at.isoformat() + "Z", "age_seconds": age,
+        }
+    except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+        return {"ingestion_status": "error", "last_log_at": None, "age_seconds": None, "probe_error": str(exc)[:500]}
 
 
 def _upload(client, content: str, destination: str, mode: str, sudo: str) -> tuple[bool, str]:
@@ -181,6 +214,68 @@ def _schedule(server_id: str, action: str, background_tasks: BackgroundTasks) ->
 @router.get("/logs/agents/version")
 def alloy_version():
     return {"current_version": ALLOY_VERSION, "loki_configured": bool(LOKI_URL)}
+
+
+@router.get("/logs/agents/overview")
+def alloy_overview(probe: bool = False):
+    with get_db() as db:
+        rows = db.query(Server).order_by(Server.name.asc(), Server.host.asc()).all()
+        agents = [{
+            "server_id": str(row.id), "name": row.name, "host": row.host,
+            "is_local": bool(row.agent_type == "local" or row.is_local),
+            "has_credentials": bool(row.ssh_key),
+            "collector_status": row.log_agent_status or "unknown",
+            "collector_version": row.log_agent_version or "",
+            "collector_error": row.log_agent_error or "",
+            "checked_at": row.log_agent_checked_at.isoformat() + "Z" if row.log_agent_checked_at else None,
+            "ingestion_status": "not_probed", "last_log_at": None, "age_seconds": None,
+        } for row in rows]
+    if probe and LOKI_URL and agents:
+        now = datetime.utcnow()
+        workers = min(8, len(agents))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="loki-ingestion") as pool:
+            futures = {item["server_id"]: pool.submit(_probe_ingestion, item["server_id"], now) for item in agents}
+            for item in agents:
+                item.update(futures[item["server_id"]].result())
+    elif probe and not LOKI_URL:
+        for item in agents:
+            item.update({"ingestion_status": "error", "probe_error": "Loki 尚未配置"})
+
+    for item in agents:
+        collector = item["collector_status"]
+        ingestion = item["ingestion_status"]
+        if collector == "error":
+            item["diagnostic_level"] = "error"
+            item["diagnostic"] = item["collector_error"] or "采集器异常"
+        elif ingestion == "error":
+            item["diagnostic_level"] = "error"
+            item["diagnostic"] = item.get("probe_error") or "Loki 探测失败"
+        elif collector == "running" and ingestion in {"stale", "no_data"}:
+            item["diagnostic_level"] = "warning"
+            item["diagnostic"] = "采集器运行中，但最近24小时没有新日志" if ingestion == "no_data" else "最近日志已超过10分钟"
+        elif collector in {"running", "deploying", "checking"}:
+            item["diagnostic_level"] = "ok" if collector == "running" else "info"
+            item["diagnostic"] = "采集正常" if ingestion in {"fresh", "not_probed"} else "正在处理"
+        elif item["is_local"]:
+            item["diagnostic_level"] = "warning"
+            item["diagnostic"] = "请部署中心观测栈"
+        elif not item["has_credentials"]:
+            item["diagnostic_level"] = "warning"
+            item["diagnostic"] = "缺少 SSH 凭证，无法自动部署"
+        else:
+            item["diagnostic_level"] = "warning"
+            item["diagnostic"] = "日志采集器未部署"
+
+    total = len(agents)
+    running = sum(item["collector_status"] == "running" for item in agents)
+    fresh = sum(item["ingestion_status"] == "fresh" for item in agents)
+    abnormal = sum(item["diagnostic_level"] in {"warning", "error"} for item in agents)
+    return {
+        "loki_configured": bool(LOKI_URL), "probed": probe,
+        "total": total, "running": running, "fresh": fresh, "abnormal": abnormal,
+        "coverage_percent": round(running * 100 / total, 1) if total else 0,
+        "agents": agents,
+    }
 
 
 @router.post("/servers/{server_id}/logs/agent/check", status_code=202)

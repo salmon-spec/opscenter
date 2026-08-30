@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 
 os.environ.setdefault(
     "DATABASE_URL",
@@ -104,3 +105,56 @@ def test_version_parser_and_systemd_escaping():
     assert alloy_manager._version("alloy, version v1.18.0 (branch: HEAD)") == "1.18.0"
     escaped = alloy_manager._systemd_escape('node%1 "db"\nnext')
     assert escaped == 'node%%1 \\"db\\" next'
+
+
+def test_overview_is_fast_by_default_and_reports_coverage(monkeypatch):
+    running = _server(log_status="running")
+    _server(credentials=False, log_status="unknown")
+    monkeypatch.setattr(alloy_manager.requests, "get", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected Loki probe")))
+
+    response = client.get("/api/v2/logs/agents/overview")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["probed"] is False
+    assert payload["total"] == 2
+    assert payload["running"] == 1
+    assert payload["coverage_percent"] == 50.0
+    agents = {item["server_id"]: item for item in payload["agents"]}
+    assert agents[running]["ingestion_status"] == "not_probed"
+    assert any(item["diagnostic"] == "缺少 SSH 凭证，无法自动部署" for item in payload["agents"])
+
+
+def test_explicit_overview_probe_detects_fresh_and_missing_logs(monkeypatch):
+    fresh_id = _server(log_status="running")
+    missing_id = _server(log_status="running")
+    calls = []
+
+    class ProbeResponse:
+        def __init__(self, params):
+            self.params = params
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            values = [[str(time.time_ns()), "fresh"]] if fresh_id in self.params["query"] else []
+            result = [{"stream": {}, "values": values}] if values else []
+            return {"status": "success", "data": {"result": result}}
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(params)
+        return ProbeResponse(params)
+
+    monkeypatch.setattr(alloy_manager.requests, "get", fake_get)
+    response = client.get("/api/v2/logs/agents/overview", params={"probe": "true"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["probed"] is True
+    assert payload["fresh"] == 1
+    agents = {item["server_id"]: item for item in payload["agents"]}
+    assert agents[fresh_id]["ingestion_status"] == "fresh"
+    assert agents[fresh_id]["diagnostic"] == "采集正常"
+    assert agents[missing_id]["ingestion_status"] == "no_data"
+    assert agents[missing_id]["diagnostic_level"] == "warning"
+    assert len(calls) == 2
+    assert all(call["limit"] == 1 and call["direction"] == "backward" for call in calls)
