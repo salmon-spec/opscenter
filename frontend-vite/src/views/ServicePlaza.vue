@@ -3,7 +3,7 @@
     <div class="view-head">
       <div>
         <h1 class="view-title">服务广场</h1>
-        <p class="view-sub">统一入口 · 各服务使用原有账号密码登录</p>
+        <p class="view-sub">统一入口 · 完整信息与登录凭证集中管理</p>
       </div>
       <div style="display:flex;gap:8px">
         <input v-model="search" class="input" style="width:280px" placeholder="搜索服务名称 / 地址…" />
@@ -35,7 +35,7 @@
         <div class="svc-desc">{{ s.description || s.category || '' }}</div>
         <div class="svc-meta muted">
           <span>{{ s.server_name || '' }}</span>
-          <span v-if="s.version" class="mono">v{{ s.version }}</span>
+          <span>{{ s.has_credentials ? '🔐 已配凭证' : (s.version ? `v${s.version}` : '') }}</span>
         </div>
         <div class="svc-actions">
           <a
@@ -51,7 +51,7 @@
     </div>
 
     <!-- 详情抽屉 -->
-    <ServiceDetailDrawer :visible="drawerVisible" :service="selected" @close="drawerVisible = false" />
+    <ServiceDetailDrawer :visible="drawerVisible" :service="selected" @close="drawerVisible = false" @updated="handleServiceUpdated" />
 
     <Modal :visible="addVisible" title="手动添加服务" width="620px" @close="addVisible = false">
       <div class="form-grid">
@@ -69,7 +69,9 @@
         </div>
         <div class="field full"><label>访问地址 *</label><input v-model.trim="form.url" class="input" placeholder="http://10.66.66.x:端口/" /></div>
         <div class="field full"><label>健康检查路径</label><input v-model.trim="form.health_path" class="input" placeholder="例如 /health；留空时探测访问地址" /></div>
-        <div class="field full"><label>说明</label><textarea v-model.trim="form.description" class="textarea" rows="3" placeholder="服务用途、登录方式等（不要填写密码）"></textarea></div>
+        <div class="field full"><label>说明</label><textarea v-model.trim="form.description" class="textarea" rows="3" placeholder="服务用途、登录方式和注意事项"></textarea></div>
+        <div class="field"><label>登录账号</label><input v-model.trim="form.account" class="input" autocomplete="off" placeholder="可稍后在详情中补充" /></div>
+        <div class="field"><label>登录密码</label><input v-model="form.password" class="input" type="password" autocomplete="new-password" placeholder="将加密保存" /></div>
         <label class="check-row full"><input v-model="form.pinned" type="checkbox" /> 添加后置顶</label>
       </div>
       <div class="modal-actions">
@@ -123,7 +125,7 @@ const hiddenVisible = ref(false)
 const hiddenLoading = ref(false)
 const saving = ref(false)
 const categories = ['应用服务', '代码与CI/CD', '监控与日志', '安全与运维', '开发工具', '文档工具', '未分类']
-const emptyForm = () => ({ server_id: '', name: '', url: '', category: '应用服务', description: '', health_path: '', pinned: false })
+const emptyForm = () => ({ server_id: '', name: '', url: '', category: '应用服务', description: '', health_path: '', pinned: false, account: '', password: '' })
 const form = ref(emptyForm())
 const hiddenServices = ref([])
 
@@ -191,6 +193,11 @@ function statusDotClass(st) {
 function openDetail(s) {
   selected.value = s
   drawerVisible.value = true
+}
+
+async function handleServiceUpdated(updated) {
+  if (updated) selected.value = { ...selected.value, ...updated }
+  await reload(true)
 }
 
 function warmService(service){try{const origin=new URL(service.entry_url,location.href).origin;if(document.head.querySelector(`link[data-ops-origin="${origin}"]`))return;const link=document.createElement('link');link.rel='preconnect';link.href=origin;link.crossOrigin='anonymous';link.dataset.opsOrigin=origin;document.head.appendChild(link)}catch{/* 非标准地址忽略 */}}

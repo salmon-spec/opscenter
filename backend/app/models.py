@@ -158,6 +158,33 @@ class PlazaServicePreference(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class PlazaServiceProfile(Base):
+    """Editable plaza metadata and encrypted login credentials.
+
+    ``plaza_key`` is either a checked-in catalog key or ``manual-<service uuid>``.
+    Keeping credentials outside ``services`` lets catalog entries and manual entries
+    share the same safe storage and response rules.
+    """
+    __tablename__ = "plaza_service_profiles"
+
+    plaza_key = Column(String(140), primary_key=True)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="SET NULL"), nullable=True, index=True)
+    name = Column(String(100), nullable=True)
+    description = Column(Text, nullable=True)
+    category = Column(String(50), nullable=True)
+    icon = Column(String(50), nullable=True)
+    entry_url = Column(Text, nullable=True)
+    health_url = Column(Text, nullable=True)
+    username = Column(String(200), nullable=True)
+    secret_ciphertext = Column(Text, nullable=True)
+    login_notes = Column(Text, nullable=True)
+    documentation_url = Column(Text, nullable=True)
+    owner = Column(String(100), nullable=True)
+    tags = Column(JSONB, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class ServiceRelation(Base):
     """服务依赖关系（v3.29, 拓扑）：描述服务间数据流/调用/部署/反代关系，驱动拓扑图。"""
     __tablename__ = "service_relations"

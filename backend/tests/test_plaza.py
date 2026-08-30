@@ -36,7 +36,7 @@ class _Query:
         return self
 
     def all(self):
-        if self.model in (plaza.Service, plaza.PlazaServicePreference):
+        if self.model in (plaza.Service, plaza.PlazaServicePreference, plaza.PlazaServiceProfile):
             return []
         return [
             SimpleNamespace(id="server-vm1", host="10.66.66.4", name="虚拟-ubuntu"),
@@ -123,6 +123,8 @@ def test_manual_web_service_is_merged_without_credentials(monkeypatch):
             if self.model is plaza.Service:
                 return [manual]
             if self.model is plaza.PlazaServicePreference:
+                return []
+            if self.model is plaza.PlazaServiceProfile:
                 return []
             return [server]
 

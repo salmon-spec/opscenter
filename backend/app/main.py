@@ -12,7 +12,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
 
-from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
+from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
+from app.credential_crypto import encrypt_secret
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
@@ -225,6 +226,8 @@ class ServiceCreate(BaseModel):
     description: str = ""
     health_path: Optional[str] = None
     pinned: bool = False
+    account: Optional[str] = Field(None, max_length=200)
+    password: Optional[str] = Field(None, max_length=1000)
 
 class ServiceUpdate(BaseModel):
     name: Optional[str] = None
@@ -1115,6 +1118,38 @@ def _ensure_new_columns():
         print(f"[migrate] ensure columns failed: {e}", flush=True)
 
 
+def _migrate_legacy_service_credentials():
+    """Move legacy plaintext manual-service credentials into encrypted profiles."""
+    try:
+        with get_db() as db:
+            rows = db.query(Service).filter(
+                Service.source == ServiceSource.manual.value,
+                (Service.account != None) | (Service.password != None),  # noqa: E711
+            ).all()
+            changed = False
+            for service in rows:
+                if not (service.account or service.password):
+                    continue
+                plaza_key = f"manual-{service.id}"
+                profile = db.query(PlazaServiceProfile).filter(
+                    PlazaServiceProfile.plaza_key == plaza_key,
+                ).first()
+                if not profile:
+                    profile = PlazaServiceProfile(plaza_key=plaza_key, server_id=service.server_id)
+                    db.add(profile)
+                if service.account and not profile.username:
+                    profile.username = service.account
+                if service.password and not profile.secret_ciphertext:
+                    profile.secret_ciphertext = encrypt_secret(service.password)
+                service.account = ""
+                service.password = ""
+                changed = True
+            if changed:
+                db.commit()
+    except Exception as exc:
+        print(f"[migrate] service credential migration failed: {exc}", flush=True)
+
+
 @app.on_event("startup")
 async def startup():
     # Wait for DB and create tables
@@ -1123,6 +1158,7 @@ async def startup():
         try:
             Base.metadata.create_all(bind=engine)
             _ensure_new_columns()
+            _migrate_legacy_service_credentials()
             break
         except Exception:
             time.sleep(2)
@@ -2345,6 +2381,13 @@ def create_service(data: ServiceCreate, server_id: str = Query(...)):
             source=ServiceSource.manual.value, status=ServiceStatus.unknown.value,
         )
         db.add(svc)
+        db.flush()
+        if data.account or data.password:
+            db.add(PlazaServiceProfile(
+                plaza_key=f"manual-{svc.id}", server_id=srv.id,
+                username=data.account or "",
+                secret_ciphertext=encrypt_secret(data.password or ""),
+            ))
         db.commit()
         db.refresh(svc)
         return {"id": str(svc.id), "name": svc.name}
@@ -2355,18 +2398,26 @@ def update_service(service_id: str, data: ServiceUpdate):
         svc = db.query(Service).filter(Service.id == uuid.UUID(service_id)).first()
         if not svc:
             raise HTTPException(404, "Service not found")
-        # Save original url BEFORE setattr modifies it
-        original_url = svc.url
-        for field, val in data.model_dump(exclude_unset=True).items():
+        values = data.model_dump(exclude_unset=True)
+        account_present = "account" in values
+        password_present = "password" in values
+        account = values.pop("account", None)
+        password = values.pop("password", None)
+        for field, val in values.items():
             if val is not None:
                 setattr(svc, field, val)
-        # Handle account/password explicitly (allow empty string to clear)
-        if 'account' in data.model_dump(exclude_unset=True):
-            acct = data.model_dump(exclude_unset=True).get('account')
-            svc.account = acct if acct else ''
-        if 'password' in data.model_dump(exclude_unset=True):
-            pwd = data.model_dump(exclude_unset=True).get('password')
-            svc.password = pwd if pwd else ''
+        if account_present or password_present:
+            plaza_key = f"manual-{svc.id}"
+            profile = db.query(PlazaServiceProfile).filter(PlazaServiceProfile.plaza_key == plaza_key).first()
+            if not profile:
+                profile = PlazaServiceProfile(plaza_key=plaza_key, server_id=svc.server_id)
+                db.add(profile)
+            if account_present:
+                profile.username = account or ""
+            if password_present:
+                profile.secret_ciphertext = encrypt_secret(password or "")
+            svc.account = ""
+            svc.password = ""
         db.commit()
         return {"ok": True}
 
@@ -2399,6 +2450,9 @@ def delete_service(service_id: str):
             raise HTTPException(404, "Service not found")
         if svc.source != ServiceSource.manual.value:
             raise HTTPException(400, "Cannot delete auto-discovered service; hide it instead")
+        db.query(PlazaServiceProfile).filter(
+            PlazaServiceProfile.plaza_key == f"manual-{svc.id}",
+        ).delete()
         db.delete(svc)
         db.commit()
         return {"ok": True}
