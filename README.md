@@ -1,6 +1,6 @@
 # OpsCenter 运维工作台
 
-> **当前版本：v4.3.0** · 更新于 2026-08-30
+> **当前版本：v4.4.0** · 更新于 2026-08-30
 > 访问：https://ops.salmon.xin/ · 状态页：https://ops.salmon.xin/status/ · Vite 灰度页：https://ops.salmon.xin/v3/
 
 面向 DevOps/SRE 的自托管**统一运维工作台**：管理服务器、服务、监控、告警、证书、日志、备份、镜像与巡检日报，中文界面，免登录访问，支持 SSH 终端直连与远程 Agent 采集。
@@ -19,20 +19,20 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 - **远程能力**：Agent 一键部署采集 + WebSocket SSH 终端 + 文件管理
 - **资源控制台**：全局主机上下文；数据库、容器、系统独立分域；容器统计按需采集；系统监控、终端与进程管理独立加载
 
-## 二、当前状态（2026-08-28）
+## 二、当前状态（2026-08-30）
 
 | 项 | 状态 |
 |---|---|
-| 后端测试 | **pytest 135/135 全绿**（0 失败 0 错误，含主机/数据库/容器/系统/文件/防火墙/SSH/监控历史/日志中心契约） |
+| 后端测试 | **pytest 142/142 全绿**（0 失败 0 错误，含主机/数据库/容器/系统/文件/防火墙/SSH/监控历史/日志中心契约） |
 | API | 11 大模块全 200（health/servers/alert-rules/alert-silences/cert-checks/log-rules/backup-checks/images/reports/audit-logs/status-page） |
 | Agent | v2.4.0 |
-| 版本里程碑 | **v4.3.0**（文件、防火墙、SSH 管理、回收站、本机终端与服务广场加速） |
+| 版本里程碑 | **v4.4.0**（长期监控历史、集中日志、采集覆盖诊断、Loki 存储与写入健康） |
 | 系统文件管理 | **v4.3 已交付**（本机/SFTP 浏览、编辑、上传下载、改名、可恢复删除） |
 | 系统防火墙 / SSH | **v4.3 已交付**（UFW/Firewalld、防失联保护、SSH 配置/会话/登录日志） |
-| 监控历史 | **v4.4 开发中**（按主机和时间段查询，5 分钟/1 小时分层汇总，CSV 导出，所有主机批量概览与快速切换） |
-| 日志中心 | **v4.4 开发中**（Loki + Alloy，默认保留 365 天；支持长期检索、趋势、采集诊断、磁盘水位与 Loki 写入健康） |
+| 监控历史 | **v4.4 已交付**（按主机和时间段查询，5 分钟/1 小时分层汇总，CSV 导出，所有主机批量概览与快速切换） |
+| 日志中心 | **v4.4 已交付**（Loki + Alloy，默认保留 365 天；支持长期检索、趋势、采集诊断、磁盘水位与 Loki 写入健康） |
 | 部署 | VM2（192.168.1.153 / 10.66.66.5）systemd + Caddy 运行中 |
-| 仓库 | GitLab = GitHub = 本地 = `77ca809` |
+| 仓库 | GitLab、GitHub 双仓同步，v4.4 发布分支已完成全量回归 |
 
 ## 三、技术栈
 
@@ -41,7 +41,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | 后端 | Python 3 + FastAPI 0.115.6 + SQLAlchemy 2.0 + Pydantic 2 + PyJWT |
 | 数据库 | PostgreSQL 16（`opscenter` 库） |
 | 前端 | Vue 3 SPA（单文件 index.html）+ ECharts + Tailwind CSS；**Vite 5 工程化改造中**（frontend-vite → /v3/ 灰度路径） |
-| Agent | Python 轻量采集器（v2.2.0，指标 / 服务发现 / registry-proxy） |
+| Agent | Python 轻量采集器（v2.4.0，轻量系统摘要 / 指标 / 服务发现 / 进程管理） |
 | 部署 | systemd（`opscenter-backend` :9091）+ Caddy 反代（:80）+ venv |
 | CI/CD | Jenkins（Jenkinsfile）+ GitLab CI（.gitlab-ci.yml） |
 
@@ -160,15 +160,15 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 
 ### 5.9 Agent 管理
 
-- 一键部署 / 卸载远程监控 Agent（v2.2.0）
+- 一键部署 / 升级 / 卸载远程监控 Agent（v2.4.0）
 - Agent 状态监控（运行 / 离线 / 未部署），自动采集远程主机指标
 - 新端点：`/api/v1/registry-proxy`（Docker Hub digest 代理，TLS1.2 + IPv4 强制；MFA 安全组放开后生效）
 
 ### 5.10 前端 Vite 工程化（v3.28 起步）
 
-- `frontend-vite/` 目录（Vite 5 + Vue 3.4），StatCard / StatusBadge 组件试点
-- 构建产物 → `frontend/v3/` 灰度路径，构建后 JS 62.97KB / gzip 25KB
-- 部署脚本 `deploy/frontend-vite.sh`；全量迁移顺延 v3.29
+- `frontend-vite/` 目录（Vite 5 + Vue 3），承载资源控制台、日志中心、告警与服务广场
+- 构建产物 → `frontend/v3/` 兼容入口，路由级按需加载数据库、容器和系统页面
+- 部署脚本 `deploy/frontend-vite.sh`，正式入口切换由统一发布流程完成
 
 ## 六、API 一览
 
@@ -210,11 +210,11 @@ OpsCenter/
 │   │   ├── ssh_terminal.py       # WebSocket 终端 + 文件管理
 │   │   ├── discovery.py          # 服务自动发现
 │   │   ├── models.py             # SQLAlchemy 模型（15 表）
-│   │   └── version.py            # 版本号（4.3.0，单一来源）
-│   ├── tests/                    # pytest（52 用例）
+│   │   └── version.py            # 版本号（4.4.0，单一来源）
+│   ├── tests/                    # pytest（142 用例）
 │   └── requirements.txt
 ├── agent/
-│   ├── opsagent.py               # 远程采集 Agent（v2.2.0）
+│   ├── opsagent.py               # 远程采集 Agent（v2.4.0）
 │   └── scanner.py                # 主机扫描器
 ├── frontend/                     # Vue 3 SPA（index.html 单文件）
 │   ├── index.html                # 主工作台
@@ -240,7 +240,7 @@ OpsCenter/
 
 ```bash
 # 1. 拉取代码
-git clone git@github.com:fenda1217/OpsCenter.git /opt/opscenter
+git clone git@github.com:salmon-spec/opscenter.git /opt/opscenter
 
 # 2. 安装依赖 + 启动后端（systemd）
 cd /opt/opscenter
@@ -277,7 +277,7 @@ cp -r frontend /opt/opscenter/frontend       # Caddy 托管
 ### 8.4 测试
 
 ```bash
-cd backend && pytest    # 52/52 全绿
+cd backend && pytest    # 142/142 全绿
 ```
 
 ## 九、核心能力与亮点
@@ -302,18 +302,21 @@ cd backend && pytest    # 52/52 全绿
 | **v3.28** | **巡检日报 + 操作审计 + 前端 Vite 工程化 + 状态页可用性**（pytest 52/52） | ✅ 已交付 |
 | v3.29 | RBAC（admin/operator/viewer）、Prometheus 指标导出（/metrics）、状态页公网版、前端全量 Vite 迁移、日报订阅 | ⬜ 规划中 |
 | v3.30 | 多云主机接入（自动发现）、告警升级链路（P1 15min 未确认→升级通知）、SLA 报表、操作回滚（基于审计日志） | ⬜ 规划中 |
+| **v4.2** | **资源控制台重构：全局主机切换、数据库/容器/系统分域、按需容器统计、进程管理** | ✅ 已交付 |
+| **v4.3** | **文件、防火墙、SSH 管理、回收站、本机终端、服务广场加速与 Agent 恢复** | ✅ 已交付 |
+| **v4.4** | **长期监控历史、跨主机指标、集中日志、采集覆盖诊断、Loki 存储与写入健康**（pytest 142/142） | ✅ 发布候选 |
 
 ## 十一、已知限制与遗留事项
 
 - **registry-proxy 暂不可用**：MFA 出站安全组白名单极严（Docker Hub 不通），proxy 代码保留，环境放开即生效
 - **日报推送需配置**：当前无 webhook 配置则推送跳过（配置飞书机器人后即生效）
-- **前端全量迁移顺延**：Vite 工程化仅 /v3/ 灰度，全量迁移排入 v3.29
+- **前端入口兼容**：Vite 版本继续保留 `/v3/` 入口，正式切换由发布流程统一执行
 - **docker-compose.yml 已废弃**：实际由 systemd 运行（文件标注 DEPRECATED）
 - **运维规范**：本机无 docker；生产配置修改需走部署脚本 + 自动备份
 
 ## 十二、参考资料
 
 - 飞书知识库：`agent` → `5_项目/OpsCenter/`（v3.25–v3.28 迭代开发方案与交付文档）
-- GitHub：https://github.com/fenda1217/OpsCenter（main = 77ca809，tag v3.28.0）
-- GitLab：ssh://git@10.66.66.4:2224/root/opscenter.git（main = 77ca809）
+- GitHub：https://github.com/salmon-spec/opscenter（v4.4 发布分支与 GitLab 双仓同步）
+- GitLab：ssh://git@10.66.66.4:2224/root/opscenter.git（v4.4 发布分支与 GitHub 双仓同步）
 - 本地文档：`docs/OpsCenter功能详细报告.md`（v3.15 详细报告）
