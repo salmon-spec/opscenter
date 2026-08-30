@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     retention_metric_days: int = 30                     # metric_history 保留天数（高频轮询）
     retention_latency_days: int = 7                     # network_latency 保留天数（快照）
     retention_stats_days: int = 180                     # network_stats 保留天数（日归集，低频）
+    retention_rollup_5m_days: int = 365                 # 5分钟聚合保留1年
+    retention_rollup_1h_days: int = 0                   # 0=小时聚合长期保存
 
 
 _settings = Settings()
@@ -103,6 +105,8 @@ DEFAULT_NOTIFY_WEBHOOKS = [u.strip() for u in _settings.default_notify_webhooks.
 RETENTION_METRIC_DAYS = _settings.retention_metric_days
 RETENTION_LATENCY_DAYS = _settings.retention_latency_days
 RETENTION_STATS_DAYS = _settings.retention_stats_days
+RETENTION_ROLLUP_5M_DAYS = _settings.retention_rollup_5m_days
+RETENTION_ROLLUP_1H_DAYS = _settings.retention_rollup_1h_days
 
 # ── App ──
 from app.version import VERSION  # noqa: E402

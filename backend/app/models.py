@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, BigInteger, Date, Enum as SAEnum, UniqueConstraint, JSON, Uuid
+from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Float, BigInteger, Date, Enum as SAEnum, UniqueConstraint, Index, JSON, Uuid
 from sqlalchemy.dialects.postgresql import JSONB as PostgreSQLJSONB
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
@@ -177,6 +177,24 @@ class MetricHistory(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     metric = Column(String(20), nullable=False)
     value = Column(Float, nullable=False)
+
+
+class MetricRollup(Base):
+    """Long-term metric buckets generated from high-frequency samples."""
+    __tablename__ = "metric_rollups"
+    __table_args__ = (
+        UniqueConstraint("server_id", "metric", "resolution", "bucket_at", name="uq_metric_rollup_bucket"),
+        Index("ix_metric_rollup_lookup", "server_id", "metric", "resolution", "bucket_at"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    server_id = Column(UUID(as_uuid=True), ForeignKey("servers.id", ondelete="CASCADE"), nullable=False)
+    metric = Column(String(20), nullable=False)
+    resolution = Column(String(8), nullable=False)  # 5m / 1h
+    bucket_at = Column(DateTime, nullable=False)
+    value_avg = Column(Float, nullable=False)
+    value_min = Column(Float, nullable=False)
+    value_max = Column(Float, nullable=False)
+    sample_count = Column(Integer, nullable=False, default=1)
 
 
 
