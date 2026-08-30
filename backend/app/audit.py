@@ -38,6 +38,7 @@ _RESOURCE_PATTERNS = [
     (r"backup-checks", "backup"),
     (r"images/scan", "image"),
     (r"processes", "process"),
+    (r"/files", "file"),
     (r"servers", "server"),
     (r"databases/.*/accounts", "database-account"),
     (r"databases", "database"),
@@ -45,7 +46,7 @@ _RESOURCE_PATTERNS = [
     (r"reports/generate", "report"),
     (r"auth/login", "login"),
 ]
-_SECRET_KEYS = re.compile(r"password|passwd|secret|token|ssh_key|private_key|credential", re.I)
+_SECRET_KEYS = re.compile(r"password|passwd|secret|token|ssh_key|private_key|credential|content(?:_base64)?", re.I)
 
 
 def _redact(value):

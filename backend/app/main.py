@@ -25,6 +25,7 @@ from app.image_scanner import image_check_loop, run_image_check
 from app.report_engine import generate_report, report_loop
 from app.audit import AuditMiddleware
 from app.performance import PerformanceMiddleware
+from app.file_control import router as file_control_router
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -271,6 +272,7 @@ app.include_router(control_router)
 app.include_router(plaza_router)
 app.include_router(system_control_router)
 app.include_router(databases_router)
+app.include_router(file_control_router)
 
 # === Startup ===
 

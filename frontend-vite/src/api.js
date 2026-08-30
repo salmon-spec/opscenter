@@ -31,9 +31,9 @@ async function request(path, { method = 'GET', body, query, signal } = {}) {
 
 export const api = {
   get: (path, query, options = {}) => request(path, { query, signal: options.signal }),
-  post: (path, body, options = {}) => request(path, { method: 'POST', body, signal: options.signal }),
-  put: (path, body, options = {}) => request(path, { method: 'PUT', body, signal: options.signal }),
-  patch: (path, body, options = {}) => request(path, { method: 'PATCH', body, signal: options.signal }),
+  post: (path, body, options = {}) => request(path, { method: 'POST', body, query: options.query, signal: options.signal }),
+  put: (path, body, options = {}) => request(path, { method: 'PUT', body, query: options.query, signal: options.signal }),
+  patch: (path, body, options = {}) => request(path, { method: 'PATCH', body, query: options.query, signal: options.signal }),
   del: (path, options = {}) => request(path, { method: 'DELETE', query: options.query, signal: options.signal }),
 }
 

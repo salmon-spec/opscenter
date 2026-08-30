@@ -6,7 +6,7 @@
         <span class="logo-badge">Ops</span>
         <div class="logo-text">
           <div class="logo-title">运维工作台</div>
-          <div class="logo-ver">v4.2.0</div>
+          <div class="logo-ver">v{{ appVersion }}</div>
         </div>
       </div>
       <nav class="nav">
@@ -50,8 +50,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import HostManagerDrawer from './components/HostManagerDrawer.vue'
 import { useHostContext } from './hostContext'
+import packageInfo from '../package.json'
 
 const route = useRoute()
+const appVersion = packageInfo.version
 const isStandalone = computed(() => !!route.meta.standalone)
 const { hosts, selectedHostId, currentHost, refreshHosts, selectHost } = useHostContext()
 const hostDrawer=ref(false),systemOpen=ref(route.path.startsWith('/system'))
@@ -61,7 +63,7 @@ const navs = [
   { path: '/', label: '服务广场', icon: '▦' },
   { path: '/database', label: '数据库', icon: '▱' },
   { path: '/container', label: '容器', icon: '▤' },
-  { label: '系统', icon: '▥', children:[{path:'/system/monitor',label:'监控'},{path:'/system/terminal',label:'终端'},{path:'/system/processes',label:'进程管理'}] },
+  { label: '系统', icon: '▥', children:[{path:'/system/files',label:'文件'},{path:'/system/monitor',label:'监控'},{path:'/system/terminal',label:'终端'},{path:'/system/processes',label:'进程管理'}] },
   { path: '/screen', label: '监控大屏', icon: '📊' },
   { path: '/topology', label: '拓扑架构', icon: '🔗' },
   { path: '/alerts', label: '告警中心', icon: '🔔' },

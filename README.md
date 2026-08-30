@@ -27,6 +27,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | API | 11 大模块全 200（health/servers/alert-rules/alert-silences/cert-checks/log-rules/backup-checks/images/reports/audit-logs/status-page） |
 | Agent | v2.4.0 |
 | 版本里程碑 | **v4.2.1**（资源控制台性能、会话缓存与请求可观测性） |
+| 系统文件管理 | **v4.3 开发中**（本机/SFTP 浏览、编辑、上传下载、改名、可恢复删除） |
 | 部署 | VM2（192.168.1.153 / 10.66.66.5）systemd + Caddy 运行中 |
 | 仓库 | GitLab = GitHub = 本地 = `77ca809` |
 

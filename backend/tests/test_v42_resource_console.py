@@ -21,11 +21,13 @@ def test_audit_redaction_is_recursive():
     assert redacted["password"] == "••••••••"
     assert redacted["nested"]["api_token"] == "••••••••"
     assert redacted["items"][0]["private_key"] == "••••••••"
+    assert _redact({"content_base64": "sensitive-file"})["content_base64"] == "••••••••"
 
 
 def test_new_audit_resource_classes():
     assert _classify("/api/v2/databases/instances/id/accounts", "POST")[1] == "database-account"
     assert _classify("/api/v2/servers/id/processes/42/signal", "POST")[1] == "process"
+    assert _classify("/api/v2/servers/id/files/upload", "POST")[1] == "file"
 
 
 def test_remote_container_basic_mode_never_calls_docker_stats(monkeypatch):
