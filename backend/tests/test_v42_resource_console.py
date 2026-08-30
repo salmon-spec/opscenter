@@ -28,6 +28,7 @@ def test_new_audit_resource_classes():
     assert _classify("/api/v2/databases/instances/id/accounts", "POST")[1] == "database-account"
     assert _classify("/api/v2/servers/id/processes/42/signal", "POST")[1] == "process"
     assert _classify("/api/v2/servers/id/files/upload", "POST")[1] == "file"
+    assert _classify("/api/v2/servers/id/firewall/rules", "POST")[1] == "firewall"
 
 
 def test_remote_container_basic_mode_never_calls_docker_stats(monkeypatch):

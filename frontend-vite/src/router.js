@@ -10,6 +10,7 @@ const Assets = () => import('./views/Assets.vue')
 const Database = () => import('./views/Database.vue')
 const SystemMonitor = () => import('./views/SystemMonitor.vue')
 const SystemFiles = () => import('./views/SystemFiles.vue')
+const SystemFirewall = () => import('./views/SystemFirewall.vue')
 const SystemTerminal = () => import('./views/SystemTerminal.vue')
 const SystemProcesses = () => import('./views/SystemProcesses.vue')
 
@@ -21,6 +22,7 @@ const routes = [
   { path: '/system', redirect: '/system/monitor' },
   { path: '/system/monitor', component: SystemMonitor, meta: { title: '系统 · 监控' } },
   { path: '/system/files', component: SystemFiles, meta: { title: '系统 · 文件' } },
+  { path: '/system/firewall', component: SystemFirewall, meta: { title: '系统 · 防火墙' } },
   { path: '/system/terminal', component: SystemTerminal, meta: { title: '系统 · 终端' } },
   { path: '/system/processes', component: SystemProcesses, meta: { title: '系统 · 进程管理' } },
   { path: '/screen', component: Screen, meta: { title: '监控大屏' } },

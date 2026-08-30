@@ -39,6 +39,7 @@ _RESOURCE_PATTERNS = [
     (r"images/scan", "image"),
     (r"processes", "process"),
     (r"/files", "file"),
+    (r"/firewall", "firewall"),
     (r"servers", "server"),
     (r"databases/.*/accounts", "database-account"),
     (r"databases", "database"),
