@@ -76,6 +76,38 @@ def _vector(payload: dict, label: str | None = None) -> dict[str, float]:
     return values
 
 
+def _matrix(payload: dict) -> list[list[float]]:
+    points: dict[int, float] = {}
+    for item in payload.get("data", {}).get("result", []):
+        for raw_time, raw_value in item.get("values", []):
+            try:
+                timestamp = int(float(raw_time))
+                points[timestamp] = points.get(timestamp, 0.0) + float(raw_value)
+            except (TypeError, ValueError):
+                continue
+    return [[timestamp, round(value, 4)] for timestamp, value in sorted(points.items())]
+
+
+def _range_expression(selector: str, window_seconds: int) -> str:
+    separator = " " if "|" in selector else ""
+    return f"{selector}{separator}[{window_seconds}s]"
+
+
+def _error_selector(selector: str) -> str:
+    return selector + ' |~ "(?i)(error|fatal|panic|exception|critical|emerg)"'
+
+
+def _auto_step_seconds(start: datetime, end: datetime) -> int:
+    span = end - start
+    if span <= timedelta(hours=6):
+        return 60
+    if span <= timedelta(days=2):
+        return 300
+    if span <= timedelta(days=30):
+        return 3600
+    return 21600
+
+
 @router.get("/logs/status")
 def log_center_status():
     if not LOKI_URL:
@@ -156,15 +188,15 @@ def host_log_stats(
         raise HTTPException(400, "日志来源无效")
     end_dt = _parse_time(end, datetime.utcnow())
     start_dt = _parse_time(start, end_dt - timedelta(hours=1))
-    if start_dt >= end_dt or end_dt - start_dt > timedelta(days=30):
-        raise HTTPException(400, "日志统计时间范围必须在 30 天以内")
+    if start_dt >= end_dt or end_dt - start_dt > timedelta(days=max(1, LOKI_RETENTION_DAYS)):
+        raise HTTPException(400, f"日志统计时间范围必须在 {LOKI_RETENTION_DAYS} 天以内")
     with get_db() as db:
         if not db.query(Server.id).filter(Server.id == server_uuid).first():
             raise HTTPException(404, "主机不存在")
     selector = _selector(server_uuid, source, service, search)
-    window = f"{max(1, int((end_dt - start_dt).total_seconds()))}s"
-    ranged_selector = f"{selector} [{window}]" if "|=" in selector else f"{selector}[{window}]"
+    ranged_selector = _range_expression(selector, max(1, int((end_dt - start_dt).total_seconds())))
     expression = f"count_over_time({ranged_selector})"
+    error_expression = f"count_over_time({_range_expression(_error_selector(selector), max(1, int((end_dt - start_dt).total_seconds())))})"
 
     def query(logql: str) -> dict:
         return _loki_get("/loki/api/v1/query", {
@@ -177,15 +209,16 @@ def host_log_stats(
         "sources": f"sum by (source) ({expression})",
         "levels": f"sum by (level) ({expression})",
         "services": f"topk(10, sum by (service_name) ({expression}))",
+        "errors": f"sum({error_expression})",
     }
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="loki-stats") as pool:
+    with ThreadPoolExecutor(max_workers=5, thread_name_prefix="loki-stats") as pool:
         futures = {key: pool.submit(query, logql) for key, logql in expressions.items()}
         payloads = {key: future.result() for key, future in futures.items()}
     total = _vector(payloads["total"]).get("total", 0)
     sources = _vector(payloads["sources"], "source")
     levels = _vector(payloads["levels"], "level")
     services = _vector(payloads["services"], "service_name")
-    error_count = sum(value for key, value in levels.items() if key.lower() in {"error", "err", "critical", "crit", "fatal", "emerg"})
+    error_count = _vector(payloads["errors"]).get("total", 0)
     return {
         "server_id": server_id, "start": start_dt.isoformat() + "Z", "end": end_dt.isoformat() + "Z",
         "total": int(total), "error_count": int(error_count),
@@ -195,4 +228,50 @@ def host_log_stats(
             {"name": key, "count": int(value)}
             for key, value in sorted(services.items(), key=lambda item: item[1], reverse=True)
         ],
+    }
+
+
+@router.get("/servers/{server_id}/logs/timeseries")
+def host_log_timeseries(
+    server_id: str,
+    start: str | None = None,
+    end: str | None = None,
+    source: str = Query("all"),
+    service: str | None = None,
+    search: str | None = None,
+):
+    try:
+        server_uuid = uuid.UUID(server_id)
+    except ValueError:
+        raise HTTPException(404, "主机不存在")
+    if source not in _SOURCE_VALUES:
+        raise HTTPException(400, "日志来源无效")
+    end_dt = _parse_time(end, datetime.utcnow())
+    start_dt = _parse_time(start, end_dt - timedelta(hours=1))
+    if start_dt >= end_dt or end_dt - start_dt > timedelta(days=max(1, LOKI_RETENTION_DAYS)):
+        raise HTTPException(400, f"日志趋势时间范围必须在 {LOKI_RETENTION_DAYS} 天以内")
+    with get_db() as db:
+        if not db.query(Server.id).filter(Server.id == server_uuid).first():
+            raise HTTPException(404, "主机不存在")
+    selector = _selector(server_uuid, source, service, search)
+    step = _auto_step_seconds(start_dt, end_dt)
+    expressions = {
+        "total": f"sum(count_over_time({_range_expression(selector, step)}))",
+        "errors": f"sum(count_over_time({_range_expression(_error_selector(selector), step)}))",
+    }
+
+    def query(logql: str) -> dict:
+        return _loki_get("/loki/api/v1/query_range", {
+            "query": logql,
+            "start": str(int(start_dt.replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)),
+            "end": str(int(end_dt.replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)),
+            "step": step,
+        })
+
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="loki-trend") as pool:
+        futures = {key: pool.submit(query, logql) for key, logql in expressions.items()}
+        payloads = {key: future.result() for key, future in futures.items()}
+    return {
+        "server_id": server_id, "start": start_dt.isoformat() + "Z", "end": end_dt.isoformat() + "Z",
+        "step_seconds": step, "series": {key: _matrix(payload) for key, payload in payloads.items()},
     }

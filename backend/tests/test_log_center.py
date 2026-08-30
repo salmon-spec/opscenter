@@ -116,7 +116,9 @@ def test_stats_aggregates_sources_levels_and_services(monkeypatch):
             self.query = query
 
         def json(self):
-            if "by (source)" in self.query:
+            if "|~" in self.query:
+                result = [{"metric": {}, "value": [0, "7"]}]
+            elif "by (source)" in self.query:
                 result = [{"metric": {"source": "journal"}, "value": [0, "80"]}, {"metric": {"source": "docker"}, "value": [0, "20"]}]
             elif "by (level)" in self.query:
                 result = [{"metric": {"level": "error"}, "value": [0, "7"]}, {"metric": {"level": "info"}, "value": [0, "93"]}]
@@ -141,5 +143,40 @@ def test_stats_aggregates_sources_levels_and_services(monkeypatch):
     assert payload["error_count"] == 7
     assert payload["sources"] == {"journal": 80, "docker": 20}
     assert payload["top_services"][0] == {"name": "sshd.service", "count": 60}
-    assert len(queries) == 4
+    assert len(queries) == 5
     assert all(f'server_id="{server_id}"' in query for query in queries)
+
+
+def test_timeseries_uses_safe_host_scope_and_auto_buckets(monkeypatch):
+    server_id = _server_id()
+    calls = []
+
+    class MatrixResponse(_Response):
+        def __init__(self, query):
+            self.query = query
+
+        def json(self):
+            values = [["1788076800", "2"], ["1788077100", "3"]]
+            if "|~" in self.query:
+                values = [["1788076800", "1"], ["1788077100", "0"]]
+            return {"status": "success", "data": {"result": [{"metric": {}, "values": values}]}}
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append({"url": url, "params": params})
+        return MatrixResponse(params["query"])
+
+    monkeypatch.setattr(log_center.requests, "get", fake_get)
+    response = client.get(
+        f"/api/v2/servers/{server_id}/logs/timeseries",
+        params={"start": "2026-08-30T00:00:00Z", "end": "2026-08-30T08:00:00Z", "source": "docker"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["step_seconds"] == 300
+    assert payload["series"]["total"] == [[1788076800, 2.0], [1788077100, 3.0]]
+    assert payload["series"]["errors"][0] == [1788076800, 1.0]
+    assert len(calls) == 2
+    assert all(call["url"].endswith("/loki/api/v1/query_range") for call in calls)
+    assert all(call["params"]["step"] == 300 for call in calls)
+    assert all(f'server_id="{server_id}"' in call["params"]["query"] for call in calls)
+    assert all('source="docker"' in call["params"]["query"] for call in calls)
