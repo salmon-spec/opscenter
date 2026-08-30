@@ -4,7 +4,7 @@
 
 ## 中心节点
 
-1. 从 `.env.example` 创建 `.env`，将 `OPSCENTER_SERVER_ID` 改为 OpsCenter 中本地主机的 UUID。
+1. 从 `.env.example` 创建 `.env`，将 `OPSCENTER_SERVER_ID` 改为 OpsCenter 中本地主机的 UUID；Loki 数据默认写入 `/opt/opscenter-data/loki`。
 2. 运行 `sh install.sh`。脚本会校验 Compose 配置、拉取固定版本、启动 Loki 与中心 Alloy，并等待 Loki 健康。
 3. 后端环境增加 `LOKI_URL=http://10.66.66.5:3100` 和 `LOKI_RETENTION_DAYS=365` 后重启 `opscenter-backend`。
 4. 只对 `10.66.66.0/24` 开放 3100/TCP；不要把未开启认证的 Loki 暴露到公网。

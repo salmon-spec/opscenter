@@ -38,6 +38,16 @@ if ! printf '%s' "$OPSCENTER_SERVER_ID" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{
   exit 1
 fi
 
+LOKI_DATA_DIR=${LOKI_DATA_DIR:-/opt/opscenter-data/loki}
+case "$LOKI_DATA_DIR" in
+  /opt/opscenter-data/loki|/data/opscenter/loki) ;;
+  *) echo "LOKI_DATA_DIR must use an approved dedicated path" >&2; exit 1 ;;
+esac
+mkdir -p "$LOKI_DATA_DIR"
+chown 10001:10001 "$LOKI_DATA_DIR"
+chmod 0755 "$LOKI_DATA_DIR"
+export LOKI_DATA_DIR
+
 compose config >/dev/null
 compose pull
 compose up -d

@@ -8,7 +8,7 @@ services:
       - "${LOKI_BIND_IP:-10.66.66.5}:3100:3100"
     volumes:
       - ./loki.yml:/etc/loki/config.yml:ro
-      - loki-data:/loki
+      - ${LOKI_DATA_DIR:-/opt/opscenter-data/loki}:/loki
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3100/ready"]
       interval: 15s
@@ -40,5 +40,4 @@ services:
       - alloy-data:/var/lib/alloy/data
 
 volumes:
-  loki-data:
   alloy-data:

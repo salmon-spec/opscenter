@@ -180,3 +180,44 @@ def test_timeseries_uses_safe_host_scope_and_auto_buckets(monkeypatch):
     assert all(call["params"]["step"] == 300 for call in calls)
     assert all(f'server_id="{server_id}"' in call["params"]["query"] for call in calls)
     assert all('source="docker"' in call["params"]["query"] for call in calls)
+
+
+def test_storage_health_parses_loki_metrics_index_and_disk(monkeypatch, tmp_path):
+    monkeypatch.setattr(log_center, "LOKI_DATA_DIR", str(tmp_path))
+
+    class HealthResponse:
+        def __init__(self, url):
+            self.url = url
+            self.text = "\n".join([
+                "loki_distributor_lines_received_total 120",
+                "loki_distributor_bytes_received_total 4096",
+                'loki_discarded_samples_total{reason="rate_limited"} 2',
+                'loki_request_duration_seconds_count{route="loki_api_v1_push",status_code="503"} 3',
+                'loki_request_duration_seconds_count{route="loki_api_v1_query",status_code="503"} 99',
+                "loki_distributor_ingester_append_timeouts_total 1",
+                "loki_panic_total 0",
+                "loki_ingester_flush_queue_length 4",
+            ])
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if self.url.endswith("/loki/api/v1/index/stats"):
+                return {"streams": 4, "chunks": 8, "entries": 300, "bytes": 8192}
+            return {"status": "success"}
+
+    monkeypatch.setattr(log_center.requests, "get", lambda url, params=None, timeout=None: HealthResponse(url))
+    response = client.get("/api/v2/logs/health")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data_dir"]["available"] is True
+    assert payload["runtime"]["received_lines_total"] == 120
+    assert payload["runtime"]["received_bytes_total"] == 4096
+    assert payload["runtime"]["write_5xx_total"] == 3
+    assert payload["runtime"]["discarded_samples_total"] == 2
+    assert payload["runtime"]["append_timeouts_total"] == 1
+    assert payload["runtime"]["flush_queue_length"] == 4
+    assert payload["index_24h"]["entries"] == 300
+    assert any("累计写入异常指标 6 次" in item for item in payload["warnings"])
+    assert any("flush 队列积压 4" in item for item in payload["warnings"])

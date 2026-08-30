@@ -3,13 +3,15 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import os
 import re
+import shutil
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query
 import requests
 
-from app.config import LOKI_RETENTION_DAYS, LOKI_TIMEOUT_SECONDS, LOKI_URL
+from app.config import LOKI_DATA_DIR, LOKI_RETENTION_DAYS, LOKI_TIMEOUT_SECONDS, LOKI_URL
 from app.database import get_db
 from app.models import Server
 
@@ -17,6 +19,8 @@ from app.models import Server
 router = APIRouter(prefix="/api/v2", tags=["log-center"])
 _SOURCE_VALUES = {"all", "journal", "docker"}
 _SAFE_LABEL = re.compile(r"^[\w.@:/ -]{1,160}$")
+_PROM_LINE = re.compile(r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(?P<labels>.*)\})?\s+(?P<value>[-+0-9.eE]+)$")
+_PROM_LABEL = re.compile(r'(\w+)="((?:\\.|[^"\\])*)"')
 
 
 def _parse_time(value: str | None, default: datetime) -> datetime:
@@ -108,6 +112,58 @@ def _auto_step_seconds(start: datetime, end: datetime) -> int:
     return 21600
 
 
+def _prometheus_samples(text: str) -> list[dict]:
+    samples = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _PROM_LINE.match(line)
+        if not match:
+            continue
+        try:
+            value = float(match.group("value"))
+        except ValueError:
+            continue
+        labels = {key: val for key, val in _PROM_LABEL.findall(match.group("labels") or "")}
+        samples.append({"name": match.group("name"), "labels": labels, "value": value})
+    return samples
+
+
+def _runtime_metrics() -> dict:
+    response = requests.get(f"{LOKI_URL}/metrics", timeout=min(5.0, LOKI_TIMEOUT_SECONDS))
+    response.raise_for_status()
+    samples = _prometheus_samples(response.text)
+    total = lambda name: sum(item["value"] for item in samples if item["name"] == name)
+    request_5xx = sum(
+        item["value"] for item in samples
+        if item["name"] == "loki_request_duration_seconds_count"
+        and item["labels"].get("status_code", "").startswith("5")
+        and "push" in item["labels"].get("route", "").lower()
+    )
+    return {
+        "received_lines_total": int(total("loki_distributor_lines_received_total")),
+        "received_bytes_total": int(total("loki_distributor_bytes_received_total")),
+        "discarded_samples_total": int(total("loki_discarded_samples_total")),
+        "write_5xx_total": int(request_5xx),
+        "append_timeouts_total": int(total("loki_distributor_ingester_append_timeouts_total")),
+        "panic_total": int(total("loki_panic_total")),
+        "flush_queue_length": int(total("loki_ingester_flush_queue_length")),
+    }
+
+
+def _disk_health() -> dict:
+    if not LOKI_DATA_DIR or not os.path.isdir(LOKI_DATA_DIR):
+        return {"available": False, "path": LOKI_DATA_DIR}
+    values = shutil.disk_usage(LOKI_DATA_DIR)
+    total, used, available = values.total, values.used, values.free
+    return {
+        "available": True, "path": LOKI_DATA_DIR, "total_bytes": total,
+        "used_bytes": used, "free_bytes": available,
+        "used_percent": round(used * 100 / total, 1) if total else 0,
+    }
+
+
 @router.get("/logs/status")
 def log_center_status():
     if not LOKI_URL:
@@ -119,6 +175,45 @@ def log_center_status():
     except requests.RequestException as exc:
         ready, message = False, str(exc)[:160]
     return {"configured": True, "ready": ready, "message": message, "retention_days": LOKI_RETENTION_DAYS}
+
+
+@router.get("/logs/health")
+def log_storage_health():
+    result = {
+        "configured": bool(LOKI_URL), "data_dir": _disk_health(),
+        "runtime": {}, "index_24h": {}, "warnings": [],
+    }
+    if not LOKI_URL:
+        result["warnings"].append("Loki 尚未配置")
+        return result
+    now = datetime.utcnow()
+
+    def index_stats():
+        return _loki_get("/loki/api/v1/index/stats", {
+            "query": '{server_id=~".+"}',
+            "start": str(int((now - timedelta(hours=24)).replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)),
+            "end": str(int(now.replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)),
+        })
+
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="loki-health") as pool:
+        futures = {"runtime": pool.submit(_runtime_metrics), "index_24h": pool.submit(index_stats)}
+        for key, future in futures.items():
+            try:
+                result[key] = future.result()
+            except Exception as exc:
+                result[f"{key}_error"] = str(getattr(exc, "detail", exc))[:500]
+    runtime = result["runtime"]
+    disk = result["data_dir"]
+    failures = sum(runtime.get(key, 0) for key in ("discarded_samples_total", "write_5xx_total", "append_timeouts_total", "panic_total"))
+    if disk.get("available") and disk.get("used_percent", 0) >= 80:
+        result["warnings"].append(f"Loki 数据盘使用率已达 {disk['used_percent']}%")
+    if failures:
+        result["warnings"].append(f"Loki 累计写入异常指标 {failures} 次")
+    if runtime.get("flush_queue_length", 0) > 0:
+        result["warnings"].append(f"Loki flush 队列积压 {runtime['flush_queue_length']}")
+    if result.get("runtime_error") or result.get("index_24h_error"):
+        result["warnings"].append("部分 Loki 健康指标暂不可用")
+    return result
 
 
 @router.get("/servers/{server_id}/logs/query")
