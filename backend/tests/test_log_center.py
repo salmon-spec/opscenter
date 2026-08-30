@@ -105,3 +105,41 @@ def test_status_handles_unconfigured_loki(monkeypatch):
     response = client.get("/api/v2/logs/status")
     assert response.status_code == 200
     assert response.json()["configured"] is False
+
+
+def test_stats_aggregates_sources_levels_and_services(monkeypatch):
+    server_id = _server_id()
+    queries = []
+
+    class VectorResponse(_Response):
+        def __init__(self, query):
+            self.query = query
+
+        def json(self):
+            if "by (source)" in self.query:
+                result = [{"metric": {"source": "journal"}, "value": [0, "80"]}, {"metric": {"source": "docker"}, "value": [0, "20"]}]
+            elif "by (level)" in self.query:
+                result = [{"metric": {"level": "error"}, "value": [0, "7"]}, {"metric": {"level": "info"}, "value": [0, "93"]}]
+            elif "by (service_name)" in self.query:
+                result = [{"metric": {"service_name": "sshd.service"}, "value": [0, "60"]}, {"metric": {"service_name": "nginx"}, "value": [0, "40"]}]
+            else:
+                result = [{"metric": {}, "value": [0, "100"]}]
+            return {"status": "success", "data": {"result": result}}
+
+    def fake_get(url, params=None, timeout=None):
+        queries.append(params["query"])
+        return VectorResponse(params["query"])
+
+    monkeypatch.setattr(log_center.requests, "get", fake_get)
+    response = client.get(
+        f"/api/v2/servers/{server_id}/logs/stats",
+        params={"start": "2026-08-30T00:00:00Z", "end": "2026-08-30T01:00:00Z"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total"] == 100
+    assert payload["error_count"] == 7
+    assert payload["sources"] == {"journal": 80, "docker": 20}
+    assert payload["top_services"][0] == {"name": "sshd.service", "count": 60}
+    assert len(queries) == 4
+    assert all(f'server_id="{server_id}"' in query for query in queries)
