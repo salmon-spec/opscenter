@@ -27,6 +27,7 @@ from app.audit import AuditMiddleware
 from app.performance import PerformanceMiddleware
 from app.file_control import router as file_control_router
 from app.firewall_control import router as firewall_control_router
+from app.ssh_control import router as ssh_control_router
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -275,6 +276,7 @@ app.include_router(system_control_router)
 app.include_router(databases_router)
 app.include_router(file_control_router)
 app.include_router(firewall_control_router)
+app.include_router(ssh_control_router)
 
 # === Startup ===
 
