@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import and_, func
 
 from app.config import RETENTION_ROLLUP_1H_DAYS, RETENTION_ROLLUP_5M_DAYS
 from app.database import get_db
@@ -115,6 +116,18 @@ def _thin(values: list, limit: int = 2500) -> list:
     return values[::step][:limit]
 
 
+def _metric_query_args(metrics: str, start: str | None, end: str | None, resolution: str):
+    end_dt = _parse_time(end, datetime.utcnow())
+    start_dt = _parse_time(start, end_dt - timedelta(hours=1))
+    if start_dt >= end_dt or end_dt - start_dt > timedelta(days=366 * 5):
+        raise HTTPException(400, "时间范围必须在5年以内且开始时间早于结束时间")
+    names = list(dict.fromkeys(item.strip() for item in metrics.split(",") if item.strip()))
+    if not names or len(names) > 8 or any(item not in ALLOWED_METRICS for item in names):
+        raise HTTPException(400, "监控指标无效或数量超过8个")
+    selected_resolution = _auto_resolution(start_dt, end_dt) if resolution == "auto" else resolution
+    return names, start_dt, end_dt, selected_resolution
+
+
 @router.get("/servers/{server_id}/metrics/timeseries")
 def metric_timeseries(
     server_id: str,
@@ -127,14 +140,7 @@ def metric_timeseries(
         server_uuid = uuid.UUID(server_id)
     except ValueError:
         raise HTTPException(404, "主机不存在")
-    end_dt = _parse_time(end, datetime.utcnow())
-    start_dt = _parse_time(start, end_dt - timedelta(hours=1))
-    if start_dt >= end_dt or end_dt - start_dt > timedelta(days=366 * 5):
-        raise HTTPException(400, "时间范围必须在5年以内且开始时间早于结束时间")
-    names = list(dict.fromkeys(item.strip() for item in metrics.split(",") if item.strip()))
-    if not names or len(names) > 8 or any(item not in ALLOWED_METRICS for item in names):
-        raise HTTPException(400, "监控指标无效或数量超过8个")
-    selected_resolution = _auto_resolution(start_dt, end_dt) if resolution == "auto" else resolution
+    names, start_dt, end_dt, selected_resolution = _metric_query_args(metrics, start, end, resolution)
     series = {name: [] for name in names}
     with get_db() as db:
         server = db.query(Server).filter(Server.id == server_uuid).first()
@@ -160,4 +166,108 @@ def metric_timeseries(
         "server_id": server_id, "metrics": names, "resolution": selected_resolution,
         "start": start_dt.isoformat() + "Z", "end": end_dt.isoformat() + "Z",
         "series": series, "point_count": sum(len(values) for values in series.values()),
+    }
+
+
+@router.get("/metrics/hosts/overview")
+def metric_hosts_overview(
+    metrics: str = Query("cpu,memory,disk"),
+    start: str | None = None,
+    end: str | None = None,
+    resolution: str = Query("auto", pattern="^(auto|raw|5m|1h)$"),
+):
+    """Return one aggregate row per host without making the browser query hosts one by one."""
+    names, start_dt, end_dt, selected_resolution = _metric_query_args(metrics, start, end, resolution)
+    with get_db() as db:
+        servers = db.query(Server).order_by(Server.name.asc(), Server.host.asc()).all()
+        if selected_resolution == "raw":
+            aggregates = db.query(
+                MetricHistory.server_id,
+                MetricHistory.metric,
+                func.avg(MetricHistory.value).label("average"),
+                func.min(MetricHistory.value).label("minimum"),
+                func.max(MetricHistory.value).label("maximum"),
+                func.count(MetricHistory.id).label("samples"),
+            ).filter(
+                MetricHistory.metric.in_(names),
+                MetricHistory.timestamp >= start_dt,
+                MetricHistory.timestamp <= end_dt,
+            ).group_by(MetricHistory.server_id, MetricHistory.metric).all()
+            latest_times = db.query(
+                MetricHistory.server_id.label("server_id"),
+                MetricHistory.metric.label("metric"),
+                func.max(MetricHistory.timestamp).label("last_at"),
+            ).filter(
+                MetricHistory.metric.in_(names),
+                MetricHistory.timestamp >= start_dt,
+                MetricHistory.timestamp <= end_dt,
+            ).group_by(MetricHistory.server_id, MetricHistory.metric).subquery()
+            latest = db.query(
+                MetricHistory.server_id, MetricHistory.metric,
+                MetricHistory.value.label("latest"), MetricHistory.timestamp.label("last_at"),
+            ).join(latest_times, and_(
+                MetricHistory.server_id == latest_times.c.server_id,
+                MetricHistory.metric == latest_times.c.metric,
+                MetricHistory.timestamp == latest_times.c.last_at,
+            )).all()
+        else:
+            weighted_total = func.sum(MetricRollup.value_avg * MetricRollup.sample_count)
+            sample_total = func.sum(MetricRollup.sample_count)
+            aggregates = db.query(
+                MetricRollup.server_id,
+                MetricRollup.metric,
+                (weighted_total / sample_total).label("average"),
+                func.min(MetricRollup.value_min).label("minimum"),
+                func.max(MetricRollup.value_max).label("maximum"),
+                sample_total.label("samples"),
+            ).filter(
+                MetricRollup.metric.in_(names),
+                MetricRollup.resolution == selected_resolution,
+                MetricRollup.bucket_at >= start_dt,
+                MetricRollup.bucket_at <= end_dt,
+            ).group_by(MetricRollup.server_id, MetricRollup.metric).all()
+            latest_times = db.query(
+                MetricRollup.server_id.label("server_id"),
+                MetricRollup.metric.label("metric"),
+                func.max(MetricRollup.bucket_at).label("last_at"),
+            ).filter(
+                MetricRollup.metric.in_(names),
+                MetricRollup.resolution == selected_resolution,
+                MetricRollup.bucket_at >= start_dt,
+                MetricRollup.bucket_at <= end_dt,
+            ).group_by(MetricRollup.server_id, MetricRollup.metric).subquery()
+            latest = db.query(
+                MetricRollup.server_id, MetricRollup.metric,
+                MetricRollup.value_avg.label("latest"), MetricRollup.bucket_at.label("last_at"),
+            ).join(latest_times, and_(
+                MetricRollup.server_id == latest_times.c.server_id,
+                MetricRollup.metric == latest_times.c.metric,
+                MetricRollup.bucket_at == latest_times.c.last_at,
+            )).filter(MetricRollup.resolution == selected_resolution).all()
+
+        host_map = {
+            str(server.id): {
+                "server_id": str(server.id), "name": server.name, "host": server.host,
+                "status": server.status, "metrics": {},
+            }
+            for server in servers
+        }
+        latest_map = {(str(row.server_id), row.metric): row for row in latest}
+        for row in aggregates:
+            host = host_map.get(str(row.server_id))
+            if not host:
+                continue
+            last = latest_map.get((str(row.server_id), row.metric))
+            host["metrics"][row.metric] = {
+                "average": round(float(row.average), 4),
+                "minimum": round(float(row.minimum), 4),
+                "maximum": round(float(row.maximum), 4),
+                "latest": round(float(last.latest), 4) if last else None,
+                "samples": int(row.samples or 0),
+                "last_at": last.last_at.isoformat() + "Z" if last else None,
+            }
+    return {
+        "metrics": names, "resolution": selected_resolution,
+        "start": start_dt.isoformat() + "Z", "end": end_dt.isoformat() + "Z",
+        "hosts": list(host_map.values()),
     }

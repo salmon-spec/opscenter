@@ -117,3 +117,43 @@ def test_timeseries_supports_raw_rollup_and_validation():
         params={**params, "start": "2020-01-01T00:00:00Z"},
     )
     assert too_long.status_code == 400
+
+
+def test_host_overview_aggregates_all_hosts_in_one_request():
+    server_id = _seed_metrics()
+    build_metric_rollups(now=datetime(2026, 8, 30, 12, 17))
+    db = SessionLocal()
+    try:
+        empty = Server(name="empty-host", host="10.66.66.100", ssh_key="__password__x")
+        db.add(empty)
+        db.commit()
+        empty_id = str(empty.id)
+    finally:
+        db.close()
+
+    params = {
+        "metrics": "cpu,memory,disk",
+        "start": "2026-08-30T11:50:00Z",
+        "end": "2026-08-30T12:10:00Z",
+        "resolution": "raw",
+    }
+    response = client.get("/api/v2/metrics/hosts/overview", params=params)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["resolution"] == "raw"
+    hosts = {item["server_id"]: item for item in payload["hosts"]}
+    assert set(hosts) == {server_id, empty_id}
+    cpu = hosts[server_id]["metrics"]["cpu"]
+    assert cpu["average"] == pytest.approx(25.0)
+    assert cpu["minimum"] == 10
+    assert cpu["maximum"] == 40
+    assert cpu["latest"] == 40
+    assert cpu["samples"] == 4
+    assert cpu["last_at"] == "2026-08-30T12:04:00Z"
+    assert hosts[empty_id]["metrics"] == {}
+
+    rollup = client.get("/api/v2/metrics/hosts/overview", params={**params, "resolution": "5m"})
+    assert rollup.status_code == 200
+    rollup_cpu = {item["server_id"]: item for item in rollup.json()["hosts"]}[server_id]["metrics"]["cpu"]
+    assert rollup_cpu["average"] == pytest.approx(25.0)
+    assert rollup_cpu["samples"] == 4
