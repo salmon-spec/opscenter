@@ -1,0 +1,77 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "service_name"
+  }
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "system" {
+  max_age       = "24h"
+  labels        = {
+    server_id = sys.env("OPSCENTER_SERVER_ID"),
+    host_name = sys.env("OPSCENTER_HOST_NAME"),
+    source = "journal",
+  }
+  relabel_rules = loki.relabel.journal.rules
+  forward_to    = [loki.write.opscenter.receiver]
+}
+
+discovery.docker "local" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "docker" {
+  targets = discovery.docker.local.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "service_name"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_image"]
+    target_label  = "image"
+  }
+}
+
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.local.targets
+  labels        = {
+    server_id = sys.env("OPSCENTER_SERVER_ID"),
+    host_name = sys.env("OPSCENTER_HOST_NAME"),
+    source = "docker",
+  }
+  relabel_rules = discovery.relabel.docker.rules
+  forward_to    = [loki.write.opscenter.receiver]
+}
+
+loki.write "opscenter" {
+  endpoint {
+    url = sys.env("LOKI_PUSH_URL")
+  }
+}

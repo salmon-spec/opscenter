@@ -1,0 +1,19 @@
+services:
+  loki:
+    image: grafana/loki:3.7.2
+    container_name: opscenter-loki
+    restart: unless-stopped
+    command: -config.file=/etc/loki/config.yml
+    ports:
+      - "${LOKI_BIND_IP:-10.66.66.5}:3100:3100"
+    volumes:
+      - ./loki.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  loki-data:

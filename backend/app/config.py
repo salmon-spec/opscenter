@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     retention_stats_days: int = 180                     # network_stats 保留天数（日归集，低频）
     retention_rollup_5m_days: int = 365                 # 5分钟聚合保留1年
     retention_rollup_1h_days: int = 0                   # 0=小时聚合长期保存
+    loki_url: str = ""                                  # 中央 Loki，例如 http://10.66.66.5:3100
+    loki_timeout_seconds: float = 12.0
+    loki_retention_days: int = 365
 
 
 _settings = Settings()
@@ -107,6 +110,9 @@ RETENTION_LATENCY_DAYS = _settings.retention_latency_days
 RETENTION_STATS_DAYS = _settings.retention_stats_days
 RETENTION_ROLLUP_5M_DAYS = _settings.retention_rollup_5m_days
 RETENTION_ROLLUP_1H_DAYS = _settings.retention_rollup_1h_days
+LOKI_URL = _settings.loki_url.rstrip("/")
+LOKI_TIMEOUT_SECONDS = _settings.loki_timeout_seconds
+LOKI_RETENTION_DAYS = _settings.loki_retention_days
 
 # ── App ──
 from app.version import VERSION  # noqa: E402

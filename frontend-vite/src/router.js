@@ -14,12 +14,14 @@ const SystemFirewall = () => import('./views/SystemFirewall.vue')
 const SystemSSH = () => import('./views/SystemSSH.vue')
 const SystemTerminal = () => import('./views/SystemTerminal.vue')
 const SystemProcesses = () => import('./views/SystemProcesses.vue')
+const LogCenter = () => import('./views/LogCenter.vue')
 
 const routes = [
   { path: '/', component: ServicePlaza, meta: { title: '服务广场' } },
   { path: '/assets', redirect: '/system/monitor' },
   { path: '/container', component: Assets, meta: { title: '容器' } },
   { path: '/database', component: Database, meta: { title: '数据库' } },
+  { path: '/logs', component: LogCenter, meta: { title: '日志中心' } },
   { path: '/system', redirect: '/system/monitor' },
   { path: '/system/monitor', component: SystemMonitor, meta: { title: '系统 · 监控' } },
   { path: '/system/files', component: SystemFiles, meta: { title: '系统 · 文件' } },
