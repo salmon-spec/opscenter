@@ -9,7 +9,7 @@ from app.models import Server
 
 
 # 动态读取Agent版本号
-_AGENT_VERSION = "2.2.0"  # 默认值（v3.28 起全量 2.2.0）
+_AGENT_VERSION = "2.4.0"
 _AGENT_SOURCE_DIR = Path(__file__).resolve().parents[2] / "agent"
 try:
     with (_AGENT_SOURCE_DIR / "opsagent.py").open(encoding="utf-8") as f:
@@ -19,6 +19,11 @@ try:
                 break
 except:
     pass
+
+
+def get_agent_version() -> str:
+    """Return the version bundled with this OpsCenter deployment."""
+    return _AGENT_VERSION
 
 # Agent file path on target server
 AGENT_DIR = "/opt/opsagent"

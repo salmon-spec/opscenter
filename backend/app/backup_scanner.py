@@ -64,7 +64,7 @@ async def backup_check_loop() -> None:
     await asyncio.sleep(120)
     while True:
         try:
-            run_backup_check()
+            await asyncio.to_thread(run_backup_check)
         except Exception as e:
             logger.exception("backup check loop error: %s", e)
         await asyncio.sleep(6 * 3600)

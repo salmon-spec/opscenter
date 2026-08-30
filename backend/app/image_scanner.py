@@ -79,6 +79,6 @@ async def image_check_loop() -> None:
             nxt = nxt.replace(day=nxt.day + 1)
         await asyncio.sleep((nxt - now).total_seconds())
         try:
-            run_image_check()
+            await asyncio.to_thread(run_image_check)
         except Exception as e:
             logger.exception("image check loop error: %s", e)

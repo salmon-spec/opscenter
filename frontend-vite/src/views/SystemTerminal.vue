@@ -1,9 +1,9 @@
 <template>
   <div class="view terminal-page">
-    <div class="view-head"><div><h1 class="view-title">终端</h1><div class="view-sub">{{ currentHost?.name || '未选择主机' }} · SSH 会话</div></div><button v-if="sessionId" class="btn" @click="createTerminal">重新建立会话</button></div>
+    <div class="view-head"><div><h1 class="view-title">终端</h1><div class="view-sub">{{ currentHost?.name || '未选择主机' }} · {{ currentHost?.agent_type==='local'?'本机安全终端':'SSH 会话' }}</div></div><button v-if="sessionId" class="btn" @click="createTerminal">重新建立会话</button></div>
     <div v-if="error" class="card connect"><p>{{ error }}</p><button class="btn btn-primary" @click="createTerminal">重试连接</button></div>
     <div v-else-if="loading" class="card loading"><span class="spinner"></span>正在建立 SSH 会话…</div>
-    <TerminalPanel v-else-if="sessionId" :key="sessionId" embedded :session-id="sessionId" :title="currentHost?.name" />
+    <TerminalPanel v-else-if="sessionId" :key="sessionId" embedded :session-id="sessionId" :title="currentHost?.name" :allow-files="currentHost?.agent_type!=='local'" />
     <div v-else class="card connect"><p>选择主机后建立安全终端会话。</p><button class="btn btn-primary" :disabled="!selectedHostId" @click="createTerminal">连接终端</button></div>
   </div>
 </template>

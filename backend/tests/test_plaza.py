@@ -3,8 +3,29 @@
 from collections import Counter
 from contextlib import contextmanager
 from types import SimpleNamespace
+import time
 
 from app import plaza
+
+
+def test_health_probe_is_stale_while_revalidate_and_never_blocks(monkeypatch):
+    item = {"key": "fast-ui", "enabled": True, "health_url": "http://127.0.0.1/"}
+    monkeypatch.setattr(plaza, "_cached_checks", {})
+    monkeypatch.setattr(plaza, "_cached_at", 0.0)
+    monkeypatch.setattr(plaza, "_refreshing", False)
+
+    def slow_probe(_item):
+        time.sleep(0.15)
+        return {"status": "up", "http_status": 200, "latency_ms": 150, "health_error": ""}
+
+    monkeypatch.setattr(plaza, "_probe", slow_probe)
+    started = time.perf_counter()
+    assert plaza._health_checks([item]) == {}
+    assert time.perf_counter() - started < 0.08
+    deadline = time.time() + 1
+    while plaza._refreshing and time.time() < deadline:
+        time.sleep(0.02)
+    assert plaza._cached_checks["fast-ui"]["status"] == "up"
 
 
 class _Query:

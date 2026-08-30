@@ -366,7 +366,7 @@ async def alerting_loop() -> None:
         if not ALERTING_ENABLED:
             continue
         try:
-            run_alerting_cycle()
+            await asyncio.to_thread(run_alerting_cycle)
         except Exception as e:
             logger.exception("alerting cycle error: %s", e)
 
@@ -380,6 +380,6 @@ async def retention_loop() -> None:
             nxt = nxt + timedelta(days=1)
         await asyncio.sleep((nxt - now).total_seconds())
         try:
-            retention_cleanup()
+            await asyncio.to_thread(retention_cleanup)
         except Exception as e:
             logger.exception("retention error: %s", e)

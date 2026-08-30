@@ -257,14 +257,123 @@ class SSHTerminalSession:
         return True
 
 
+class LocalTerminalSession(SSHTerminalSession):
+    """Local Linux PTY session for the host running OpsCenter.
+
+    This deliberately runs as the OpsCenter service account and does not use
+    stored SSH credentials or elevate privileges.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.process = None
+        self.master_fd = None
+
+    def connect(self, cols=80, rows=24):
+        try:
+            import os
+            import pty
+            import subprocess
+
+            master_fd, slave_fd = pty.openpty()
+            env = os.environ.copy()
+            env["TERM"] = "xterm-256color"
+            shell = env.get("SHELL") or "/bin/bash"
+            self.process = subprocess.Popen(
+                [shell, "-l"], stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+                close_fds=True, start_new_session=True, env=env,
+            )
+            os.close(slave_fd)
+            os.set_blocking(master_fd, False)
+            self.master_fd = master_fd
+            self.channel = self  # keeps the shared lifecycle checks compatible
+            self.connected = True
+            self.resize(cols, rows)
+            self.last_activity = time.time()
+            if self.initial_command:
+                self.send(self.initial_command + "\n")
+            logger.info("Local PTY session %s started as current service user", self.session_id)
+            return True
+        except Exception as exc:
+            logger.error("Local PTY start failed: %s", exc)
+            self.close()
+            return False
+
+    def resize(self, cols, rows):
+        if self.master_fd is None:
+            return
+        try:
+            import fcntl
+            import struct
+            import termios
+            fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+            self.last_activity = time.time()
+        except Exception:
+            pass
+
+    def send(self, data):
+        if self.master_fd is None or not self.connected:
+            return
+        try:
+            import os
+            os.write(self.master_fd, data.encode() if isinstance(data, str) else data)
+            self.last_activity = time.time()
+        except (BlockingIOError, OSError):
+            pass
+
+    def recv(self, n=4096):
+        if self.master_fd is None or not self.connected:
+            return b""
+        try:
+            import os
+            data = os.read(self.master_fd, n)
+            if data:
+                self.last_activity = time.time()
+            return data
+        except (BlockingIOError, OSError):
+            return b""
+
+    def exit_status_ready(self):
+        return self.process is None or self.process.poll() is not None
+
+    def get_sftp(self):
+        return None
+
+    def close(self):
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+            self._reconnect_timer = None
+        self.pending_reconnect = False
+        try:
+            if self.master_fd is not None:
+                import os
+                os.close(self.master_fd)
+        except Exception:
+            pass
+        self.master_fd = None
+        try:
+            if self.process and self.process.poll() is None:
+                self.process.terminate()
+                self.process.wait(timeout=2)
+        except Exception:
+            try:
+                self.process.kill()
+            except Exception:
+                pass
+        self.process = None
+        self.channel = None
+        self.connected = False
+
+
 def create_session(server_id, server_name, host, port, user,
-                   password=None, key_content=None, initial_command=None):
+                   password=None, key_content=None, initial_command=None, local=False):
     _cleanup_dead()
     cnt = len([s for s in _sessions.values() if s.server_id == server_id and s.is_alive])
     if cnt >= MAX_SESSIONS_PER_SERVER:
         return "", f"\u670d\u52a1\u5668 {server_name} \u5df2\u6709 {MAX_SESSIONS_PER_SERVER} \u4e2a\u6d3b\u8dc3\u7ec8\u7aef\u4f1a\u8bdd"
     session_id = str(uuid.uuid4())
-    s = SSHTerminalSession(session_id=session_id, server_id=server_id,
+    session_class = LocalTerminalSession if local else SSHTerminalSession
+    s = session_class(session_id=session_id, server_id=server_id,
         server_name=server_name, host=host, port=port, user=user,
         password=password, key_content=key_content, initial_command=initial_command)
     _sessions[session_id] = s

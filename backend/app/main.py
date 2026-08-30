@@ -16,7 +16,7 @@ from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResul
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
-from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan
+from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
 from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
@@ -1203,6 +1203,8 @@ async def startup():
     asyncio.create_task(log_scan_loop())    # v3.27 D2 日志扫描（LOG_SCAN_ENABLED=false 关闭）
     asyncio.create_task(backup_check_loop())    # v3.27 D3 备份验证（BACKUP_CHECK_ENABLED=false 关闭）
     asyncio.create_task(image_check_loop())    # v3.27 D4 镜像检查（IMAGE_CHECK_ENABLED=false 关闭）
+    # API first, stale Agent upgrades afterwards. This never blocks startup.
+    asyncio.create_task(asyncio.to_thread(_upgrade_outdated_agents_once))
     asyncio.create_task(report_loop())    # v3.28 R2 日报（REPORT_ENABLED=false 关闭）
     asyncio.create_task(retention_loop())   # 每天 01:00 清理过期数据
     seed_default_rules()
@@ -1253,7 +1255,15 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
             if not srv:
                 return
             db.expunge(srv)
-        result = deploy_agent(srv, password=password)
+        if srv.agent_type == "local":
+            from app.agent_manager import upgrade_local_agent
+            result = upgrade_local_agent()
+            if result.get("success"):
+                result["agent_version"] = result.get("version", get_agent_version())
+                result["agent_port"] = srv.agent_port or 19100
+                result["agent_token"] = srv.agent_token or ""
+        else:
+            result = deploy_agent(srv, password=password)
         with get_db() as db:
             row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
             if not row:
@@ -1274,6 +1284,30 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_status = "error"
                 row.last_error = str(exc)[-1000:]
                 db.commit()
+
+
+def _version_parts(value: Optional[str]) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", value or "")
+    return tuple(int(part) for part in parts[:4]) if parts else (0,)
+
+
+def _upgrade_outdated_agents_once() -> list[str]:
+    """Upgrade running stale Agents without holding a database session over I/O."""
+    current = get_agent_version()
+    with get_db() as db:
+        targets = [
+            str(server.id) for server in db.query(Server).filter(Server.agent_status == "running").all()
+            if _version_parts(server.agent_version) < _version_parts(current)
+            and (server.agent_type == "local" or bool(server.ssh_key))
+        ]
+        if targets:
+            db.query(Server).filter(Server.id.in_([uuid.UUID(item) for item in targets])).update(
+                {Server.agent_status: "deploying"}, synchronize_session=False,
+            )
+            db.commit()
+    for server_id in targets:
+        _deploy_agent_background(server_id)
+    return targets
 
 
 @app.post("/api/v2/servers", status_code=201)
@@ -3155,6 +3189,54 @@ def deploy_agent_api(server_id: str):
     return result
 
 
+@app.get("/api/v2/agents/version")
+def agent_version_api():
+    current = get_agent_version()
+    with get_db() as db:
+        outdated = [
+            str(server.id) for server in db.query(Server).filter(Server.agent_status == "running").all()
+            if _version_parts(server.agent_version) < _version_parts(current)
+        ]
+    return {"current_version": current, "outdated_server_ids": outdated, "outdated_count": len(outdated)}
+
+
+@app.post("/api/v2/servers/{server_id}/upgrade-agent", status_code=202)
+def upgrade_agent_async(server_id: str, background_tasks: BackgroundTasks):
+    try:
+        server_uuid = uuid.UUID(server_id)
+    except ValueError:
+        raise HTTPException(404, "Server not found")
+    with get_db() as db:
+        server = db.query(Server).filter(Server.id == server_uuid).first()
+        if not server:
+            raise HTTPException(404, "Server not found")
+        if server.agent_type != "local" and not server.ssh_key:
+            raise HTTPException(400, "主机未配置 SSH 凭证，无法升级 Agent")
+        server.agent_status = "deploying"
+        db.commit()
+    background_tasks.add_task(_deploy_agent_background, server_id)
+    return {"accepted": True, "server_id": server_id, "target_version": get_agent_version()}
+
+
+@app.post("/api/v2/agents/upgrade-outdated", status_code=202)
+def upgrade_outdated_agents(background_tasks: BackgroundTasks):
+    current = get_agent_version()
+    with get_db() as db:
+        targets = [
+            str(server.id) for server in db.query(Server).filter(Server.agent_status == "running").all()
+            if _version_parts(server.agent_version) < _version_parts(current)
+            and (server.agent_type == "local" or bool(server.ssh_key))
+        ]
+        if targets:
+            db.query(Server).filter(Server.id.in_([uuid.UUID(item) for item in targets])).update(
+                {Server.agent_status: "deploying"}, synchronize_session=False,
+            )
+            db.commit()
+    for server_id in targets:
+        background_tasks.add_task(_deploy_agent_background, server_id)
+    return {"accepted": len(targets), "server_ids": targets, "target_version": current}
+
+
 @app.get("/api/v2/servers/{server_id}/agent-status")
 def agent_status_api(server_id: str):
     """Check OpsAgent status on a remote server."""
@@ -3844,6 +3926,7 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         srv_name = srv.name
         # Local server: use 127.0.0.1 instead of public IP (cannot loopback via public IP on cloud)
         srv_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        srv_is_local = srv.agent_type == "local"
         srv_port = srv.ssh_port or 22
         srv_user = srv.ssh_user or "root"
         # ssh_key field stores either a real key or __password__<password>
@@ -3861,8 +3944,9 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         password=srv_password,
         key_content=srv_key,
         initial_command=initial_command,
+        local=srv_is_local,
     )
-    if not srv_password and not srv_key:
+    if not srv_is_local and not srv_password and not srv_key:
         raise HTTPException(400, f"服务器 {srv_name} 未配置SSH密码或密钥，请先在资源管理中添加")
     if err:
         raise HTTPException(400, err)
@@ -3873,7 +3957,7 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
     ok = await loop.run_in_executor(None, lambda: session.connect(cols=req.cols, rows=req.rows))
     if not ok:
         remove_session(sid)
-        raise HTTPException(500, f"SSH connection to {srv_host} failed")
+        raise HTTPException(500, f"{'本机终端' if srv_is_local else 'SSH connection to ' + srv_host} failed")
     return {
         "session_id": sid,
         "server_name": srv_name,
@@ -3881,6 +3965,7 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         "user": srv_user,
         "mode": req.mode,
         "container_id": req.container_id if req.mode == "container" else None,
+        "transport": "local-pty" if srv_is_local else "ssh",
     }
 
 

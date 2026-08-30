@@ -105,7 +105,7 @@ async def cert_scan_loop() -> None:
     await asyncio.sleep(60)
     while True:
         try:
-            run_cert_scan()
+            await asyncio.to_thread(run_cert_scan)
         except Exception as e:
             logger.exception("cert scan error: %s", e)
         await asyncio.sleep(CERT_SCAN_INTERVAL_HOURS * 3600)

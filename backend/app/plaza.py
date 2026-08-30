@@ -26,6 +26,7 @@ _CACHE_TTL = 30
 _cache_lock = threading.Lock()
 _cached_at = 0.0
 _cached_checks: dict[str, dict] = {}
+_refreshing = False
 
 
 class PlazaVisibilityUpdate(BaseModel):
@@ -84,21 +85,34 @@ def _probe(item: dict) -> dict:
     }
 
 
+def _refresh_health_checks(catalog: list[dict]) -> None:
+    global _cached_at, _cached_checks, _refreshing
+    try:
+        enabled = [item for item in catalog if item.get("enabled")]
+        with ThreadPoolExecutor(max_workers=min(12, len(enabled) or 1)) as pool:
+            checks = dict(zip((item["key"] for item in enabled), pool.map(_probe, enabled)))
+        with _cache_lock:
+            _cached_checks = checks
+            _cached_at = time.monotonic()
+    finally:
+        with _cache_lock:
+            _refreshing = False
+
+
 def _health_checks(catalog: list[dict]) -> dict[str, dict]:
-    global _cached_at, _cached_checks
+    """Return last-known health immediately and refresh stale data in background."""
+    global _refreshing
     now = time.monotonic()
     with _cache_lock:
-        if _cached_checks and now - _cached_at < _CACHE_TTL:
-            return dict(_cached_checks)
-
-    enabled = [item for item in catalog if item.get("enabled")]
-    with ThreadPoolExecutor(max_workers=min(8, len(enabled) or 1)) as pool:
-        checks = dict(zip((item["key"] for item in enabled), pool.map(_probe, enabled)))
-
-    with _cache_lock:
-        _cached_checks = checks
-        _cached_at = now
-    return dict(checks)
+        snapshot = dict(_cached_checks)
+        stale = not _cached_checks or now - _cached_at >= _CACHE_TTL
+        if stale and not _refreshing:
+            _refreshing = True
+            threading.Thread(
+                target=_refresh_health_checks, args=([dict(item) for item in catalog],),
+                name="plaza-health-refresh", daemon=True,
+            ).start()
+    return snapshot
 
 
 @router.get("/services/plaza")

@@ -23,10 +23,10 @@
       >{{ g.name }} ({{ groupCount(g) }})</button>
     </div>
 
-    <div v-if="loading" class="loading"><span class="spinner"></span>正在加载服务…</div>
+    <div v-if="loading && !services.length" class="loading"><span class="spinner"></span>正在加载服务…</div>
     <EmptyState v-else-if="!filtered.length" icon="🔍" text="没有匹配的服务" />
     <div v-else class="svc-grid">
-      <div v-for="s in filtered" :key="s.id" class="card svc-card" @click="openDetail(s)">
+      <div v-for="s in filtered" :key="s.id" class="card svc-card" @click="openDetail(s)" @mouseenter="warmService(s)">
         <div class="svc-top">
           <span class="svc-icon" :style="{ background: groupColor(s) + '1a', color: groupColor(s) }">{{ iconOf(s) }}</span>
           <span class="dot" :class="statusDotClass(s.status)"></span>
@@ -108,9 +108,11 @@ import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
 import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'
 
-const services = ref([])
+const PLAZA_CACHE_KEY='ops-plaza-cache-v2'
+function readCache(){try{const value=JSON.parse(localStorage.getItem(PLAZA_CACHE_KEY)||'null');return Array.isArray(value?.items)?value.items:[]}catch{return[]}}
+const services = ref(readCache())
 const groups = ref([])
-const loading = ref(true)
+const loading = ref(!services.value.length)
 const search = ref('')
 const activeGroup = ref('all')
 const drawerVisible = ref(false)
@@ -191,16 +193,16 @@ function openDetail(s) {
   drawerVisible.value = true
 }
 
-async function reload() {
+function warmService(service){try{const origin=new URL(service.entry_url,location.href).origin;if(document.head.querySelector(`link[data-ops-origin="${origin}"]`))return;const link=document.createElement('link');link.rel='preconnect';link.href=origin;link.crossOrigin='anonymous';link.dataset.opsOrigin=origin;document.head.appendChild(link)}catch{/* 非标准地址忽略 */}}
+
+async function reload(silent=false) {
   loading.value = true
   try {
-    const [svc, hidden] = await Promise.allSettled([
-      api.get('/services/plaza'),
-      api.get('/services/plaza/hidden'),
-    ])
-    services.value = svc.status === 'fulfilled' ? svc.value : []
-    hiddenServices.value = hidden.status === 'fulfilled' ? hidden.value : hiddenServices.value
+    const svc = await api.get('/services/plaza')
+    if(Array.isArray(svc)){services.value=svc;localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:svc,time:Date.now()}));svc.slice(0,6).forEach(warmService)}
     groups.value = PLAZA_GROUPS
+  } catch(error) {
+    if(!services.value.length&&!silent)toast(`服务广场加载失败：${error.message}`,'error')
   } finally {
     loading.value = false
   }
@@ -301,7 +303,7 @@ async function deleteManualService(service) {
   }
 }
 
-onMounted(reload)
+onMounted(()=>reload(true))
 </script>
 
 <style scoped>

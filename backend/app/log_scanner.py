@@ -65,7 +65,7 @@ async def log_scan_loop() -> None:
     await asyncio.sleep(90)  # 等引擎与 agent 就绪
     while True:
         try:
-            run_log_scan()
+            await asyncio.to_thread(run_log_scan)
         except Exception as e:
             logger.exception("log scan loop error: %s", e)
         await asyncio.sleep(60)
