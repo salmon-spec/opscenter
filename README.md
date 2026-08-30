@@ -1,6 +1,6 @@
 # OpsCenter 运维工作台
 
-> **当前版本：v4.2.0** · 更新于 2026-08-28
+> **当前版本：v4.2.1** · 更新于 2026-08-30
 > 访问：https://ops.salmon.xin/ · 状态页：https://ops.salmon.xin/status/ · Vite 灰度页：https://ops.salmon.xin/v3/
 
 面向 DevOps/SRE 的自托管**统一运维工作台**：管理服务器、服务、监控、告警、证书、日志、备份、镜像与巡检日报，中文界面，免登录访问，支持 SSH 终端直连与远程 Agent 采集。
@@ -26,7 +26,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | 后端测试 | **pytest 106/106 全绿**（0 失败 0 错误，含 v4.2 主机/数据库/容器/系统契约） |
 | API | 11 大模块全 200（health/servers/alert-rules/alert-silences/cert-checks/log-rules/backup-checks/images/reports/audit-logs/status-page） |
 | Agent | v2.4.0 |
-| 版本里程碑 | **v4.2.0**（数据库、容器、系统分域 + 全局主机管理 + 按需资源采集） |
+| 版本里程碑 | **v4.2.1**（资源控制台性能、会话缓存与请求可观测性） |
 | 部署 | VM2（192.168.1.153 / 10.66.66.5）systemd + Caddy 运行中 |
 | 仓库 | GitLab = GitHub = 本地 = `77ca809` |
 
@@ -206,7 +206,7 @@ OpsCenter/
 │   │   ├── ssh_terminal.py       # WebSocket 终端 + 文件管理
 │   │   ├── discovery.py          # 服务自动发现
 │   │   ├── models.py             # SQLAlchemy 模型（15 表）
-│   │   └── version.py            # 版本号（4.1.0，单一来源）
+│   │   └── version.py            # 版本号（4.2.1，单一来源）
 │   ├── tests/                    # pytest（52 用例）
 │   └── requirements.txt
 ├── agent/

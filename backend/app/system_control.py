@@ -90,9 +90,15 @@ def _normalize(data: Dict[str, Any], server_id: str, source: str) -> Dict[str, A
 
 @router.get("/servers/{server_id}/system/summary", dependencies=[Depends(get_current_user)])
 def system_summary(server_id: str, refresh: bool = Query(False)):
+    started = time.perf_counter()
     cached = _SUMMARY_CACHE.get(server_id)
     if cached and not refresh and time.time() - cached["time"] < 2:
-        return {**cached["data"], "cached": True}
+        return {
+            **cached["data"], "cached": True,
+            "cache_age_seconds": round(time.time() - cached["time"], 2),
+            "cache_ttl_seconds": 2,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        }
     server = _server(server_id)
     if PREVIEW_MODE:
         now = time.time()
@@ -105,7 +111,10 @@ def system_summary(server_id: str, refresh: bool = Query(False)):
             "load1": 0.42, "load5": 0.36, "load15": 0.31, "uptime": 12 * 86400 + 4521,
             "network_interfaces": [{"interface": "eth0", "address": server.host, "rx_rate_mbps": 1.26, "tx_rate_mbps": 0.48, "rx_bytes": 8_193_928_112, "tx_bytes": 3_482_118_990}],
             "disks": [{"mountpoint": "/", "device": "/dev/sda1", "fstype": "ext4", "total": 256 * 1024**3, "used": int(94.2 * 1024**3), "percent": 36.8}],
-        }, server_id, "preview") | {"cached": False}
+        }, server_id, "preview") | {
+            "cached": False, "cache_age_seconds": 0, "cache_ttl_seconds": 2,
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        }
     host = "127.0.0.1" if server.agent_type == "local" else server.host
     data = None
     source = "agent"
@@ -126,7 +135,11 @@ def system_summary(server_id: str, refresh: bool = Query(False)):
         raise HTTPException(status_code=502, detail="无法读取主机系统信息")
     response = _normalize(data, server_id, source)
     _SUMMARY_CACHE[server_id] = {"time": time.time(), "data": response}
-    return {**response, "cached": False}
+    return {
+        **response, "cached": False, "cache_age_seconds": 0,
+        "cache_ttl_seconds": 2,
+        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+    }
 
 
 def _ssh_process_rows(server: Server, search: str, user: str, state: str, sort: str, limit: int):

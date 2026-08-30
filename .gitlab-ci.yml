@@ -1,4 +1,4 @@
-# OpsCenter v3.25 — GitLab CI 配置（迭代方案 1.5）
+# OpsCenter v4.2.1 — GitLab CI
 # 后端测试阶段：pytest smoke tests + 覆盖率
 # 说明：GitLab CE 19.2.1（VM1），runner 部署后 pipeline 自动生效
 
@@ -16,6 +16,7 @@ variables:
 backend-test:
   stage: test
   image: python:3.10-slim
+  interruptible: true
   services:
     - postgres:16-alpine
   before_script:

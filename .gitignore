@@ -28,3 +28,5 @@ htmlcov/
 # DB backups
 backup/
 backend/preview-*.db
+backend/*-test.db
+backend/*-openapi.db

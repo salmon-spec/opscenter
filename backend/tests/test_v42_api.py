@@ -80,6 +80,17 @@ def test_container_basic_api_does_not_request_stats(monkeypatch):
     assert response.status_code == 200
     assert requested == [False]
     assert response.json()["stats_timestamp"] is None
+    assert response.json()["stats_included"] is False
+    assert response.json()["source"] == "ssh-docker"
+    assert response.json()["duration_ms"] >= 0
+
+
+def test_api_responses_expose_request_observability_headers():
+    response = client.get("/api/v2/health", headers={"X-Request-ID": "v421-smoke"})
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "v421-smoke"
+    assert float(response.headers["x-response-time-ms"]) >= 0
+    assert response.headers["server-timing"].startswith("app;dur=")
 
 
 def test_system_summary_contract_and_illegal_pid(monkeypatch):
@@ -96,4 +107,6 @@ def test_system_summary_contract_and_illegal_pid(monkeypatch):
     response = client.get(f"/api/v2/servers/{server_id}/system/summary?refresh=true")
     assert response.status_code == 200
     assert response.json()["metrics"]["cpu"] == 12.5
+    assert response.json()["duration_ms"] >= 0
+    assert response.json()["cache_ttl_seconds"] == 2
     assert client.post(f"/api/v2/servers/{server_id}/processes/2/signal", json={"signal": "KILL"}).status_code == 400

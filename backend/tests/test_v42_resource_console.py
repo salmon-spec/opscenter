@@ -4,6 +4,7 @@ import json
 from app import control
 from app.audit import _classify, _redact
 from app.credential_crypto import decrypt_secret, encrypt_secret
+from app.performance import _REQUEST_ID_RE
 
 
 def test_database_credentials_are_encrypted_and_round_trip():
@@ -45,3 +46,9 @@ def test_remote_container_basic_mode_never_calls_docker_stats(monkeypatch):
     rows = control._remote_container_rows(object(), include_stats=False)
     assert rows[0]["name"] == "demo"
     assert not any("docker stats" in command for command in commands)
+
+
+def test_request_id_validation_is_bounded_and_header_safe():
+    assert _REQUEST_ID_RE.fullmatch("deploy-4.2.1:abc_123")
+    assert not _REQUEST_ID_RE.fullmatch("bad request id")
+    assert not _REQUEST_ID_RE.fullmatch("x" * 65)

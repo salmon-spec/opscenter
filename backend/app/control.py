@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -34,6 +35,8 @@ _CONTAINER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _DOCKER_RESOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_./:@+-]{0,255}$")
 _SENSITIVE_ENV_RE = re.compile(r"(password|passwd|secret|token|api[_-]?key|private[_-]?key)", re.I)
 _CONTAINER_CACHE: Dict[str, Dict[str, Any]] = {}
+_CONTAINER_CACHE_LOCKS: Dict[str, threading.Lock] = {}
+_CONTAINER_CACHE_LOCKS_GUARD = threading.Lock()
 
 
 class ServiceControlRequest(BaseModel):
@@ -365,6 +368,11 @@ def _invalidate_container_cache(server_id: str) -> None:
             _CONTAINER_CACHE.pop(key, None)
 
 
+def _container_cache_lock(cache_key: str) -> threading.Lock:
+    with _CONTAINER_CACHE_LOCKS_GUARD:
+        return _CONTAINER_CACHE_LOCKS.setdefault(cache_key, threading.Lock())
+
+
 def _resolve_service_target(svc: Service) -> tuple:
     """识别服务部署方式，返回 (命令前缀, 目标名)。
 
@@ -529,6 +537,7 @@ def list_server_containers(
     page_size: int = Query(50, ge=1, le=200),
 ):
     """返回一台主机的容器清单与实时资源数据。"""
+    started = time.perf_counter()
     cache_key = f"{server_id}:{'stats' if include_stats else 'basic'}"
     ttl = 10 if include_stats else 15
     cached_entry = _CONTAINER_CACHE.get(cache_key)
@@ -536,12 +545,32 @@ def list_server_containers(
     with get_db() as db:
         server = _server_or_404(db, server_id)
         if PREVIEW_MODE:
-            return {"items": [], "total": 0, "page": page, "page_size": page_size, "cached": False, "data_timestamp": time.time(), "stats_timestamp": time.time() if include_stats else None}
-        if cache_hit:
-            rows = [dict(item) for item in cached_entry["rows"]]
-        else:
-            rows = _load_container_rows(server, include_stats=include_stats)
-            _CONTAINER_CACHE[cache_key] = {"time": time.time(), "rows": [dict(item) for item in rows]}
+            now = time.time()
+            return {
+                "items": [], "total": 0, "page": page, "page_size": page_size,
+                "cached": False, "data_timestamp": now,
+                "stats_timestamp": now if include_stats else None,
+                "cache_age_seconds": 0, "cache_ttl_seconds": ttl,
+                "stats_included": include_stats, "source": "preview",
+                "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            }
+        db.expunge(server)
+
+    if cache_hit:
+        rows = [dict(item) for item in cached_entry["rows"]]
+    else:
+        # 同一主机的并发首屏请求只执行一次 Docker/SSH 采集。
+        with _container_cache_lock(cache_key):
+            cached_entry = _CONTAINER_CACHE.get(cache_key)
+            cache_hit = bool(cached_entry and time.time() - cached_entry["time"] < ttl and not refresh)
+            if cache_hit:
+                rows = [dict(item) for item in cached_entry["rows"]]
+            else:
+                rows = _load_container_rows(server, include_stats=include_stats)
+                cached_entry = {"time": time.time(), "rows": [dict(item) for item in rows]}
+                _CONTAINER_CACHE[cache_key] = cached_entry
+
+    with get_db() as db:
         services = db.query(Service).filter(Service.server_id == server.id).all()
         services_by_container = {s.container_name: {"id": str(s.id), "name": s.name} for s in services if s.container_name}
 
@@ -564,6 +593,11 @@ def list_server_containers(
         "items": rows[start:start + page_size], "total": total, "page": page, "page_size": page_size,
         "cached": cache_hit, "data_timestamp": timestamp,
         "stats_timestamp": timestamp if include_stats else None,
+        "cache_age_seconds": round(max(0, time.time() - timestamp), 2),
+        "cache_ttl_seconds": ttl,
+        "stats_included": include_stats,
+        "source": "local-docker" if server.agent_type == "local" else "ssh-docker",
+        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
     }
 
 

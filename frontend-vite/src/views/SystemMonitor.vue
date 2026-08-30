@@ -38,7 +38,7 @@ const cards=computed(()=>[
   {label:'网络',value:`↓ ${fmtBytes(m.value.net_rx)}/s`,percent:null,note:`↑ ${fmtBytes(m.value.net_tx)}/s`},
 ])
 const updatedAt=computed(()=>summary.value?new Date((summary.value.timestamp||0)*1000).toLocaleTimeString():'-')
-const infoRows=computed(()=>[['主机名',summary.value?.hostname||currentHost.value?.name||'-'],['平台',summary.value?.platform||'-'],['内核',summary.value?.kernel||'-'],['CPU 核心',m.value.cpu_count||'-'],['运行时间',fmtDuration(m.value.uptime)],['数据来源',summary.value?.source||'-'],['Agent',summary.value?.agent_version||currentHost.value?.agent_version||'-']])
+const infoRows=computed(()=>[['主机名',summary.value?.hostname||currentHost.value?.name||'-'],['平台',summary.value?.platform||'-'],['内核',summary.value?.kernel||'-'],['CPU 核心',m.value.cpu_count||'-'],['运行时间',fmtDuration(m.value.uptime)],['数据来源',summary.value?.source||'-'],['接口耗时',summary.value?.duration_ms!==undefined?`${Number(summary.value.duration_ms).toFixed(0)} ms${summary.value.cached?`（缓存 ${Number(summary.value.cache_age_seconds||0).toFixed(1)}s）`:''}`:'-'],['Agent',summary.value?.agent_version||currentHost.value?.agent_version||'-']])
 
 async function loadSummary(refresh=false){
   if(!selectedHostId.value||loading.value)return

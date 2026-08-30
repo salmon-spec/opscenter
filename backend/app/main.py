@@ -24,6 +24,7 @@ from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_
 from app.image_scanner import image_check_loop, run_image_check
 from app.report_engine import generate_report, report_loop
 from app.audit import AuditMiddleware
+from app.performance import PerformanceMiddleware
 from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
@@ -261,6 +262,7 @@ app.add_middleware(
 
 # v3.28 A1 操作审计中间件（写操作记录；AUDIT_ENABLED=false 关闭）
 app.add_middleware(AuditMiddleware)
+app.add_middleware(PerformanceMiddleware)
 
 # === v3.29 路由挂载（T2 密钥 / T3 详情拓扑大屏 / 主机操控） ===
 app.include_router(api_keys_router)
