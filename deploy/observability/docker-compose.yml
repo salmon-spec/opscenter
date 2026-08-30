@@ -15,5 +15,30 @@ services:
       timeout: 5s
       retries: 10
 
+  alloy:
+    image: grafana/alloy:v${ALLOY_VERSION:-1.18.0}
+    container_name: opscenter-alloy
+    restart: unless-stopped
+    user: "0:0"
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    depends_on:
+      loki:
+        condition: service_healthy
+    environment:
+      OPSCENTER_SERVER_ID: ${OPSCENTER_SERVER_ID:?set OPSCENTER_SERVER_ID in .env}
+      OPSCENTER_HOST_NAME: ${OPSCENTER_HOST_NAME:-OpsCenter}
+      LOKI_PUSH_URL: http://loki:3100/loki/api/v1/push
+    volumes:
+      - ./alloy.example.alloy:/etc/alloy/config.alloy:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+
 volumes:
   loki-data:
+  alloy-data:

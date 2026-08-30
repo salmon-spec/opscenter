@@ -4,9 +4,12 @@
 
 ## 中心节点
 
-1. 在 `10.66.66.5` 上运行 `docker compose up -d`。
-2. 后端环境增加 `LOKI_URL=http://10.66.66.5:3100` 和 `LOKI_RETENTION_DAYS=365`。
-3. 只对 `10.66.66.0/24` 开放 3100/TCP；不要把未开启认证的 Loki 暴露到公网。
+1. 从 `.env.example` 创建 `.env`，将 `OPSCENTER_SERVER_ID` 改为 OpsCenter 中本地主机的 UUID。
+2. 运行 `sh install.sh`。脚本会校验 Compose 配置、拉取固定版本、启动 Loki 与中心 Alloy，并等待 Loki 健康。
+3. 后端环境增加 `LOKI_URL=http://10.66.66.5:3100` 和 `LOKI_RETENTION_DAYS=365` 后重启 `opscenter-backend`。
+4. 只对 `10.66.66.0/24` 开放 3100/TCP；不要把未开启认证的 Loki 暴露到公网。
+
+中心 Alloy 以只读方式挂载宿主机 journal 与 Docker socket，采集 VM2 自身日志；远程主机仍由“管理主机”抽屉后台部署 Alloy。
 
 ## 每台被管主机
 
