@@ -74,6 +74,27 @@ def test_local_file_lifecycle_is_recoverable(tmp_path, monkeypatch):
     assert not renamed_path.exists()
     assert os.path.exists(trashed.json()["trash_path"])
 
+    recycle_bin = client.get(f"/api/v2/servers/{server_id}/files/trash")
+    assert recycle_bin.status_code == 200, recycle_bin.text
+    entry = recycle_bin.json()["items"][0]
+    assert entry["name"] == "renamed.txt"
+    assert entry["original_path"] == str(renamed_path)
+
+    restored = client.post(f"/api/v2/servers/{server_id}/files/trash/restore", json={"trash_name": entry["trash_name"]})
+    assert restored.status_code == 200, restored.text
+    assert renamed_path.read_text() == "updated"
+    assert client.get(f"/api/v2/servers/{server_id}/files/trash").json()["total"] == 0
+
+    trashed_again = client.post(f"/api/v2/servers/{server_id}/files/trash", json={"path": str(renamed_path), "confirm_name": "renamed.txt"})
+    assert trashed_again.status_code == 200
+    entry = client.get(f"/api/v2/servers/{server_id}/files/trash").json()["items"][0]
+    wrong = client.post(f"/api/v2/servers/{server_id}/files/trash/purge", json={"trash_name": entry["trash_name"], "confirm_name": "wrong.txt"})
+    assert wrong.status_code == 400
+    purged = client.post(f"/api/v2/servers/{server_id}/files/trash/purge", json={"trash_name": entry["trash_name"], "confirm_name": "renamed.txt"})
+    assert purged.status_code == 200, purged.text
+    assert purged.json()["recoverable"] is False
+    assert client.get(f"/api/v2/servers/{server_id}/files/trash").json()["total"] == 0
+
 
 def test_file_safety_conflict_duplicate_and_root_protection(tmp_path):
     server_id = local_host()
