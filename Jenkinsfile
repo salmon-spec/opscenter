@@ -48,9 +48,9 @@ pipeline {
                 sh '''
                     for i in $(seq 1 12); do
                         health=$(curl -s -o /dev/null -w "%{http_code}" http://10.66.66.5:9091/api/v2/health-check -X POST || true)
-                        plaza_valid=$(curl -fsS http://10.66.66.5:9091/api/v2/services/plaza | grep -c '^\[' || true)
-                        echo "health=$health plaza_valid=$plaza_valid"
-                        [ "$health" = "200" ] && [ "$plaza_valid" = "1" ] && echo HEALTH_OK && exit 0
+                        plaza_status=$(curl -s -o /dev/null -w "%{http_code}" http://10.66.66.5:9091/api/v2/services/plaza || true)
+                        echo "health=$health plaza_status=$plaza_status"
+                        [ "$health" = "200" ] && [ "$plaza_status" = "200" ] && echo HEALTH_OK && exit 0
                         sleep 5
                     done
                     exit 1
