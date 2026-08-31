@@ -13,12 +13,12 @@ services:
     ports:
       - "127.0.0.1:9091:9091"
     environment:
-      - DATABASE_URL=postgresql+psycopg://opscenter:OpsCenter2026@172.17.0.1:5432/opscenter
+      - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL in the environment}
       - LOCAL_HOST=ops.salmon.xin
-      - OPS_JWT_SECRET=773d80b709bfd7d27229268fbb9b3b098f12453c7ed0e6928b5042bfc82e80ef
-      - OPS_ADMIN_USER=admin
-      - OPS_ADMIN_PASSWORD=OpsCenter@2026
-      - CREDENTIAL_KEY=change-this-to-a-stable-random-secret
+      - OPS_JWT_SECRET=${OPS_JWT_SECRET:?set OPS_JWT_SECRET in the environment}
+      - OPS_ADMIN_USER=${OPS_ADMIN_USER:-admin}
+      - OPS_ADMIN_PASSWORD=${OPS_ADMIN_PASSWORD:?set OPS_ADMIN_PASSWORD in the environment}
+      - CREDENTIAL_KEY=${CREDENTIAL_KEY:?set CREDENTIAL_KEY in the environment}
     volumes:
       - /opt/opscenter/frontend:/app/frontend:ro
       - /opt/opscenter/agent:/app/agent:ro

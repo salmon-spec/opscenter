@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -63,18 +63,20 @@ def generate_api_key(name: str, scope: str = "read"):
 
 
 def verify_api_key(plain: str) -> Optional[ApiKey]:
-    """校验密钥：按哈希查询 + enabled 检查，校验成功更新 last_used_at。"""
+    """校验密钥，并将高频调用产生的 last_used_at 写入限制为每分钟一次。"""
     key_hash = hash_api_key(plain)
     with get_db() as db:
         row = db.query(ApiKey).filter(ApiKey.key_hash == key_hash).first()
         if not row or not row.enabled:
             return None
-        row.last_used_at = datetime.utcnow()
-        db.commit()
+        now = datetime.utcnow()
+        if row.last_used_at is None or row.last_used_at < now - timedelta(minutes=1):
+            row.last_used_at = now
+            db.commit()
         return row
 
 
-def require_api_key(scope: str = "read"):
+def require_api_key(scope: str = "read", *, required: bool = False):
     """FastAPI 依赖工厂：开放 API 密钥鉴权。
 
     - 请求头带 Authorization: Bearer <key> → 必须校验通过（无效/停用 401，scope 不足 403）
@@ -84,7 +86,13 @@ def require_api_key(scope: str = "read"):
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
     ) -> Optional[ApiKey]:
         if credentials is None:
-            # 免登录模式：工作台自身调用不带令牌，直接放行
+            if required:
+                raise HTTPException(
+                    status_code=401,
+                    detail="该接口必须使用 API 密钥",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            # 兼容既有工作台开放接口；AI context 接口始终传 required=True。
             return None
         row = verify_api_key(credentials.credentials)
         if row is None:

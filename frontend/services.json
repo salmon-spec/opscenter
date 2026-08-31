@@ -11,7 +11,7 @@
           "url": "/gitea/",
           "desc": "Git代码仓库，支持Webhook触发CI/CD",
           "username": "qiushui",
-          "password": "passok@123",
+          "password": "",
           "authType": "manual",
           "tags": ["Git", "代码仓库", "Webhook"]
         },
@@ -20,7 +20,7 @@
           "url": "/jenkins/",
           "desc": "CI/CD构建服务器，自动化流水线",
           "username": "admin",
-          "password": "admin123",
+          "password": "",
           "authType": "manual",
           "tags": ["CI/CD", "构建", "部署"]
         },
@@ -29,7 +29,7 @@
           "url": "https://39.98.123.190:8891/",
           "desc": "Docker私有镜像仓库",
           "username": "admin",
-          "password": "Harbor@2026",
+          "password": "",
           "authType": "manual",
           "tags": ["Docker", "镜像仓库", "Registry"]
         }
@@ -53,7 +53,7 @@
           "url": "/grafana/",
           "desc": "监控仪表盘，Node Exporter + Loki数据源",
           "username": "admin",
-          "password": "admin123",
+          "password": "",
           "authType": "manual",
           "tags": ["监控", "仪表盘", "可视化"]
         }
@@ -86,7 +86,7 @@
           "url": "/pdf/",
           "desc": "PDF工具箱（合并/拆分/压缩/转换/OCR）",
           "username": "admin",
-          "password": "passok@123",
+          "password": "",
           "authType": "manual",
           "tags": ["PDF", "工具", "文档"]
         },
@@ -95,7 +95,7 @@
           "url": ":9999/ops123",
           "desc": "Linux运维管理面板（容器/网站/数据库）",
           "username": "admin",
-          "password": "Ops@2026",
+          "password": "",
           "authType": "manual",
           "tags": ["运维", "面板", "管理"]
         }
@@ -110,7 +110,7 @@
           "url": "/datahub/",
           "desc": "智能数据平台，232个数据源采集与展示",
           "username": "admin",
-          "password": "admin123",
+          "password": "",
           "authType": "manual",
           "tags": ["数据", "采集", "平台"]
         }

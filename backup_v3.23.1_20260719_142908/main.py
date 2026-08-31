@@ -25,14 +25,14 @@ class TerminalCreateRequest(BaseModel):
     rows: int = 24
 
 # === Config ===
-DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
+DB_URL = os.getenv("DATABASE_URL", "")
 LOCAL_HOST = os.getenv("LOCAL_HOST", "101.200.91.229")
 LOCAL_DOMAIN = os.getenv("LOCAL_DOMAIN", "ops.salmon.xin")
 
 # === Auth Config (v3.23.0) ===
-JWT_SECRET = os.getenv("OPS_JWT_SECRET", "opscenter-default-secret-change-me-1234567890")
+JWT_SECRET = os.getenv("OPS_JWT_SECRET", "")
 ADMIN_USER = os.getenv("OPS_ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.getenv("OPS_ADMIN_PASSWORD", "OpsCenter@2026")
+ADMIN_PASSWORD = os.getenv("OPS_ADMIN_PASSWORD", "")
 
 # Category -> Group ID auto-mapping for service grouping
 CATEGORY_TO_GROUP = {

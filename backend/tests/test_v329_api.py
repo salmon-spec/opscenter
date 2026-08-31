@@ -102,6 +102,24 @@ def test_verify_api_key_hash_roundtrip():
     assert verify_api_key("oc_rt_wrong") is None
 
 
+def test_verify_api_key_throttles_last_used_writes():
+    from datetime import datetime
+    from app.models import ApiKey
+
+    original = datetime.utcnow()
+    with get_db() as db:
+        row = ApiKey(
+            name="polling", key_hash=hash_api_key("oc_rt_polling"),
+            prefix="oc_rt_poll", scope="read", last_used_at=original,
+        )
+        db.add(row)
+        db.commit()
+        row_id = row.id
+    assert verify_api_key("oc_rt_polling") is not None
+    with get_db() as db:
+        assert db.query(ApiKey).filter(ApiKey.id == row_id).one().last_used_at == original
+
+
 def test_delete_api_key():
     r = client.post("/api/v2/keys", json={"name": "待删", "scope": "write"})
     key_id = r.json()["id"]

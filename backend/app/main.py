@@ -2,15 +2,12 @@ import os
 import calendar, uuid, asyncio, re, socket
 from datetime import datetime, timedelta, date
 from typing import Optional, List
-from contextlib import contextmanager
 
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, UploadFile, File as FastAPIFile
 from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import QueuePool
+from sqlalchemy import text
 
 from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
 from app.credential_crypto import encrypt_secret
@@ -46,6 +43,8 @@ from app.service_health import run_service_health_cycle, service_health_loop
 from app.plaza import router as plaza_router, plaza_health_loop
 from app.system_control import router as system_control_router
 from app.databases import router as databases_router
+from app.ai_context import router as ai_context_router
+from app.database import engine, SessionLocal, get_db
 
 class TerminalCreateRequest(BaseModel):
     server_id: str
@@ -55,7 +54,6 @@ class TerminalCreateRequest(BaseModel):
     container_id: Optional[str] = None
 
 # === Config ===
-DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg://opscenter:OpsCenter2026@127.0.0.1:5433/opscenter")
 LOCAL_HOST = os.getenv("LOCAL_HOST", "101.200.91.229")
 LOCAL_DOMAIN = os.getenv("LOCAL_DOMAIN", "ops.salmon.xin")
 
@@ -172,21 +170,6 @@ _SKIP_PORTS = {22, 25, 53, 68, 80, 323, 9323}
 _SKIP_PROCESSES = {"hbrclient", "hbrclientupdater", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
 
 
-# === Database ===
-_engine_options = {"poolclass": QueuePool, "pool_size": 5, "max_overflow": 10}
-if DB_URL.startswith("sqlite"):
-    _engine_options["connect_args"] = {"check_same_thread": False}
-engine = create_engine(DB_URL, **_engine_options)
-SessionLocal = sessionmaker(bind=engine)
-
-@contextmanager
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
 # === Schemas ===
 class ServerCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=50)
@@ -264,7 +247,7 @@ CATEGORY_META = {
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -286,6 +269,7 @@ app.include_router(ssh_control_router)
 app.include_router(metrics_history_router)
 app.include_router(log_center_router)
 app.include_router(alloy_manager_router)
+app.include_router(ai_context_router)
 
 # === Startup ===
 

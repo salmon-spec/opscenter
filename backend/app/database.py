@@ -6,7 +6,10 @@ from sqlalchemy.pool import QueuePool
 from app.config import DB_URL
 from app.models import Base
 
-_engine_options = {"poolclass": QueuePool, "pool_size": 5, "max_overflow": 10}
+_engine_options = {
+    "poolclass": QueuePool, "pool_size": 5, "max_overflow": 10,
+    "pool_pre_ping": True, "pool_recycle": 300,
+}
 if DB_URL.startswith("sqlite"):
     _engine_options["connect_args"] = {"check_same_thread": False}
 engine = create_engine(DB_URL, **_engine_options)

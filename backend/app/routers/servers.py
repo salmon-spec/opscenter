@@ -93,7 +93,7 @@ def rebuild_local_server(db: Session = Depends(get_session)):
     if existing:
         return {"ok": True, "id": str(existing.id)}
     srv = Server(name=LOCAL_SERVER_NAME, host=LOCAL_HOST, agent_type="local",
-                 is_local=True, ssh_user="root", ssh_key="__password__passok@123",
+                 is_local=True, ssh_user="root", ssh_key=None,
                  agent_status="running", agent_port=19100, agent_token=LOCAL_AGENT_TOKEN)
     db.add(srv)
     db.commit()
