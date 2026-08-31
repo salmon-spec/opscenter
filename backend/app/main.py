@@ -1115,6 +1115,10 @@ def _ensure_new_columns():
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_failure_threshold INTEGER DEFAULT 3 NOT NULL",
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_recovery_threshold INTEGER DEFAULT 1 NOT NULL",
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_notifications_enabled BOOLEAN DEFAULT TRUE NOT NULL",
+        "ALTER TABLE plaza_probe_results ADD COLUMN IF NOT EXISTS error_code VARCHAR(40)",
+        "ALTER TABLE plaza_health_states ADD COLUMN IF NOT EXISTS last_error_code VARCHAR(40)",
+        "ALTER TABLE plaza_health_incidents ADD COLUMN IF NOT EXISTS first_error_code VARCHAR(40)",
+        "ALTER TABLE plaza_health_incidents ADD COLUMN IF NOT EXISTS last_error_code VARCHAR(40)",
     ]
     try:
         with engine.connect() as conn:

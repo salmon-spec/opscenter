@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 import ssl
 import threading
 import time
@@ -299,6 +300,23 @@ def _resolve_item(db, plaza_key: str) -> tuple[dict, Service | None, PlazaServic
     return item, service, profile, {"by_id": servers_by_id, "selected": server}
 
 
+def _classify_probe_exception(exc: Exception) -> tuple[str, str]:
+    """Return a stable machine code and a bounded, user-facing network error."""
+    reason = exc.reason if isinstance(exc, URLError) else exc
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return "tls_certificate", "TLS 证书校验失败"
+    if isinstance(reason, ssl.SSLError):
+        return "tls_error", "TLS 连接失败"
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "timeout", "连接超时"
+    if isinstance(reason, socket.gaierror):
+        return "dns_error", "域名解析失败"
+    if isinstance(reason, ConnectionRefusedError) or getattr(reason, "errno", None) in {111, 61, 10061}:
+        return "connection_refused", "目标拒绝连接"
+    detail = str(reason).replace("\r", " ").replace("\n", " ").strip()[:180]
+    return "network_error", f"网络连接失败：{detail}" if detail else "网络连接失败"
+
+
 def _probe(item: dict) -> dict:
     req = UrlRequest(item["health_url"], method="GET", headers={"User-Agent": "OpsCenter/4 plaza-health"})
     context = None
@@ -311,19 +329,22 @@ def _probe(item: dict) -> dict:
             code = response.status
         status = "up" if code in success_codes else "down"
         error = ""
+        error_code = ""
     except HTTPError as exc:
         code = exc.code
         status = "up" if code in success_codes else "down"
-        error = "" if status == "up" else f"HTTP {code}"
+        error = "" if status == "up" else f"HTTP {code} 状态不符合成功策略"
+        error_code = "" if status == "up" else "http_status"
     except (URLError, TimeoutError, OSError) as exc:
         code = None
         status = "down"
-        error = exc.__class__.__name__
+        error_code, error = _classify_probe_exception(exc)
     return {
         "status": status,
         "http_status": code,
         "latency_ms": round((time.monotonic() - started) * 1000),
         "health_error": error,
+        "health_error_code": error_code,
         "checked_at": datetime.utcnow().isoformat(),
     }
 
@@ -396,6 +417,7 @@ def _persist_probe_results(items_by_key: dict[str, dict], checks: dict[str, dict
                 db.add(PlazaProbeResult(
                     plaza_key=key, status=check["status"], http_status=check.get("http_status"),
                     latency_ms=check.get("latency_ms"), error=check.get("health_error") or None,
+                    error_code=check.get("health_error_code") or None,
                     probe_url=item.get("health_url"),
                 ))
                 state = db.query(PlazaHealthState).filter(PlazaHealthState.plaza_key == key).first()
@@ -406,6 +428,7 @@ def _persist_probe_results(items_by_key: dict[str, dict], checks: dict[str, dict
                 state.last_checked_at = now
                 state.last_http_status = check.get("http_status")
                 state.last_latency_ms = check.get("latency_ms")
+                state.last_error_code = check.get("health_error_code") or None
                 state.last_error = (check.get("health_error") or "")[:1000]
                 if item.get("probe_enabled") is False:
                     state.stable_status = "disabled"
@@ -447,7 +470,9 @@ def _persist_probe_results(items_by_key: dict[str, dict], checks: dict[str, dict
                         if not incident:
                             incident = PlazaHealthIncident(
                                 plaza_key=key, status="open", opened_at=now,
+                                first_error_code=state.last_error_code,
                                 first_error=state.last_error, last_error=state.last_error,
+                                last_error_code=state.last_error_code,
                                 last_http_status=state.last_http_status,
                                 failure_count_at_open=state.consecutive_failures,
                             )
@@ -461,6 +486,7 @@ def _persist_probe_results(items_by_key: dict[str, dict], checks: dict[str, dict
                                 else:
                                     notifications.append(("alert", dict(item), incident.id))
                         else:
+                            incident.last_error_code = state.last_error_code
                             incident.last_error = state.last_error
                             incident.last_http_status = state.last_http_status
                     else:
@@ -573,7 +599,8 @@ def _serialize_health_state(row: PlazaHealthState | None) -> dict:
     if not row:
         return {
             "status": "unknown", "consecutive_failures": 0, "consecutive_successes": 0,
-            "last_checked_at": None, "last_transition_at": None, "last_error": "",
+            "last_checked_at": None, "last_transition_at": None, "last_error_code": "",
+            "last_error": "",
             "last_http_status": None, "last_latency_ms": None, "active_incident_id": None,
         }
     return {
@@ -581,25 +608,74 @@ def _serialize_health_state(row: PlazaHealthState | None) -> dict:
         "consecutive_successes": row.consecutive_successes,
         "last_checked_at": row.last_checked_at.isoformat() if row.last_checked_at else None,
         "last_transition_at": row.last_transition_at.isoformat() if row.last_transition_at else None,
-        "last_error": row.last_error or "", "last_http_status": row.last_http_status,
+        "last_error_code": row.last_error_code or "", "last_error": row.last_error or "",
+        "last_http_status": row.last_http_status,
         "last_latency_ms": row.last_latency_ms,
         "active_incident_id": str(row.active_incident_id) if row.active_incident_id else None,
     }
 
 
-def _serialize_incident(row: PlazaHealthIncident) -> dict:
+def _stored_error_code(code: str | None, error: str | None, http_status: int | None = None) -> str:
+    """Classify legacy rows that predate persisted error codes."""
+    if code:
+        return code
+    text = (error or "").lower()
+    if http_status is not None or text.startswith("http "):
+        return "http_status"
+    if "timeout" in text or "timed out" in text or "超时" in text:
+        return "timeout"
+    if "name resolution" in text or "getaddrinfo" in text or "dns" in text:
+        return "dns_error"
+    if "certificate" in text or "证书" in text:
+        return "tls_certificate"
+    if "ssl" in text or "tls" in text:
+        return "tls_error"
+    if "refused" in text or "拒绝" in text:
+        return "connection_refused"
+    return "network_error"
+
+
+def _serialize_incident(row: PlazaHealthIncident, context: dict | None = None) -> dict:
+    context = context or {}
     return {
         "id": str(row.id), "plaza_key": row.plaza_key, "status": row.status,
+        "service_name": context.get("service_name") or row.plaza_key,
+        "server_name": context.get("server_name") or "",
+        "server_host": context.get("server_host") or "",
+        "entry_url": context.get("entry_url") or "",
+        "health_url": context.get("health_url") or "",
         "opened_at": row.opened_at.isoformat(),
         "acknowledged_at": row.acknowledged_at.isoformat() if row.acknowledged_at else None,
         "acknowledged_by": row.acknowledged_by,
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
-        "first_error": row.first_error or "", "last_error": row.last_error or "",
+        "first_error_code": _stored_error_code(
+            row.first_error_code, row.first_error, row.last_http_status,
+        ),
+        "first_error": row.first_error or "",
+        "last_error_code": _stored_error_code(
+            row.last_error_code, row.last_error, row.last_http_status,
+        ),
+        "last_error": row.last_error or "",
         "last_http_status": row.last_http_status,
         "failure_count_at_open": row.failure_count_at_open,
         "alert_notified_at": row.alert_notified_at.isoformat() if row.alert_notified_at else None,
         "recovery_notified_at": row.recovery_notified_at.isoformat() if row.recovery_notified_at else None,
     }
+
+
+def _incident_contexts() -> dict[str, dict]:
+    catalog, servers = _load_plaza_items()
+    contexts = {}
+    for item in catalog:
+        server = servers.get(item.get("server_host"))
+        contexts[item["key"]] = {
+            "service_name": item.get("name") or item["key"],
+            "server_name": server.name if server else item.get("server_host", ""),
+            "server_host": item.get("server_host", ""),
+            "entry_url": item.get("entry_url", ""),
+            "health_url": item.get("health_url", ""),
+        }
+    return contexts
 
 
 def _serialize_silence(row: PlazaHealthSilence) -> dict:
@@ -775,7 +851,10 @@ def list_plaza_incidents(
             query = query.filter(PlazaHealthIncident.plaza_key == plaza_key)
         total = query.count()
         rows = query.order_by(PlazaHealthIncident.opened_at.desc()).offset(offset).limit(limit).all()
-        return {"total": total, "items": [_serialize_incident(row) for row in rows]}
+        contexts = _incident_contexts()
+        return {"total": total, "items": [
+            _serialize_incident(row, contexts.get(row.plaza_key)) for row in rows
+        ]}
 
 
 @router.get("/services/plaza/incidents/{incident_id}")
@@ -784,7 +863,7 @@ def get_plaza_incident(incident_id: uuid.UUID):
         row = db.query(PlazaHealthIncident).filter(PlazaHealthIncident.id == incident_id).first()
         if not row:
             raise HTTPException(404, "事件不存在")
-        return _serialize_incident(row)
+        return _serialize_incident(row, _incident_contexts().get(row.plaza_key))
 
 
 @router.post("/services/plaza/incidents/{incident_id}/acknowledge")
@@ -799,7 +878,7 @@ def acknowledge_plaza_incident(incident_id: uuid.UUID, current_user=Depends(get_
             row.acknowledged_by = getattr(current_user, "username", None)
             db.commit()
             db.refresh(row)
-        return _serialize_incident(row)
+        return _serialize_incident(row, _incident_contexts().get(row.plaza_key))
 
 
 @router.get("/services/plaza/silences")
@@ -891,7 +970,9 @@ def get_plaza_service_detail(plaza_key: str):
             "url": item["entry_url"], "entry_url": item["entry_url"],
             "health_url": item["health_url"], "auth_mode": item.get("auth_mode", "none"),
             "status": "disabled" if item.get("probe_enabled") is False else (state.stable_status if state else health["status"]), "http_status": health["http_status"],
-            "latency_ms": health["latency_ms"], "health_error": health["health_error"],
+            "latency_ms": health["latency_ms"],
+            "health_error_code": health.get("health_error_code", ""),
+            "health_error": health["health_error"],
             "credential_username": item.get("credential_username", ""),
             "has_credentials": bool(item.get("has_credentials")),
             "login_notes": item.get("login_notes", ""),
@@ -909,7 +990,13 @@ def get_plaza_service_detail(plaza_key: str):
                 "notifications_enabled": item.get("probe_notifications_enabled", True),
             },
             "health_state": _serialize_health_state(state),
-            "active_incident": _serialize_incident(incident) if incident else None,
+            "active_incident": _serialize_incident(incident, {
+                "service_name": item.get("name") or plaza_key,
+                "server_name": server.name if server else item.get("server_host", ""),
+                "server_host": item.get("server_host", ""),
+                "entry_url": item.get("entry_url", ""),
+                "health_url": item.get("health_url", ""),
+            }) if incident else None,
             "active_silence": _serialize_silence(silence) if silence else None,
             "probe_summary": {
                 "checks_24h": len(daily_probes),
@@ -921,7 +1008,8 @@ def get_plaza_service_detail(plaza_key: str):
                 {
                     "id": str(row.id), "checked_at": row.checked_at.isoformat(), "status": row.status,
                     "http_status": row.http_status, "latency_ms": row.latency_ms,
-                    "error": row.error or "", "probe_url": row.probe_url,
+                    "error_code": row.error_code or "", "error": row.error or "",
+                    "probe_url": row.probe_url,
                 } for row in recent_probes
             ],
             "deploy_type": service.deploy_type if service else None,
@@ -1068,7 +1156,8 @@ def get_plaza_probe_history(plaza_key: str, hours: int = 24, limit: int = 200):
         return [{
             "id": str(row.id), "checked_at": row.checked_at.isoformat(), "status": row.status,
             "http_status": row.http_status, "latency_ms": row.latency_ms,
-            "error": row.error or "", "probe_url": row.probe_url,
+            "error_code": row.error_code or "", "error": row.error or "",
+            "probe_url": row.probe_url,
         } for row in reversed(rows)]
 
 

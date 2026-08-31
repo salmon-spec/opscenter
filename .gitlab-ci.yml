@@ -1,6 +1,13 @@
-# OpsCenter v4.4.0 — GitLab CI
+# OpsCenter v4.6.1 — GitLab CI
 # 后端测试阶段：pytest smoke tests + 覆盖率
 # 说明：GitLab CE 19.2.1（VM1），runner 部署后 pipeline 自动生效
+
+# main 推送已经覆盖发布提交；紧随其后的 annotated tag 不重复执行约 30 分钟的全量测试。
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - when: never
 
 stages:
   - test
@@ -30,4 +37,3 @@ backend-test:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
-    - if: $CI_COMMIT_TAG

@@ -1,5 +1,7 @@
 """Editable service-plaza profile and credential security contracts."""
+import socket
 import uuid
+from urllib.error import URLError
 
 import pytest
 from fastapi.testclient import TestClient
@@ -152,6 +154,15 @@ def test_probe_success_status_validation():
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(("exc", "expected_code", "expected_message"), [
+    (URLError(ConnectionRefusedError(10061, "refused")), "connection_refused", "目标拒绝连接"),
+    (URLError(socket.timeout("timed out")), "timeout", "连接超时"),
+    (URLError(socket.gaierror(11001, "host not found")), "dns_error", "域名解析失败"),
+])
+def test_probe_network_errors_are_classified(exc, expected_code, expected_message):
+    assert plaza._classify_probe_exception(exc) == (expected_code, expected_message)
+
+
 def test_health_overview_aggregates_history_without_probing(monkeypatch):
     monkeypatch.setattr(plaza, "_probe", lambda _item: pytest.fail("overview must not probe"))
     with SessionLocal() as db:
@@ -171,6 +182,7 @@ def test_health_overview_aggregates_history_without_probing(monkeypatch):
 
 
 def test_persistent_threshold_incident_acknowledge_and_recovery(monkeypatch):
+    add_host()
     assert client.put("/api/v2/services/plaza/gitea", json={
         "probe_failure_threshold": 2, "probe_recovery_threshold": 1,
     }).status_code == 200
@@ -178,7 +190,8 @@ def test_persistent_threshold_incident_acknowledge_and_recovery(monkeypatch):
     monkeypatch.setattr(plaza, "_send_incident_notification", lambda kind, _item, incident: sent.append((kind, incident.id)) or True)
     monkeypatch.setattr(plaza, "_probe", lambda _item: {
         "status": "down", "http_status": 503, "latency_ms": 8,
-        "health_error": "HTTP 503", "checked_at": "2026-08-31T00:00:00",
+        "health_error_code": "http_status", "health_error": "HTTP 503 状态不符合成功策略",
+        "checked_at": "2026-08-31T00:00:00",
     })
     assert client.post("/api/v2/services/plaza/gitea/probe").status_code == 200
     with SessionLocal() as db:
@@ -188,6 +201,11 @@ def test_persistent_threshold_incident_acknowledge_and_recovery(monkeypatch):
     assert client.post("/api/v2/services/plaza/gitea/probe").status_code == 200
     incidents = client.get("/api/v2/services/plaza/incidents?status=open").json()
     assert incidents["total"] == 1 and len(sent) == 1 and sent[0][0] == "alert"
+    assert incidents["items"][0]["service_name"] == "Gitea"
+    assert incidents["items"][0]["server_name"] == "测试主机"
+    assert incidents["items"][0]["server_host"] == "10.66.66.4"
+    assert incidents["items"][0]["entry_url"].startswith("http://10.66.66.4:3000")
+    assert incidents["items"][0]["last_error_code"] == "http_status"
     incident_id = incidents["items"][0]["id"]
     acknowledged = client.post(f"/api/v2/services/plaza/incidents/{incident_id}/acknowledge")
     assert acknowledged.status_code == 200 and acknowledged.json()["status"] == "acknowledged"
