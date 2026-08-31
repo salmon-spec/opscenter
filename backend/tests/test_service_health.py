@@ -117,3 +117,26 @@ def test_network_probe_runs_after_snapshot_db_session_closes(monkeypatch):
         if state["db_open"] else (None, "skip"),
     )
     assert service_health.run_service_health_cycle() == 0
+
+
+def test_snapshot_excludes_plaza_owned_manual_service(monkeypatch):
+    manual = _service()
+    other = SimpleNamespace(**{**manual.__dict__, "id": "svc-2", "name": "other"})
+
+    class Query:
+        def __init__(self, rows): self.rows = rows
+        def filter(self, *_args): return self
+        def all(self): return self.rows
+
+    class Db:
+        def query(self, model):
+            return Query([manual, other] if model is service_health.Service else [])
+
+    @contextmanager
+    def fake_db(): yield Db()
+
+    monkeypatch.setattr(service_health, "get_db", fake_db)
+    from app import plaza
+    monkeypatch.setattr(plaza, "plaza_owned_service_ids", lambda _db: {manual.id})
+    services, _servers = service_health._snapshot_targets()
+    assert [service.id for service in services] == [other.id]

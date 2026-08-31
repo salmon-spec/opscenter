@@ -61,6 +61,7 @@ watch(() => route.path, (path) => { if (path.startsWith('/system')) systemOpen.v
 
 const navs = [
   { path: '/', label: '服务广场', icon: '▦' },
+  { path: '/service-health', label: '服务健康', icon: '♡' },
   { path: '/database', label: '数据库', icon: '▱' },
   { path: '/container', label: '容器', icon: '▤' },
   { path: '/logs', label: '日志中心', icon: '≡' },

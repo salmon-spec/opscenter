@@ -17,6 +17,7 @@
       <button class="health-stat" :class="{active:healthFilter==='all'}" @click="healthFilter='all'"><strong>{{ overview.summary.total ?? services.length }}</strong><span>全部服务</span></button>
       <button class="health-stat is-up" :class="{active:healthFilter==='up'}" @click="healthFilter='up'"><strong>{{ overview.summary.up ?? statusCount('up') }}</strong><span>在线</span></button>
       <button class="health-stat is-down" :class="{active:healthFilter==='down'}" @click="healthFilter='down'"><strong>{{ overview.summary.down ?? statusCount('down') }}</strong><span>离线</span></button>
+      <button class="health-stat is-warn" :class="{active:healthFilter==='degraded'}" @click="healthFilter='degraded'"><strong>{{ overview.summary.degraded ?? statusCount('degraded') }}</strong><span>波动中</span></button>
       <button class="health-stat" :class="{active:healthFilter==='unknown'}" @click="healthFilter='unknown'"><strong>{{ (overview.summary.unknown ?? statusCount('unknown')) + (overview.summary.disabled ?? statusCount('disabled')) }}</strong><span>未检测 / 停用</span></button>
       <div class="health-stat availability"><strong>{{ overview.summary.average_uptime_percent == null ? '-' : `${overview.summary.average_uptime_percent}%` }}</strong><span>24h 综合可用率</span><small v-if="overview.generated_at">统计于 {{ shortTime(overview.generated_at) }}</small></div>
     </div>
@@ -331,7 +332,7 @@ onMounted(()=>reload(true))
 
 <style scoped>
 .group-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-.health-overview{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:10px;margin:0 0 16px}.health-stat{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text);cursor:pointer;text-align:left}.health-stat:hover,.health-stat.active{border-color:var(--brand);box-shadow:0 4px 14px rgba(37,99,235,.1)}.health-stat strong{font-size:22px}.health-stat span{font-size:12px;color:var(--muted)}.health-stat small{font-size:10px;color:var(--muted)}.health-stat.is-up strong{color:var(--ok)}.health-stat.is-down strong{color:var(--err)}.health-stat.availability{cursor:default;background:#f8fbff}.health-stat.availability strong{color:var(--brand)}
+.health-overview{display:grid;grid-template-columns:repeat(6,minmax(110px,1fr));gap:10px;margin:0 0 16px}.health-stat{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text);cursor:pointer;text-align:left}.health-stat:hover,.health-stat.active{border-color:var(--brand);box-shadow:0 4px 14px rgba(37,99,235,.1)}.health-stat strong{font-size:22px}.health-stat span{font-size:12px;color:var(--muted)}.health-stat small{font-size:10px;color:var(--muted)}.health-stat.is-up strong{color:var(--ok)}.health-stat.is-down strong{color:var(--err)}.health-stat.is-warn strong{color:var(--warn)}.health-stat.availability{cursor:default;background:#f8fbff}.health-stat.availability strong{color:var(--brand)}
 .g-tab {
   padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border);
   background: #fff; font-size: 13px; color: var(--muted); cursor: pointer;

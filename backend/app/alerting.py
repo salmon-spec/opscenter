@@ -29,7 +29,7 @@ from app.config import (
 )
 from app.database import get_db
 from app.models import (
-    AuditLog, DailyReport, PlazaProbeResult, PlazaCredentialAccess,
+    AuditLog, DailyReport, PlazaHealthIncident, PlazaProbeResult, PlazaCredentialAccess,
     AlertEvent,
     AlertRule,
     AlertSilence,
@@ -354,6 +354,17 @@ def retention_cleanup(db=None) -> None:
             cutoff_date = (now - timedelta(days=days)).date()
             deleted = _delete_batched(db, model, cutoff_dt, cutoff_date, time_col=time_col)
             logger.info("retention: %s removed %d rows (keep %d days)", name, deleted, days)
+        # Never remove an active incident, even when it has remained open for a year.
+        incident_cutoff = now - timedelta(days=365)
+        old_incidents = db.query(PlazaHealthIncident).filter(
+            PlazaHealthIncident.status == "resolved",
+            PlazaHealthIncident.resolved_at < incident_cutoff,
+        ).limit(5000).all()
+        for incident in old_incidents:
+            db.delete(incident)
+        if old_incidents:
+            db.commit()
+        logger.info("retention: plaza_health_incidents removed %d rows (keep 365 days)", len(old_incidents))
     finally:
         if own:
             db.close()

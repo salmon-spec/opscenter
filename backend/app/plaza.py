@@ -20,9 +20,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.credential_crypto import decrypt_secret, encrypt_secret
 from app.auth import get_current_user
+from app.config import DEFAULT_NOTIFY_WEBHOOKS
 from app.database import get_db
 from app.models import (
-    PlazaCredentialAccess, PlazaProbeResult, PlazaServicePreference,
+    PlazaCredentialAccess, PlazaHealthIncident, PlazaHealthSilence,
+    PlazaHealthState, PlazaProbeResult, PlazaServicePreference,
     PlazaServiceProfile, Server, Service, ServiceSource,
 )
 from app.topology import _service_relations
@@ -64,6 +66,9 @@ class PlazaServiceUpdate(BaseModel):
     probe_timeout_seconds: float | None = Field(None, ge=1, le=30)
     probe_success_statuses: str | None = Field(None, min_length=3, max_length=200)
     probe_verify_tls: bool | None = None
+    probe_failure_threshold: int | None = Field(None, ge=1, le=10)
+    probe_recovery_threshold: int | None = Field(None, ge=1, le=5)
+    probe_notifications_enabled: bool | None = None
 
     @field_validator("entry_url", "health_url", "documentation_url")
     @classmethod
@@ -91,6 +96,13 @@ class PlazaServiceUpdate(BaseModel):
             return value
         _parse_success_statuses(value)
         return value.replace(" ", "")
+
+
+class PlazaSilenceCreate(BaseModel):
+    plaza_key: str = Field(min_length=1, max_length=140)
+    starts_at: datetime | None = None
+    ends_at: datetime
+    reason: str = Field(min_length=1, max_length=500)
 
 
 def _parse_success_statuses(value: str) -> set[int]:
@@ -149,6 +161,29 @@ def _manual_uuid(plaza_key: str) -> uuid.UUID | None:
         return None
 
 
+def plaza_owned_service_ids(db) -> set:
+    """Return Service IDs whose probes are owned by the plaza scheduler."""
+    profiles = {
+        row.plaza_key: row for row in db.query(PlazaServiceProfile).all()
+        if hasattr(row, "plaza_key")
+    }
+    catalog_urls = {
+        ((profiles.get(item["key"]).entry_url if profiles.get(item["key"]) and
+          profiles[item["key"]].entry_url else item["entry_url"]) or "").rstrip("/")
+        for item in load_catalog() if item.get("enabled")
+    }
+    owned = set()
+    for service in db.query(Service).filter(
+        Service.hidden != True, Service.url != None, Service.url != "",  # noqa: E711,E712
+    ).all():
+        url = (service.url or "").rstrip("/")
+        if not url.startswith(("http://", "https://")):
+            continue
+        if getattr(service, "source", None) == ServiceSource.manual.value or url in catalog_urls:
+            owned.add(service.id)
+    return owned
+
+
 def _apply_profile(item: dict, profile: PlazaServiceProfile | None, servers_by_id: dict) -> dict:
     """Overlay only explicitly saved values on a catalog/manual entry."""
     if not profile:
@@ -163,6 +198,8 @@ def _apply_profile(item: dict, profile: PlazaServiceProfile | None, servers_by_i
             "probe_enabled": True, "probe_interval_seconds": 60,
             "probe_timeout_seconds": 4.0,
             "probe_success_statuses": "200-399,401,403", "probe_verify_tls": True,
+            "probe_failure_threshold": 3, "probe_recovery_threshold": 1,
+            "probe_notifications_enabled": True,
         })
         return item
     mapping = {
@@ -187,6 +224,9 @@ def _apply_profile(item: dict, profile: PlazaServiceProfile | None, servers_by_i
     item["probe_timeout_seconds"] = profile.probe_timeout_seconds or 4.0
     item["probe_success_statuses"] = profile.probe_success_statuses or "200-399,401,403"
     item["probe_verify_tls"] = profile.probe_verify_tls is not False
+    item["probe_failure_threshold"] = profile.probe_failure_threshold or 3
+    item["probe_recovery_threshold"] = profile.probe_recovery_threshold or 1
+    item["probe_notifications_enabled"] = profile.probe_notifications_enabled is not False
     if profile.username or profile.secret_ciphertext:
         item["auth_mode"] = "local"
     return item
@@ -302,17 +342,143 @@ def _probe_due(item: dict, force: bool = False) -> bool:
     return time.monotonic() - last >= int(item.get("probe_interval_seconds") or 60)
 
 
+def _active_silence(db, plaza_key: str, now: datetime) -> PlazaHealthSilence | None:
+    return db.query(PlazaHealthSilence).filter(
+        PlazaHealthSilence.plaza_key == plaza_key,
+        PlazaHealthSilence.starts_at <= now,
+        PlazaHealthSilence.ends_at > now,
+        PlazaHealthSilence.ended_at == None,  # noqa: E711
+    ).order_by(PlazaHealthSilence.ends_at.desc()).first()
+
+
+def _send_incident_notification(kind: str, item: dict, incident: PlazaHealthIncident) -> bool:
+    """Send a sanitized transition card. No configured webhook counts as handled."""
+    if not DEFAULT_NOTIFY_WEBHOOKS:
+        return True
+    error = (incident.last_error or "未知错误").replace("\r", " ").replace("\n", " ")[:240]
+    recovering = kind == "recovery"
+    title = f"{'✅ [服务恢复]' if recovering else '🔴 [服务告警]'} {item['name']}"
+    content = (
+        f"**服务**：{item['name']}\n**地址**：{item.get('entry_url', '-')}\n"
+        + ("状态已恢复正常" if recovering else
+           f"**连续失败**：{incident.failure_count_at_open} 次\n**原因**：{error}")
+    )
+    card = {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {"title": {"tag": "plain_text", "content": title},
+                       "template": "green" if recovering else "red"},
+            "elements": [{"tag": "div", "text": {"tag": "lark_md", "content": content}}],
+        },
+    }
+    ok = True
+    for url in DEFAULT_NOTIFY_WEBHOOKS:
+        try:
+            request = UrlRequest(
+                url, data=json.dumps(card).encode("utf-8"), method="POST",
+                headers={"Content-Type": "application/json", "User-Agent": "OpsCenter/4.6"},
+            )
+            with urlopen(request, timeout=5) as response:
+                ok = ok and response.status < 400
+        except (HTTPError, URLError, TimeoutError, OSError):
+            ok = False
+    return ok
+
+
 def _persist_probe_results(items_by_key: dict[str, dict], checks: dict[str, dict]) -> None:
+    notifications: list[tuple[str, dict, uuid.UUID]] = []
     try:
         with get_db() as db:
             for key, check in checks.items():
                 item = items_by_key[key]
+                now = datetime.utcnow()
                 db.add(PlazaProbeResult(
                     plaza_key=key, status=check["status"], http_status=check.get("http_status"),
                     latency_ms=check.get("latency_ms"), error=check.get("health_error") or None,
                     probe_url=item.get("health_url"),
                 ))
+                state = db.query(PlazaHealthState).filter(PlazaHealthState.plaza_key == key).first()
+                if not state:
+                    state = PlazaHealthState(plaza_key=key)
+                    db.add(state)
+                previous = state.stable_status or "unknown"
+                state.last_checked_at = now
+                state.last_http_status = check.get("http_status")
+                state.last_latency_ms = check.get("latency_ms")
+                state.last_error = (check.get("health_error") or "")[:1000]
+                if item.get("probe_enabled") is False:
+                    state.stable_status = "disabled"
+                    if previous != "disabled":
+                        state.last_transition_at = now
+                    continue
+                incident = None
+                if state.active_incident_id:
+                    incident = db.query(PlazaHealthIncident).filter(
+                        PlazaHealthIncident.id == state.active_incident_id,
+                    ).first()
+                if check["status"] == "up":
+                    state.consecutive_failures = 0
+                    state.consecutive_successes = (state.consecutive_successes or 0) + 1
+                    state.last_success_at = now
+                    recovery_threshold = int(item.get("probe_recovery_threshold") or 1)
+                    if incident and state.consecutive_successes >= recovery_threshold:
+                        incident.status = "resolved"
+                        incident.resolved_at = now
+                        state.active_incident_id = None
+                        state.stable_status = "up"
+                        state.last_transition_at = now
+                        if item.get("probe_notifications_enabled", True):
+                            if _active_silence(db, key, now):
+                                incident.recovery_notified_at = now
+                            elif not incident.recovery_notified_at:
+                                notifications.append(("recovery", dict(item), incident.id))
+                    elif not incident:
+                        state.stable_status = "up"
+                        if previous != "up":
+                            state.last_transition_at = now
+                else:
+                    state.consecutive_successes = 0
+                    state.consecutive_failures = (state.consecutive_failures or 0) + 1
+                    state.last_failure_at = now
+                    failure_threshold = int(item.get("probe_failure_threshold") or 3)
+                    if state.consecutive_failures >= failure_threshold:
+                        state.stable_status = "down"
+                        if not incident:
+                            incident = PlazaHealthIncident(
+                                plaza_key=key, status="open", opened_at=now,
+                                first_error=state.last_error, last_error=state.last_error,
+                                last_http_status=state.last_http_status,
+                                failure_count_at_open=state.consecutive_failures,
+                            )
+                            db.add(incident)
+                            db.flush()
+                            state.active_incident_id = incident.id
+                            state.last_transition_at = now
+                            if item.get("probe_notifications_enabled", True):
+                                if _active_silence(db, key, now):
+                                    incident.alert_notified_at = now
+                                else:
+                                    notifications.append(("alert", dict(item), incident.id))
+                        else:
+                            incident.last_error = state.last_error
+                            incident.last_http_status = state.last_http_status
+                    else:
+                        state.stable_status = "degraded"
+                        if previous != "degraded":
+                            state.last_transition_at = now
             db.commit()
+        for kind, item, incident_id in notifications:
+            with get_db() as db:
+                incident = db.query(PlazaHealthIncident).filter(
+                    PlazaHealthIncident.id == incident_id,
+                ).first()
+                if not incident:
+                    continue
+                field = "recovery_notified_at" if kind == "recovery" else "alert_notified_at"
+                if getattr(incident, field) is None and _send_incident_notification(kind, item, incident):
+                    setattr(incident, field, datetime.utcnow())
+                    db.commit()
     except Exception as exc:
         # Health checks must remain available during startup migrations or test fakes.
         print(f"[plaza-health] persist failed: {exc}", flush=True)
@@ -403,12 +569,65 @@ async def plaza_health_loop() -> None:
         await asyncio.sleep(15)
 
 
+def _serialize_health_state(row: PlazaHealthState | None) -> dict:
+    if not row:
+        return {
+            "status": "unknown", "consecutive_failures": 0, "consecutive_successes": 0,
+            "last_checked_at": None, "last_transition_at": None, "last_error": "",
+            "last_http_status": None, "last_latency_ms": None, "active_incident_id": None,
+        }
+    return {
+        "status": row.stable_status, "consecutive_failures": row.consecutive_failures,
+        "consecutive_successes": row.consecutive_successes,
+        "last_checked_at": row.last_checked_at.isoformat() if row.last_checked_at else None,
+        "last_transition_at": row.last_transition_at.isoformat() if row.last_transition_at else None,
+        "last_error": row.last_error or "", "last_http_status": row.last_http_status,
+        "last_latency_ms": row.last_latency_ms,
+        "active_incident_id": str(row.active_incident_id) if row.active_incident_id else None,
+    }
+
+
+def _serialize_incident(row: PlazaHealthIncident) -> dict:
+    return {
+        "id": str(row.id), "plaza_key": row.plaza_key, "status": row.status,
+        "opened_at": row.opened_at.isoformat(),
+        "acknowledged_at": row.acknowledged_at.isoformat() if row.acknowledged_at else None,
+        "acknowledged_by": row.acknowledged_by,
+        "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
+        "first_error": row.first_error or "", "last_error": row.last_error or "",
+        "last_http_status": row.last_http_status,
+        "failure_count_at_open": row.failure_count_at_open,
+        "alert_notified_at": row.alert_notified_at.isoformat() if row.alert_notified_at else None,
+        "recovery_notified_at": row.recovery_notified_at.isoformat() if row.recovery_notified_at else None,
+    }
+
+
+def _serialize_silence(row: PlazaHealthSilence) -> dict:
+    now = datetime.utcnow()
+    return {
+        "id": str(row.id), "plaza_key": row.plaza_key,
+        "starts_at": row.starts_at.isoformat(), "ends_at": row.ends_at.isoformat(),
+        "reason": row.reason, "created_by": row.created_by,
+        "ended_at": row.ended_at.isoformat() if row.ended_at else None,
+        "active": row.ended_at is None and row.starts_at <= now < row.ends_at,
+        "created_at": row.created_at.isoformat(),
+    }
+
+
 @router.get("/services/plaza")
 def list_plaza_services():
     """Return curated and user-created Web entries without credentials."""
     catalog, servers = _load_plaza_items()
 
     checks = _health_checks(catalog)
+    now = datetime.utcnow()
+    with get_db() as db:
+        states = {row.plaza_key: row for row in db.query(PlazaHealthState).all()
+                  if hasattr(row, "plaza_key")}
+        silenced = {row.plaza_key: row.ends_at for row in db.query(PlazaHealthSilence).filter(
+            PlazaHealthSilence.starts_at <= now, PlazaHealthSilence.ends_at > now,
+            PlazaHealthSilence.ended_at == None,  # noqa: E711
+        ).all() if hasattr(row, "plaza_key") and hasattr(row, "ends_at")}
 
     result = []
     for item in catalog:
@@ -416,6 +635,10 @@ def list_plaza_services():
             continue
         server = servers.get(item["server_host"])
         health = checks.get(item["key"], {"status": "unknown", "http_status": None, "latency_ms": None, "health_error": ""})
+        stable = states.get(item["key"])
+        status = "disabled" if item.get("probe_enabled") is False else (
+            stable.stable_status if stable else health["status"]
+        )
         result.append({
             "id": f"plaza:{item['key']}",
             "key": item["key"],
@@ -433,12 +656,15 @@ def list_plaza_services():
             "enabled": True,
             "manual": item.get("manual", False),
             "service_id": item.get("service_id"),
-            "status": health["status"],
+            "status": status,
             "http_status": health["http_status"],
             "latency_ms": health["latency_ms"],
             "health_error": health["health_error"],
             "last_checked_at": health.get("checked_at"),
             "probe_enabled": item.get("probe_enabled", True),
+            "consecutive_failures": stable.consecutive_failures if stable else 0,
+            "active_incident_id": str(stable.active_incident_id) if stable and stable.active_incident_id else None,
+            "silenced_until": silenced[item["key"]].isoformat() if item["key"] in silenced else None,
             "owner": item.get("owner", ""),
             "tags": item.get("tags", []),
             "profile_updated_at": item.get("profile_updated_at"),
@@ -456,6 +682,9 @@ def get_plaza_health_overview(hours: int = 24):
         key: {"checks": 0, "up": 0, "latency_total": 0.0, "latency_count": 0, "latest": None}
         for key in keys
     }
+    states = {}
+    active_incident_count = 0
+    silenced_keys = set()
     if keys:
         with get_db() as db:
             rows = db.query(PlazaProbeResult).filter(
@@ -471,10 +700,22 @@ def get_plaza_health_overview(hours: int = 24):
                     stats["latency_count"] += 1
                 if stats["latest"] is None:
                     stats["latest"] = row
+            states = {row.plaza_key: row for row in db.query(PlazaHealthState).filter(
+                PlazaHealthState.plaza_key.in_(keys),
+            ).all()}
+            active_incident_count = db.query(PlazaHealthIncident).filter(
+                PlazaHealthIncident.plaza_key.in_(keys),
+                PlazaHealthIncident.status.in_(["open", "acknowledged"]),
+            ).count()
+            now = datetime.utcnow()
+            silenced_keys = {row.plaza_key for row in db.query(PlazaHealthSilence).filter(
+                PlazaHealthSilence.plaza_key.in_(keys), PlazaHealthSilence.starts_at <= now,
+                PlazaHealthSilence.ends_at > now, PlazaHealthSilence.ended_at == None,  # noqa: E711
+            ).all()}
     with _cache_lock:
         current_checks = {key: dict(value) for key, value in _cached_checks.items()}
     items = []
-    status_counts = {"up": 0, "down": 0, "unknown": 0, "disabled": 0}
+    status_counts = {"up": 0, "down": 0, "degraded": 0, "unknown": 0, "disabled": 0}
     availability_values = []
     for item in catalog:
         if not item.get("enabled"):
@@ -482,10 +723,11 @@ def get_plaza_health_overview(hours: int = 24):
         stats = by_key[item["key"]]
         latest = stats["latest"]
         cached = current_checks.get(item["key"], {})
+        stable = states.get(item["key"])
         if item.get("probe_enabled") is False:
             status = "disabled"
         else:
-            status = cached.get("status") or (latest.status if latest else "unknown")
+            status = stable.stable_status if stable else (cached.get("status") or (latest.status if latest else "unknown"))
         if status not in status_counts:
             status = "unknown"
         status_counts[status] += 1
@@ -498,17 +740,117 @@ def get_plaza_health_overview(hours: int = 24):
             "avg_latency_ms": round(stats["latency_total"] / stats["latency_count"], 1)
             if stats["latency_count"] else None,
             "last_checked_at": latest.checked_at.isoformat() if latest else cached.get("checked_at"),
+            "consecutive_failures": stable.consecutive_failures if stable else 0,
+            "active_incident_id": str(stable.active_incident_id) if stable and stable.active_incident_id else None,
+            "silenced": item["key"] in silenced_keys,
         })
     return {
         "generated_at": datetime.utcnow().isoformat(), "range_hours": hours,
         "summary": {
             "total": len(items), **status_counts,
+            "active_incidents": active_incident_count, "silenced": len(silenced_keys),
             "checked": len(availability_values),
             "average_uptime_percent": round(sum(availability_values) / len(availability_values), 2)
             if availability_values else None,
         },
         "items": items,
     }
+
+
+@router.get("/services/plaza/incidents")
+def list_plaza_incidents(
+    status: str | None = None, plaza_key: str | None = None,
+    hours: int = 24 * 30, limit: int = 100, offset: int = 0,
+):
+    if status and status not in {"open", "acknowledged", "resolved"}:
+        raise HTTPException(422, "事件状态不正确")
+    hours, limit, offset = max(1, min(hours, 24 * 365)), max(1, min(limit, 500)), max(0, offset)
+    with get_db() as db:
+        query = db.query(PlazaHealthIncident).filter(
+            PlazaHealthIncident.opened_at >= datetime.utcnow() - timedelta(hours=hours),
+        )
+        if status:
+            query = query.filter(PlazaHealthIncident.status == status)
+        if plaza_key:
+            query = query.filter(PlazaHealthIncident.plaza_key == plaza_key)
+        total = query.count()
+        rows = query.order_by(PlazaHealthIncident.opened_at.desc()).offset(offset).limit(limit).all()
+        return {"total": total, "items": [_serialize_incident(row) for row in rows]}
+
+
+@router.get("/services/plaza/incidents/{incident_id}")
+def get_plaza_incident(incident_id: uuid.UUID):
+    with get_db() as db:
+        row = db.query(PlazaHealthIncident).filter(PlazaHealthIncident.id == incident_id).first()
+        if not row:
+            raise HTTPException(404, "事件不存在")
+        return _serialize_incident(row)
+
+
+@router.post("/services/plaza/incidents/{incident_id}/acknowledge")
+def acknowledge_plaza_incident(incident_id: uuid.UUID, current_user=Depends(get_current_user)):
+    with get_db() as db:
+        row = db.query(PlazaHealthIncident).filter(PlazaHealthIncident.id == incident_id).first()
+        if not row:
+            raise HTTPException(404, "事件不存在")
+        if row.status == "open":
+            row.status = "acknowledged"
+            row.acknowledged_at = datetime.utcnow()
+            row.acknowledged_by = getattr(current_user, "username", None)
+            db.commit()
+            db.refresh(row)
+        return _serialize_incident(row)
+
+
+@router.get("/services/plaza/silences")
+def list_plaza_silences(active: bool | None = None, plaza_key: str | None = None):
+    now = datetime.utcnow()
+    with get_db() as db:
+        query = db.query(PlazaHealthSilence)
+        if plaza_key:
+            query = query.filter(PlazaHealthSilence.plaza_key == plaza_key)
+        if active is True:
+            query = query.filter(
+                PlazaHealthSilence.starts_at <= now, PlazaHealthSilence.ends_at > now,
+                PlazaHealthSilence.ended_at == None,  # noqa: E711
+            )
+        elif active is False:
+            query = query.filter(
+                (PlazaHealthSilence.ended_at != None) | (PlazaHealthSilence.ends_at <= now),  # noqa: E711
+            )
+        return [_serialize_silence(row) for row in query.order_by(PlazaHealthSilence.created_at.desc()).limit(500).all()]
+
+
+@router.post("/services/plaza/silences", status_code=201)
+def create_plaza_silence(payload: PlazaSilenceCreate, current_user=Depends(get_current_user)):
+    starts_at = payload.starts_at or datetime.utcnow()
+    if payload.ends_at <= starts_at:
+        raise HTTPException(422, "静默结束时间必须晚于开始时间")
+    if payload.ends_at - starts_at > timedelta(days=365):
+        raise HTTPException(422, "单次静默不能超过 365 天")
+    with get_db() as db:
+        _resolve_item(db, payload.plaza_key)
+        row = PlazaHealthSilence(
+            plaza_key=payload.plaza_key, starts_at=starts_at, ends_at=payload.ends_at,
+            reason=payload.reason.strip(), created_by=getattr(current_user, "username", None),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return _serialize_silence(row)
+
+
+@router.delete("/services/plaza/silences/{silence_id}")
+def end_plaza_silence(silence_id: uuid.UUID, _current_user=Depends(get_current_user)):
+    with get_db() as db:
+        row = db.query(PlazaHealthSilence).filter(PlazaHealthSilence.id == silence_id).first()
+        if not row:
+            raise HTTPException(404, "静默不存在")
+        if row.ended_at is None:
+            row.ended_at = datetime.utcnow()
+            db.commit()
+            db.refresh(row)
+        return _serialize_silence(row)
 
 
 @router.get("/services/plaza/{plaza_key}/detail")
@@ -533,6 +875,13 @@ def get_plaza_service_detail(plaza_key: str):
         ).order_by(PlazaProbeResult.checked_at.desc()).limit(5000).all()
         up_count = sum(row.status == "up" for row in daily_probes)
         latencies = [row.latency_ms for row in daily_probes if row.latency_ms is not None]
+        state = db.query(PlazaHealthState).filter(PlazaHealthState.plaza_key == plaza_key).first()
+        incident = None
+        if state and state.active_incident_id:
+            incident = db.query(PlazaHealthIncident).filter(
+                PlazaHealthIncident.id == state.active_incident_id,
+            ).first()
+        silence = _active_silence(db, plaza_key, datetime.utcnow())
         return {
             "id": f"plaza:{plaza_key}", "key": plaza_key,
             "service_id": str(service.id) if service else item.get("service_id"),
@@ -541,7 +890,7 @@ def get_plaza_service_detail(plaza_key: str):
             "category": item["category"], "icon": item.get("icon", "box"),
             "url": item["entry_url"], "entry_url": item["entry_url"],
             "health_url": item["health_url"], "auth_mode": item.get("auth_mode", "none"),
-            "status": health["status"], "http_status": health["http_status"],
+            "status": "disabled" if item.get("probe_enabled") is False else (state.stable_status if state else health["status"]), "http_status": health["http_status"],
             "latency_ms": health["latency_ms"], "health_error": health["health_error"],
             "credential_username": item.get("credential_username", ""),
             "has_credentials": bool(item.get("has_credentials")),
@@ -555,7 +904,13 @@ def get_plaza_service_detail(plaza_key: str):
                 "timeout_seconds": item.get("probe_timeout_seconds", 4.0),
                 "success_statuses": item.get("probe_success_statuses", "200-399,401,403"),
                 "verify_tls": item.get("probe_verify_tls", True),
+                "failure_threshold": item.get("probe_failure_threshold", 3),
+                "recovery_threshold": item.get("probe_recovery_threshold", 1),
+                "notifications_enabled": item.get("probe_notifications_enabled", True),
             },
+            "health_state": _serialize_health_state(state),
+            "active_incident": _serialize_incident(incident) if incident else None,
+            "active_silence": _serialize_silence(silence) if silence else None,
             "probe_summary": {
                 "checks_24h": len(daily_probes),
                 "uptime_percent_24h": round(up_count * 100 / len(daily_probes), 2) if daily_probes else None,
@@ -621,6 +976,9 @@ def update_plaza_service(plaza_key: str, payload: PlazaServiceUpdate):
             "probe_timeout_seconds": "probe_timeout_seconds",
             "probe_success_statuses": "probe_success_statuses",
             "probe_verify_tls": "probe_verify_tls",
+            "probe_failure_threshold": "probe_failure_threshold",
+            "probe_recovery_threshold": "probe_recovery_threshold",
+            "probe_notifications_enabled": "probe_notifications_enabled",
         }
         for source, target in field_map.items():
             if source in values:

@@ -119,12 +119,17 @@ def _fire_recovery(svc, server) -> None:
 def _snapshot_targets():
     """Read scalar target data and close the DB session before network I/O."""
     with get_db() as db:
+        # Manual services shown in the plaza are owned by plaza_health_loop.
+        # Excluding them here prevents duplicate probes, history and alerts.
+        from app.plaza import plaza_owned_service_ids
+        owned_ids = plaza_owned_service_ids(db)
         services = [
             SimpleNamespace(
                 id=svc.id, name=svc.name, url=svc.url, health_path=svc.health_path,
                 server_id=svc.server_id, status=svc.status,
             )
             for svc in db.query(Service).filter(Service.hidden == False).all()  # noqa: E712
+            if svc.id not in owned_ids
         ]
         servers = {
             srv.id: SimpleNamespace(id=srv.id, name=srv.name, host=srv.host)

@@ -186,6 +186,9 @@ class PlazaServiceProfile(Base):
     probe_timeout_seconds = Column(Float, default=4.0, nullable=False)
     probe_success_statuses = Column(String(200), default="200-399,401,403", nullable=False)
     probe_verify_tls = Column(Boolean, default=True, nullable=False)
+    probe_failure_threshold = Column(Integer, default=3, nullable=False)
+    probe_recovery_threshold = Column(Integer, default=1, nullable=False)
+    probe_notifications_enabled = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -203,6 +206,66 @@ class PlazaProbeResult(Base):
     latency_ms = Column(Float, nullable=True)
     error = Column(Text, nullable=True)
     probe_url = Column(Text, nullable=True)
+
+
+class PlazaHealthState(Base):
+    """Restart-safe stable health state for one plaza service."""
+    __tablename__ = "plaza_health_states"
+
+    plaza_key = Column(String(140), primary_key=True)
+    stable_status = Column(String(20), default="unknown", nullable=False, index=True)
+    consecutive_failures = Column(Integer, default=0, nullable=False)
+    consecutive_successes = Column(Integer, default=0, nullable=False)
+    last_checked_at = Column(DateTime, nullable=True, index=True)
+    last_success_at = Column(DateTime, nullable=True)
+    last_failure_at = Column(DateTime, nullable=True)
+    last_transition_at = Column(DateTime, nullable=True)
+    last_http_status = Column(Integer, nullable=True)
+    last_latency_ms = Column(Float, nullable=True)
+    last_error = Column(Text, nullable=True)
+    active_incident_id = Column(UUID(as_uuid=True), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PlazaHealthIncident(Base):
+    """One outage lifecycle. Acknowledgement never changes health state."""
+    __tablename__ = "plaza_health_incidents"
+    __table_args__ = (
+        Index("ix_plaza_health_incident_lookup", "plaza_key", "status"),
+        Index("ix_plaza_health_incident_opened", "opened_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plaza_key = Column(String(140), nullable=False)
+    status = Column(String(20), default="open", nullable=False)
+    opened_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    acknowledged_at = Column(DateTime, nullable=True)
+    acknowledged_by = Column(String(100), nullable=True)
+    resolved_at = Column(DateTime, nullable=True)
+    first_error = Column(Text, nullable=True)
+    last_error = Column(Text, nullable=True)
+    last_http_status = Column(Integer, nullable=True)
+    failure_count_at_open = Column(Integer, default=0, nullable=False)
+    alert_notified_at = Column(DateTime, nullable=True)
+    recovery_notified_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PlazaHealthSilence(Base):
+    """Notification-only maintenance silence; probes and incidents continue."""
+    __tablename__ = "plaza_health_silences"
+    __table_args__ = (Index("ix_plaza_health_silence_lookup", "plaza_key", "ends_at"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plaza_key = Column(String(140), nullable=False)
+    starts_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    ends_at = Column(DateTime, nullable=False)
+    reason = Column(String(500), nullable=False)
+    created_by = Column(String(100), nullable=True)
+    ended_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class PlazaCredentialAccess(Base):

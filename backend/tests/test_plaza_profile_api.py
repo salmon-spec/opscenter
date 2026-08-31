@@ -6,7 +6,10 @@ from fastapi.testclient import TestClient
 
 from app.credential_crypto import decrypt_secret
 from app.main import Base, SessionLocal, app, engine
-from app.models import PlazaCredentialAccess, PlazaProbeResult, PlazaServiceProfile
+from app.models import (
+    PlazaCredentialAccess, PlazaHealthIncident, PlazaHealthState,
+    PlazaProbeResult, PlazaServiceProfile,
+)
 from app import plaza
 
 
@@ -120,6 +123,8 @@ def test_probe_policy_manual_probe_and_history(monkeypatch):
     assert detail["probe_policy"] == {
         "enabled": False, "interval_seconds": 300, "timeout_seconds": 2.5,
         "success_statuses": "200-299,401", "verify_tls": False,
+        "failure_threshold": 3, "recovery_threshold": 1,
+        "notifications_enabled": True,
     }
 
     monkeypatch.setattr(plaza, "_probe", lambda _item: {
@@ -163,3 +168,55 @@ def test_health_overview_aggregates_history_without_probing(monkeypatch):
     assert gitea["uptime_percent"] == 50.0
     assert gitea["avg_latency_ms"] == 20.0
     assert data["summary"]["average_uptime_percent"] == 50.0
+
+
+def test_persistent_threshold_incident_acknowledge_and_recovery(monkeypatch):
+    assert client.put("/api/v2/services/plaza/gitea", json={
+        "probe_failure_threshold": 2, "probe_recovery_threshold": 1,
+    }).status_code == 200
+    sent = []
+    monkeypatch.setattr(plaza, "_send_incident_notification", lambda kind, _item, incident: sent.append((kind, incident.id)) or True)
+    monkeypatch.setattr(plaza, "_probe", lambda _item: {
+        "status": "down", "http_status": 503, "latency_ms": 8,
+        "health_error": "HTTP 503", "checked_at": "2026-08-31T00:00:00",
+    })
+    assert client.post("/api/v2/services/plaza/gitea/probe").status_code == 200
+    with SessionLocal() as db:
+        state = db.query(PlazaHealthState).filter(PlazaHealthState.plaza_key == "gitea").one()
+        assert state.stable_status == "degraded" and state.active_incident_id is None
+
+    assert client.post("/api/v2/services/plaza/gitea/probe").status_code == 200
+    incidents = client.get("/api/v2/services/plaza/incidents?status=open").json()
+    assert incidents["total"] == 1 and len(sent) == 1 and sent[0][0] == "alert"
+    incident_id = incidents["items"][0]["id"]
+    acknowledged = client.post(f"/api/v2/services/plaza/incidents/{incident_id}/acknowledge")
+    assert acknowledged.status_code == 200 and acknowledged.json()["status"] == "acknowledged"
+
+    monkeypatch.setattr(plaza, "_probe", lambda _item: {
+        "status": "up", "http_status": 200, "latency_ms": 5,
+        "health_error": "", "checked_at": "2026-08-31T00:01:00",
+    })
+    assert client.post("/api/v2/services/plaza/gitea/probe").status_code == 200
+    resolved = client.get(f"/api/v2/services/plaza/incidents/{incident_id}").json()
+    assert resolved["status"] == "resolved"
+    assert [kind for kind, _ in sent] == ["alert", "recovery"]
+    with SessionLocal() as db:
+        assert db.query(PlazaHealthIncident).count() == 1
+
+
+def test_active_silence_suppresses_notification_but_keeps_incident(monkeypatch):
+    assert client.put("/api/v2/services/plaza/gitea", json={"probe_failure_threshold": 1}).status_code == 200
+    silence = client.post("/api/v2/services/plaza/silences", json={
+        "plaza_key": "gitea", "ends_at": "2026-09-01T00:00:00", "reason": "计划维护",
+    })
+    assert silence.status_code == 201, silence.text
+    monkeypatch.setattr(plaza, "_send_incident_notification", lambda *_args: pytest.fail("silence must suppress notification"))
+    monkeypatch.setattr(plaza, "_probe", lambda _item: {
+        "status": "down", "http_status": 503, "latency_ms": 8,
+        "health_error": "HTTP 503", "checked_at": "2026-08-31T00:00:00",
+    })
+    assert client.post("/api/v2/services/plaza/gitea/probe").status_code == 200
+    assert client.get("/api/v2/services/plaza/incidents?status=open").json()["total"] == 1
+    assert client.get("/api/v2/services/plaza/silences?active=true").json()[0]["active"] is True
+    ended = client.delete(f"/api/v2/services/plaza/silences/{silence.json()['id']}")
+    assert ended.status_code == 200 and ended.json()["active"] is False

@@ -1112,6 +1112,9 @@ def _ensure_new_columns():
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_timeout_seconds DOUBLE PRECISION DEFAULT 4 NOT NULL",
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_success_statuses VARCHAR(200) DEFAULT '200-399,401,403' NOT NULL",
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_verify_tls BOOLEAN DEFAULT TRUE NOT NULL",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_failure_threshold INTEGER DEFAULT 3 NOT NULL",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_recovery_threshold INTEGER DEFAULT 1 NOT NULL",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_notifications_enabled BOOLEAN DEFAULT TRUE NOT NULL",
     ]
     try:
         with engine.connect() as conn:
