@@ -145,3 +145,21 @@ def test_probe_success_status_validation():
         "probe_success_statuses": "200-999",
     })
     assert response.status_code == 422
+
+
+def test_health_overview_aggregates_history_without_probing(monkeypatch):
+    monkeypatch.setattr(plaza, "_probe", lambda _item: pytest.fail("overview must not probe"))
+    with SessionLocal() as db:
+        db.add_all([
+            PlazaProbeResult(plaza_key="gitea", status="up", http_status=200, latency_ms=10),
+            PlazaProbeResult(plaza_key="gitea", status="down", http_status=500, latency_ms=30),
+        ])
+        db.commit()
+    response = client.get("/api/v2/services/plaza/health-overview?hours=24")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    gitea = next(item for item in data["items"] if item["key"] == "gitea")
+    assert gitea["checks"] == 2
+    assert gitea["uptime_percent"] == 50.0
+    assert gitea["avg_latency_ms"] == 20.0
+    assert data["summary"]["average_uptime_percent"] == 50.0

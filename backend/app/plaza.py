@@ -437,11 +437,78 @@ def list_plaza_services():
             "http_status": health["http_status"],
             "latency_ms": health["latency_ms"],
             "health_error": health["health_error"],
+            "last_checked_at": health.get("checked_at"),
+            "probe_enabled": item.get("probe_enabled", True),
             "owner": item.get("owner", ""),
             "tags": item.get("tags", []),
             "profile_updated_at": item.get("profile_updated_at"),
         })
     return result
+
+
+@router.get("/services/plaza/health-overview")
+def get_plaza_health_overview(hours: int = 24):
+    """Aggregate persisted probe data without triggering any network checks."""
+    hours = max(1, min(hours, 24 * 90))
+    catalog, _servers = _load_plaza_items()
+    keys = [item["key"] for item in catalog if item.get("enabled")]
+    by_key: dict[str, dict] = {
+        key: {"checks": 0, "up": 0, "latency_total": 0.0, "latency_count": 0, "latest": None}
+        for key in keys
+    }
+    if keys:
+        with get_db() as db:
+            rows = db.query(PlazaProbeResult).filter(
+                PlazaProbeResult.plaza_key.in_(keys),
+                PlazaProbeResult.checked_at >= datetime.utcnow() - timedelta(hours=hours),
+            ).order_by(PlazaProbeResult.checked_at.desc()).all()
+            for row in rows:
+                stats = by_key[row.plaza_key]
+                stats["checks"] += 1
+                stats["up"] += row.status == "up"
+                if row.latency_ms is not None:
+                    stats["latency_total"] += row.latency_ms
+                    stats["latency_count"] += 1
+                if stats["latest"] is None:
+                    stats["latest"] = row
+    with _cache_lock:
+        current_checks = {key: dict(value) for key, value in _cached_checks.items()}
+    items = []
+    status_counts = {"up": 0, "down": 0, "unknown": 0, "disabled": 0}
+    availability_values = []
+    for item in catalog:
+        if not item.get("enabled"):
+            continue
+        stats = by_key[item["key"]]
+        latest = stats["latest"]
+        cached = current_checks.get(item["key"], {})
+        if item.get("probe_enabled") is False:
+            status = "disabled"
+        else:
+            status = cached.get("status") or (latest.status if latest else "unknown")
+        if status not in status_counts:
+            status = "unknown"
+        status_counts[status] += 1
+        uptime = round(stats["up"] * 100 / stats["checks"], 2) if stats["checks"] else None
+        if uptime is not None:
+            availability_values.append(uptime)
+        items.append({
+            "key": item["key"], "status": status,
+            "checks": stats["checks"], "uptime_percent": uptime,
+            "avg_latency_ms": round(stats["latency_total"] / stats["latency_count"], 1)
+            if stats["latency_count"] else None,
+            "last_checked_at": latest.checked_at.isoformat() if latest else cached.get("checked_at"),
+        })
+    return {
+        "generated_at": datetime.utcnow().isoformat(), "range_hours": hours,
+        "summary": {
+            "total": len(items), **status_counts,
+            "checked": len(availability_values),
+            "average_uptime_percent": round(sum(availability_values) / len(availability_values), 2)
+            if availability_values else None,
+        },
+        "items": items,
+    }
 
 
 @router.get("/services/plaza/{plaza_key}/detail")

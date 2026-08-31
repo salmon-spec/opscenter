@@ -13,6 +13,14 @@
       </div>
     </div>
 
+    <div class="health-overview">
+      <button class="health-stat" :class="{active:healthFilter==='all'}" @click="healthFilter='all'"><strong>{{ overview.summary.total ?? services.length }}</strong><span>全部服务</span></button>
+      <button class="health-stat is-up" :class="{active:healthFilter==='up'}" @click="healthFilter='up'"><strong>{{ overview.summary.up ?? statusCount('up') }}</strong><span>在线</span></button>
+      <button class="health-stat is-down" :class="{active:healthFilter==='down'}" @click="healthFilter='down'"><strong>{{ overview.summary.down ?? statusCount('down') }}</strong><span>离线</span></button>
+      <button class="health-stat" :class="{active:healthFilter==='unknown'}" @click="healthFilter='unknown'"><strong>{{ (overview.summary.unknown ?? statusCount('unknown')) + (overview.summary.disabled ?? statusCount('disabled')) }}</strong><span>未检测 / 停用</span></button>
+      <div class="health-stat availability"><strong>{{ overview.summary.average_uptime_percent == null ? '-' : `${overview.summary.average_uptime_percent}%` }}</strong><span>24h 综合可用率</span><small v-if="overview.generated_at">统计于 {{ shortTime(overview.generated_at) }}</small></div>
+    </div>
+
     <!-- 分组标签 -->
     <div class="group-tabs">
       <button class="g-tab" :class="{ active: activeGroup === 'all' }" @click="activeGroup = 'all'">全部 ({{ searched.length }})</button>
@@ -117,6 +125,8 @@ const groups = ref([])
 const loading = ref(!services.value.length)
 const search = ref('')
 const activeGroup = ref('all')
+const healthFilter = ref('all')
+const overview = ref({ summary: {}, items: [], generated_at: null })
 const drawerVisible = ref(false)
 const selected = ref(null)
 const hosts = ref([])
@@ -178,6 +188,7 @@ const searched = computed(() => {
 const filtered = computed(() => {
   return searched.value
     .filter((s) => activeGroup.value === 'all' || groupOf(s) === activeGroup.value)
+    .filter((s) => healthFilter.value === 'all' || (healthFilter.value === 'unknown' ? ['unknown','disabled'].includes(s.status || 'unknown') : s.status === healthFilter.value))
     .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))
 })
 
@@ -195,6 +206,9 @@ function openDetail(s) {
   drawerVisible.value = true
 }
 
+function statusCount(status){return services.value.filter(s=>(s.status||'unknown')===status).length}
+function shortTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'-':date.toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'})}
+
 async function handleServiceUpdated(updated) {
   if (updated) selected.value = { ...selected.value, ...updated }
   await reload(true)
@@ -206,7 +220,7 @@ async function reload(silent=false) {
   loading.value = true
   try {
     const svc = await api.get('/services/plaza')
-    if(Array.isArray(svc)){services.value=svc;localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:svc,time:Date.now()}));svc.slice(0,6).forEach(warmService)}
+    if(Array.isArray(svc)){services.value=svc;localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:svc,time:Date.now()}));svc.slice(0,6).forEach(warmService);loadHealthOverview()}
     groups.value = PLAZA_GROUPS
   } catch(error) {
     if(!services.value.length&&!silent)toast(`服务广场加载失败：${error.message}`,'error')
@@ -214,6 +228,8 @@ async function reload(silent=false) {
     loading.value = false
   }
 }
+
+async function loadHealthOverview(){try{const data=await api.get('/services/plaza/health-overview',{hours:24});overview.value=data||{summary:{},items:[]};const healthByKey=new Map((data.items||[]).map(item=>[item.key,item]));services.value=services.value.map(service=>{const health=healthByKey.get(service.key);return health?{...service,status:health.status,last_checked_at:health.last_checked_at,uptime_percent_24h:health.uptime_percent}:service});localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}))}catch{/* 总览失败不影响服务入口 */}}
 
 async function loadHosts() {
   if (!hosts.value.length) hosts.value = await api.get('/servers')
@@ -315,6 +331,7 @@ onMounted(()=>reload(true))
 
 <style scoped>
 .group-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.health-overview{display:grid;grid-template-columns:repeat(5,minmax(120px,1fr));gap:10px;margin:0 0 16px}.health-stat{display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--card);color:var(--text);cursor:pointer;text-align:left}.health-stat:hover,.health-stat.active{border-color:var(--brand);box-shadow:0 4px 14px rgba(37,99,235,.1)}.health-stat strong{font-size:22px}.health-stat span{font-size:12px;color:var(--muted)}.health-stat small{font-size:10px;color:var(--muted)}.health-stat.is-up strong{color:var(--ok)}.health-stat.is-down strong{color:var(--err)}.health-stat.availability{cursor:default;background:#f8fbff}.health-stat.availability strong{color:var(--brand)}
 .g-tab {
   padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border);
   background: #fff; font-size: 13px; color: var(--muted); cursor: pointer;
@@ -345,6 +362,7 @@ onMounted(()=>reload(true))
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .hidden-actions { display: flex; gap: 6px; white-space: nowrap; }
 @media (max-width: 760px) {
+  .health-overview { grid-template-columns:repeat(2,1fr); }
   .view-head { align-items: flex-start; }
   .view-head > div:last-child { flex-wrap: wrap; }
   .view-head .input { width: 100% !important; }
