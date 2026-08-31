@@ -1,4 +1,4 @@
-# OpsCenter v4.6.3 — GitLab CI
+# OpsCenter v4.6.4 — GitLab CI
 # 后端测试阶段：pytest smoke tests + 覆盖率
 # 说明：GitLab CE 19.2.1（VM1），runner 部署后 pipeline 自动生效
 
