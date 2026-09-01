@@ -26,7 +26,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 |---|---|
 | 后端测试 | **pytest 158/158 全绿**（0 失败 0 错误，含 AI 只读契约、敏感信息隔离与 API 密钥写节流） |
 | API | 增加 6 个 `/api/v2/ai/*` 只读上下文接口；现有管理与监控接口保持兼容 |
-| Agent | v2.5.0 |
+| Agent | v2.5.1 |
 | 版本里程碑 | **v4.6.6**（版本显示与 OpenAPI 修复、自动服务同步、PVE 来宾 Web 服务发现） |
 | 系统文件管理 | **v4.3 已交付**（本机/SFTP 浏览、编辑、上传下载、改名、可恢复删除） |
 | 系统防火墙 / SSH | **v4.3 已交付**（UFW/Firewalld、防失联保护、SSH 配置/会话/登录日志） |
@@ -42,7 +42,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | 后端 | Python 3 + FastAPI 0.115.6 + SQLAlchemy 2.0 + Pydantic 2 + PyJWT |
 | 数据库 | PostgreSQL 16（`opscenter` 库） |
 | 前端 | Vue 3 SPA（单文件 index.html）+ ECharts + Tailwind CSS；**Vite 5 工程化改造中**（frontend-vite → /v3/ 灰度路径） |
-| Agent | Python 轻量采集器（v2.5.0，轻量系统摘要 / 指标 / 服务发现 / PVE 来宾 Web 服务发现 / 进程管理） |
+| Agent | Python 轻量采集器（v2.5.1，轻量系统摘要 / 指标 / 服务发现 / PVE 来宾 Web 服务发现 / 进程管理） |
 | 部署 | systemd（`opscenter-backend` :9091）+ Caddy 反代（:80）+ venv |
 | CI/CD | Jenkins（Jenkinsfile）+ GitLab CI（.gitlab-ci.yml） |
 
@@ -161,7 +161,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 
 ### 5.9 Agent 管理
 
-- 一键部署 / 升级 / 卸载远程监控 Agent（v2.5.0）
+- 一键部署 / 升级 / 卸载远程监控 Agent（v2.5.1）
 - Agent 状态监控（运行 / 离线 / 未部署），自动采集远程主机指标
 - 新端点：`/api/v1/registry-proxy`（Docker Hub digest 代理，TLS1.2 + IPv4 强制；MFA 安全组放开后生效）
 
@@ -215,7 +215,7 @@ OpsCenter/
 │   ├── tests/                    # pytest（158 用例）
 │   └── requirements.txt
 ├── agent/
-│   ├── opsagent.py               # 远程采集 Agent（v2.5.0）
+│   ├── opsagent.py               # 远程采集 Agent（v2.5.1）
 │   └── scanner.py                # 主机扫描器
 ├── frontend/                     # Vue 3 SPA（index.html 单文件）
 │   ├── index.html                # 主工作台
@@ -315,7 +315,7 @@ cd backend && pytest    # 158/158 全绿
 | **v4.6.3** | **Jenkins 验收改为校验服务广场响应契约，不再依赖可变的服务数量**（pytest 158/158） | ✅ 已完成 |
 | **v4.6.4** | **Jenkins 验收去除 Python 运行时依赖，兼容精简构建 Agent**（pytest 158/158） | ✅ 已完成 |
 | **v4.6.5** | **Jenkins 验收改用双 HTTP 状态契约，消除动态数据量、额外运行时与 Groovy 转义依赖**（pytest 158/158） | ✅ 已完成 |
-| **v4.6.6** | **修复浏览器版本与 OpenAPI 文档入口；补齐通配/具体 IP 绑定端口发现；Agent v2.5.0 增加 PVE QEMU/LXC 来宾 Web 服务扫描；服务结果每 5 分钟自动同步** | ✅ 已完成 |
+| **v4.6.6** | **修复浏览器版本与 OpenAPI 文档入口；补齐通配/具体 IP 绑定端口发现；Agent v2.5.1 增加 PVE QEMU/LXC 来宾 Web 服务扫描并消除启动阻塞；服务结果每 5 分钟自动同步** | ✅ 已完成 |
 
 ## 十一、已知限制与遗留事项
 

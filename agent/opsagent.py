@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.5.0 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.5.1 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -13,7 +13,7 @@ import argparse
 import threading
 import re
 
-AGENT_VERSION = "2.5.0"
+AGENT_VERSION = "2.5.1"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -84,6 +84,9 @@ def _background_scan_loop():
             result = scan_all()
             with _scan_lock:
                 _scan_cache = result
+            print(f"[scanner] Background scan done: {len(result.get('containers', []))} containers, "
+                  f"{len(result.get('ports', []))} ports, {len(result.get('pve_services', []))} PVE guest services "
+                  f"({result.get('scan_duration_ms', 0)}ms)", flush=True)
         except Exception as e:
             print(f"[scanner] scan error: {e}", flush=True)
         time.sleep(_scan_interval)
@@ -616,18 +619,8 @@ def main():
     scan_thread.start()
     print(f"[scanner] Background scan started (interval={_scan_interval}s)", flush=True)
 
-    print("[scanner] Running initial scan...", flush=True)
-    result = scan_all()
-    stopped = len(result.get('stopped_containers', []))
-    nginx = len(result.get('nginx_services', []))
-    print(f"[scanner] Initial scan done: {len(result['containers'])} containers, "
-          f"{stopped} stopped, "
-          f"{len(result['ports'])} ports, {len(result['systemd_services'])} systemd services, "
-          f"{nginx} nginx services "
-          f"({result['scan_duration_ms']}ms)", flush=True)
-
-    # Detailed metrics (for example docker stats) may take a moment; do not let
-    # one dashboard request block health checks or background collection.
+    # Start accepting health/metric requests immediately. Service discovery is
+    # intentionally background-only so slow PVE guest agents cannot delay boot.
     server = http.server.ThreadingHTTPServer((args.bind, args.port), AgentHandler)
     print(f"OpsAgent v{VERSION} listening on {args.bind}:{args.port}", flush=True)
     try:

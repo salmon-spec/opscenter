@@ -438,7 +438,8 @@ def _guest_ips(guest):
         candidates.extend(re.findall(r'ip=([^,\s]+)', config))
         candidates.extend(_neighbor_ips(config))
     elif guest_type == 'qemu':
-        output = run_cmd(['qm', 'guest', 'cmd', vmid, 'network-get-interfaces'], timeout=8)
+        config = run_cmd(['qm', 'config', vmid], timeout=5)
+        output = run_cmd(['qm', 'guest', 'cmd', vmid, 'network-get-interfaces'], timeout=2)
         try:
             payload = json.loads(output or '[]')
             for interface in payload if isinstance(payload, list) else payload.get('result', []):
@@ -446,7 +447,6 @@ def _guest_ips(guest):
                     candidates.append(address.get('ip-address', ''))
         except (TypeError, ValueError):
             pass
-        config = run_cmd(['qm', 'config', vmid], timeout=5)
         candidates.extend(re.findall(r'ip=([^,\s]+)', config))
         candidates.extend(_neighbor_ips(config))
     result = []
