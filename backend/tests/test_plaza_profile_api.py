@@ -1,6 +1,7 @@
 """Editable service-plaza profile and credential security contracts."""
 import socket
 import uuid
+from datetime import datetime, timedelta
 from urllib.error import URLError
 
 import pytest
@@ -224,8 +225,9 @@ def test_persistent_threshold_incident_acknowledge_and_recovery(monkeypatch):
 
 def test_active_silence_suppresses_notification_but_keeps_incident(monkeypatch):
     assert client.put("/api/v2/services/plaza/gitea", json={"probe_failure_threshold": 1}).status_code == 200
+    silence_ends_at = (datetime.utcnow() + timedelta(hours=1)).replace(microsecond=0).isoformat()
     silence = client.post("/api/v2/services/plaza/silences", json={
-        "plaza_key": "gitea", "ends_at": "2026-09-01T00:00:00", "reason": "计划维护",
+        "plaza_key": "gitea", "ends_at": silence_ends_at, "reason": "计划维护",
     })
     assert silence.status_code == 201, silence.text
     monkeypatch.setattr(plaza, "_send_incident_notification", lambda *_args: pytest.fail("silence must suppress notification"))
