@@ -13,6 +13,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
 
@@ -41,6 +42,21 @@ _cached_checks: dict[str, dict] = {}
 _refreshing = False
 _probe_times: dict[str, float] = {}
 _cycle_lock = threading.Lock()
+
+# These ports are valid TCP services, but do not provide a user-facing Web UI.
+# Port discovery must keep them for Assets/Containers while excluding them from
+# the Service Plaza.  Do not make this a broad allow-list: custom Web apps are
+# commonly deployed on high ports.
+_NON_WEB_PORTS = {
+    22, 25, 53, 67, 68, 123, 323, 3306, 5432, 5671, 5672, 6379, 9042,
+    9092, 9100, 11211, 2181, 2379, 2380, 27017, 3128, 4646, 8300, 8301,
+    8302, 19100,
+}
+_NON_WEB_NAME_MARKERS = (
+    "redis", "postgres", "postgresql", "mysql", "mariadb", "mongodb",
+    "mongo", "node exporter", "node_exporter", "opsagent", "pvedaemon",
+    "spiceproxy", "docker-proxy",
+)
 
 
 class PlazaVisibilityUpdate(BaseModel):
@@ -267,6 +283,41 @@ def _scanned_item(service: Service, server: Server | None) -> dict:
     return item
 
 
+def _url_port(url: str) -> int | None:
+    """Return the explicit or default HTTP(S) port without raising on bad URLs."""
+    try:
+        parsed = urlsplit(url)
+        if parsed.port:
+            return parsed.port
+        return 443 if parsed.scheme == "https" else 80 if parsed.scheme == "http" else None
+    except ValueError:
+        return None
+
+
+def _is_web_service(service: Service) -> bool:
+    """Whether an inventory service belongs in the user-facing Service Plaza."""
+    url = (service.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return False
+    port = getattr(service, "port", None) or _url_port(url)
+    if port in _NON_WEB_PORTS:
+        return False
+    name = f"{service.name or ''} {service.description or ''}".lower()
+    return not any(marker in name for marker in _NON_WEB_NAME_MARKERS)
+
+
+def _normalized_url(url: str) -> tuple[str, str, int | None, str] | None:
+    """Stable URL identity used only for display de-duplication."""
+    try:
+        parsed = urlsplit((url or "").strip())
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return None
+        path = (parsed.path or "/").rstrip("/") or "/"
+        return parsed.scheme.lower(), parsed.hostname.lower(), _url_port(url), path
+    except ValueError:
+        return None
+
+
 def _load_plaza_items() -> tuple[list[dict], dict[str, Server]]:
     catalog = load_catalog()
     with get_db() as db:
@@ -283,10 +334,23 @@ def _load_plaza_items() -> tuple[list[dict], dict[str, Server]]:
             Service.url != None, Service.url != "",  # noqa: E711
         ).all()
         catalog = [_apply_profile(dict(item), profiles.get(item["key"]), servers_by_id) for item in catalog]
-        catalog_urls = {item["entry_url"].rstrip("/") for item in catalog}
+        catalog_urls = {_normalized_url(item["entry_url"]) for item in catalog}
         catalog = [item for item in catalog if item["key"] not in hidden_catalog_keys]
+        endpoint_paths = {
+            endpoint[:3]: endpoint[3]
+            for endpoint in catalog_urls if endpoint
+        }
         for service in web_services:
-            if not service.url.startswith(("http://", "https://")) or service.url.rstrip("/") in catalog_urls:
+            if not _is_web_service(service):
+                continue
+            endpoint = _normalized_url(service.url)
+            if not endpoint:
+                continue
+            # A catalog/route entry on the same HTTP endpoint is authoritative.
+            # Suppress only a root scan entry; distinct reverse-proxy paths are
+            # separate applications and must remain visible.
+            known_path = endpoint_paths.get(endpoint[:3])
+            if endpoint in catalog_urls or (endpoint[3] == "/" and known_path is not None):
                 continue
             is_manual = service.source == ServiceSource.manual.value
             key = f"manual-{service.id}" if is_manual else f"scan-{service.id}"
@@ -294,7 +358,8 @@ def _load_plaza_items() -> tuple[list[dict], dict[str, Server]]:
             catalog.append(_apply_profile(
                 base_item, profiles.get(key), servers_by_id,
             ))
-            catalog_urls.add(service.url.rstrip("/"))
+            catalog_urls.add(endpoint)
+            endpoint_paths[endpoint[:3]] = endpoint[3]
     return catalog, servers
 
 

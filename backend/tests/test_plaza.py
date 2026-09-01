@@ -199,6 +199,49 @@ def test_scanned_web_service_is_merged_into_plaza(monkeypatch):
     assert row["source"] == "agent"
 
 
+def test_plaza_excludes_non_web_ports_and_catalog_duplicates(monkeypatch):
+    server = SimpleNamespace(id="server-vm1", host="10.66.66.4", name="VM1")
+    redis = SimpleNamespace(
+        id="redis-1", server_id=server.id, source="agent", hidden=False,
+        name="Redis", url="http://10.66.66.4:6379/", port=6379,
+        description="Redis cache", category="数据存储", icon="database",
+        account="", password="",
+    )
+    duplicate = SimpleNamespace(
+        id="gitea-1", server_id=server.id, source="agent", hidden=False,
+        name="Gitea", url="http://10.66.66.4:3000/user/login", port=3000,
+        description="scanned duplicate", category="应用服务", icon="code",
+        account="", password="",
+    )
+
+    class Query:
+        def __init__(self, model):
+            self.model = model
+
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            if self.model is plaza.Service:
+                return [redis, duplicate]
+            if self.model in (plaza.PlazaServicePreference, plaza.PlazaServiceProfile):
+                return []
+            return [server]
+
+    class Db:
+        def query(self, model):
+            return Query(model)
+
+    @contextmanager
+    def fake_db():
+        yield Db()
+
+    monkeypatch.setattr(plaza, "get_db", fake_db)
+    keys = {item["key"] for item in plaza._load_plaza_items()[0]}
+    assert "scan-redis-1" not in keys
+    assert "scan-gitea-1" not in keys
+
+
 def test_catalog_visibility_is_persisted(monkeypatch):
     created = []
 
