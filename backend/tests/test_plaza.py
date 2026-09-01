@@ -174,7 +174,7 @@ def test_manual_web_service_is_merged_without_credentials(monkeypatch):
     assert "account" not in row and "password" not in row
 
 
-def test_scanned_web_service_is_merged_into_plaza(monkeypatch):
+def test_scanned_web_service_is_not_merged_into_plaza(monkeypatch):
     server = SimpleNamespace(id="server-pve", host="10.66.66.3", name="主机2 PVE")
     scanned = SimpleNamespace(
         id="scan-1", server_id=server.id, source="agent", hidden=False,
@@ -214,53 +214,9 @@ def test_scanned_web_service_is_merged_into_plaza(monkeypatch):
             for item in catalog
         },
     )
-    row = next(item for item in plaza.list_plaza_services() if item["key"] == "scan-scan-1")
-    assert row["service_id"] == "scan-1"
-    assert row["scanned"] is True and row["manual"] is False
-    assert row["source"] == "agent"
-
-
-def test_plaza_excludes_non_web_ports_and_catalog_duplicates(monkeypatch):
-    server = SimpleNamespace(id="server-vm1", host="10.66.66.4", name="VM1")
-    redis = SimpleNamespace(
-        id="redis-1", server_id=server.id, source="agent", hidden=False,
-        name="Redis", url="http://10.66.66.4:6379/", port=6379,
-        description="Redis cache", category="数据存储", icon="database",
-        account="", password="",
-    )
-    duplicate = SimpleNamespace(
-        id="gitea-1", server_id=server.id, source="agent", hidden=False,
-        name="Gitea", url="http://10.66.66.4:3000/user/login", port=3000,
-        description="scanned duplicate", category="应用服务", icon="code",
-        account="", password="",
-    )
-
-    class Query:
-        def __init__(self, model):
-            self.model = model
-
-        def filter(self, *_args):
-            return self
-
-        def all(self):
-            if self.model is plaza.Service:
-                return [redis, duplicate]
-            if self.model in (plaza.PlazaServicePreference, plaza.PlazaServiceProfile):
-                return []
-            return [server]
-
-    class Db:
-        def query(self, model):
-            return Query(model)
-
-    @contextmanager
-    def fake_db():
-        yield Db()
-
-    monkeypatch.setattr(plaza, "get_db", fake_db)
-    keys = {item["key"] for item in plaza._load_plaza_items()[0]}
-    assert "scan-redis-1" not in keys
-    assert "scan-gitea-1" not in keys
+    rows = plaza.list_plaza_services()
+    assert len(rows) == len(plaza.load_catalog()) == 19
+    assert not any(item["key"] == "scan-scan-1" for item in rows)
 
 
 def test_catalog_visibility_is_persisted(monkeypatch):
