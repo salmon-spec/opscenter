@@ -162,6 +162,15 @@ def _manual_uuid(plaza_key: str) -> uuid.UUID | None:
         return None
 
 
+def _scanned_uuid(plaza_key: str) -> uuid.UUID | None:
+    if not plaza_key.startswith("scan-"):
+        return None
+    try:
+        return uuid.UUID(plaza_key.removeprefix("scan-"))
+    except ValueError:
+        return None
+
+
 def plaza_owned_service_ids(db) -> set:
     """Return Service IDs whose probes are owned by the plaza scheduler."""
     profiles = {
@@ -180,8 +189,7 @@ def plaza_owned_service_ids(db) -> set:
         url = (service.url or "").rstrip("/")
         if not url.startswith(("http://", "https://")):
             continue
-        if getattr(service, "source", None) == ServiceSource.manual.value or url in catalog_urls:
-            owned.add(service.id)
+        owned.add(service.id)
     return owned
 
 
@@ -248,6 +256,17 @@ def _manual_item(service: Service, server: Server | None) -> dict:
     }
 
 
+def _scanned_item(service: Service, server: Server | None) -> dict:
+    item = _manual_item(service, server)
+    item.update({
+        "key": f"scan-{service.id}",
+        "description": service.description or "自动扫描发现的 Web 服务",
+        "manual": False,
+        "scanned": True,
+    })
+    return item
+
+
 def _load_plaza_items() -> tuple[list[dict], dict[str, Server]]:
     catalog = load_catalog()
     with get_db() as db:
@@ -259,21 +278,23 @@ def _load_plaza_items() -> tuple[list[dict], dict[str, Server]]:
                 PlazaServicePreference.hidden == True,  # noqa: E712
             ).all()
         }
-        manual_services = db.query(Service).filter(
-            Service.source == ServiceSource.manual.value,
+        web_services = db.query(Service).filter(
             Service.hidden != True,  # noqa: E712
             Service.url != None, Service.url != "",  # noqa: E711
         ).all()
         catalog = [_apply_profile(dict(item), profiles.get(item["key"]), servers_by_id) for item in catalog]
         catalog_urls = {item["entry_url"].rstrip("/") for item in catalog}
         catalog = [item for item in catalog if item["key"] not in hidden_catalog_keys]
-        for service in manual_services:
+        for service in web_services:
             if not service.url.startswith(("http://", "https://")) or service.url.rstrip("/") in catalog_urls:
                 continue
-            key = f"manual-{service.id}"
+            is_manual = service.source == ServiceSource.manual.value
+            key = f"manual-{service.id}" if is_manual else f"scan-{service.id}"
+            base_item = _manual_item(service, servers_by_id.get(service.server_id)) if is_manual else _scanned_item(service, servers_by_id.get(service.server_id))
             catalog.append(_apply_profile(
-                _manual_item(service, servers_by_id.get(service.server_id)), profiles.get(key), servers_by_id,
+                base_item, profiles.get(key), servers_by_id,
             ))
+            catalog_urls.add(service.url.rstrip("/"))
     return catalog, servers
 
 
@@ -282,18 +303,26 @@ def _resolve_item(db, plaza_key: str) -> tuple[dict, Service | None, PlazaServic
     profile = db.query(PlazaServiceProfile).filter(PlazaServiceProfile.plaza_key == plaza_key).first()
     service = None
     manual_id = _manual_uuid(plaza_key)
+    scanned_id = _scanned_uuid(plaza_key)
     if manual_id:
         service = db.query(Service).filter(Service.id == manual_id).first()
-        if not service:
+        if not service or service.source != ServiceSource.manual.value:
             raise HTTPException(404, "服务不存在")
         item = _manual_item(service, servers_by_id.get(service.server_id))
+    elif scanned_id:
+        service = db.query(Service).filter(Service.id == scanned_id).first()
+        if not service or service.source == ServiceSource.manual.value:
+            raise HTTPException(404, "服务不存在")
+        item = _scanned_item(service, servers_by_id.get(service.server_id))
     else:
         base = next((row for row in load_catalog() if row["key"] == plaza_key), None)
         if not base:
             raise HTTPException(404, "服务不存在")
         item = dict(base)
     item = _apply_profile(item, profile, servers_by_id)
-    server = next((row for row in servers_by_id.values() if row.host == item.get("server_host")), None)
+    server = servers_by_id.get(service.server_id) if service else next(
+        (row for row in servers_by_id.values() if row.host == item.get("server_host")), None,
+    )
     if not service and server:
         candidates = db.query(Service).filter(Service.server_id == server.id).all()
         service = next((row for row in candidates if (row.url or "").rstrip("/") == item["entry_url"].rstrip("/")), None)
@@ -731,6 +760,8 @@ def list_plaza_services():
             "has_credentials": bool(item.get("has_credentials")),
             "enabled": True,
             "manual": item.get("manual", False),
+            "scanned": item.get("scanned", False),
+            "source": item.get("source", "catalog"),
             "service_id": item.get("service_id"),
             "status": status,
             "http_status": health["http_status"],
@@ -934,7 +965,7 @@ def end_plaza_silence(silence_id: uuid.UUID, _current_user=Depends(get_current_u
 
 @router.get("/services/plaza/{plaza_key}/detail")
 def get_plaza_service_detail(plaza_key: str):
-    """Return a complete plaza profile while never returning a saved password."""
+    """Return a complete catalog, manual, or scanned profile without a saved password."""
     with get_db() as db:
         item, service, profile, server_info = _resolve_item(db, plaza_key)
         server = server_info["selected"]
@@ -1208,8 +1239,8 @@ def list_hidden_plaza_services():
         for service in db.query(Service).filter(Service.hidden == True).all():  # noqa: E712
             server = servers_by_id.get(service.server_id)
             is_manual = service.source == ServiceSource.manual.value
-            key = f"manual-{service.id}" if is_manual else None
-            profile = profiles.get(key) if key else None
+            key = f"manual-{service.id}" if is_manual else f"scan-{service.id}"
+            profile = profiles.get(key)
             result.append({
                 "id": str(service.id), "service_id": str(service.id),
                 "key": key,

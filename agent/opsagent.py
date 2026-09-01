@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.4.0 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.5.0 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -13,7 +13,7 @@ import argparse
 import threading
 import re
 
-AGENT_VERSION = "2.4.0"
+AGENT_VERSION = "2.5.0"
 VERSION = AGENT_VERSION
 TOKEN = ""
 

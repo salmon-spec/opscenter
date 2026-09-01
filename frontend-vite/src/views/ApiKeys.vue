@@ -5,7 +5,7 @@
         <h1 class="view-title">开放 API</h1>
         <p class="view-sub">密钥管理 · 供其他服务调用数据（如 OpsBot / Hermes / 三省六部）</p>
       </div>
-      <a class="btn" href="/docs" target="_blank" rel="noopener">接口文档 (OpenAPI)</a>
+      <a class="btn" href="/api/v2/docs" target="_blank" rel="noopener">接口文档 (OpenAPI)</a>
     </div>
 
     <div class="card" style="margin-bottom:16px">

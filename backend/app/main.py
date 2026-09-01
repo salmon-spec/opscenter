@@ -1,10 +1,11 @@
 import os
-import calendar, uuid, asyncio, re, socket
+import calendar, uuid, asyncio, re, socket, threading
 from datetime import datetime, timedelta, date
 from typing import Optional, List
 
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, UploadFile, File as FastAPIFile
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -150,8 +151,12 @@ _PORT_SERVICE_HINTS = {
            "url_tpl": "http://{host}:5601/", "desc": "ES可视化"},
     8101: {"name": "Spring Boot Admin", "category": "监控", "icon": "chart",
            "url_tpl": "http://{host}:8101/", "desc": "Spring Boot监控"},
+    8006: {"name": "Proxmox VE", "category": "运维面板", "icon": "server",
+           "url_tpl": "https://{host}:8006/", "desc": "Proxmox VE 管理界面"},
     9999: {"name": "1Panel", "category": "运维面板", "icon": "tool",
            "url_tpl": "http://{host}:9999/", "desc": "Linux运维面板"},
+    12110: {"name": "1Panel", "category": "运维面板", "icon": "tool",
+            "url_tpl": "http://{host}:12110/", "desc": "Linux运维面板"},
     5433: {"name": "PostgreSQL", "category": "数据存储", "icon": "database",
            "url_tpl": "postgresql://{host}:5433", "desc": "OpsCenter数据库(备用端口)"},
 }
@@ -166,7 +171,7 @@ _UDP_SERVICE_HINTS = {
 }
 
 # Ports to always skip (system/ephemeral)
-_SKIP_PORTS = {22, 25, 53, 68, 80, 323, 9323}
+_SKIP_PORTS = {22, 25, 53, 68, 323, 9323}
 _SKIP_PROCESSES = {"hbrclient", "hbrclientupdater", "snapd", "packagekitd", "polkitd", "rtkit-daemon", "containerd", "dockerd", "docker-proxy", "containerd-shim"}
 
 
@@ -229,6 +234,21 @@ class PinToggle(BaseModel):
 
 # === App ===
 app = FastAPI(title="OpsCenter API", version=VERSION)
+
+
+@app.get("/api/v2/openapi.json", include_in_schema=False)
+def proxied_openapi_schema():
+    """Serve the schema below /api/v2 so the existing reverse proxy can reach it."""
+    return JSONResponse(app.openapi())
+
+
+@app.get("/api/v2/docs", include_in_schema=False)
+def proxied_swagger_ui():
+    """Swagger UI entry that works without adding special Caddy routes."""
+    return get_swagger_ui_html(
+        openapi_url="/api/v2/openapi.json",
+        title=f"OpsCenter {VERSION} API",
+    )
 
 
 # Category metadata for enhanced UI
@@ -1238,6 +1258,7 @@ async def startup():
 
     # Start background health check
     asyncio.create_task(background_health_check())
+    asyncio.create_task(background_service_discovery())
     asyncio.create_task(daily_network_aggregation())  # v3.25.1 每日流量归集
     # Start background agent metrics collector
     asyncio.create_task(background_agent_collector())
@@ -1321,7 +1342,7 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_status = "running"
                 row.agent_port = result.get("agent_port", 19100)
                 row.agent_token = result.get("agent_token", "")
-                row.agent_version = result.get("agent_version", "2.4.0")
+                row.agent_version = result.get("agent_version", "2.5.0")
             else:
                 row.agent_status = "error"
                 row.last_error = result.get("message", "Agent 部署失败")[-1000:]
@@ -1481,7 +1502,7 @@ def scan_server(server_id: str, password: Optional[str] = None):
             scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
             if scan_data:
                 result = _sync_agent_scan_to_db(srv, db, scan_data)
-                _sync_port_driven_scan(srv, db, scan_data)
+                port_result = _sync_port_driven_scan(srv, db, scan_data)
                 srv.status = ServerStatus.online.value
                 srv.last_seen = datetime.utcnow()
                 srv.docker_available = True
@@ -1492,7 +1513,13 @@ def scan_server(server_id: str, password: Optional[str] = None):
                 # Also discover nginx services
                 nginx_result = _sync_nginx_routes(srv, db)
                 nginx_count = nginx_result["added"] + nginx_result["updated"]
-                return {"discovered": result["added"] + result["updated"] + result.get("port_added", 0) + nginx_count, "source": "agent", "nginx_added": nginx_count}
+                return {
+                    "discovered": result["added"] + result["updated"] + port_result["added"] + port_result["updated"] + nginx_count,
+                    "source": "agent",
+                    "nginx_added": nginx_count,
+                    "pve_guests": len(scan_data.get("pve_guests", [])),
+                    "pve_services": len(scan_data.get("pve_services", [])),
+                }
         
         # Fallback: Docker SDK (local) or SSH (remote)
         if srv.agent_type == "local":
@@ -1589,10 +1616,11 @@ def get_agent_services(server_id: str):
             raise HTTPException(400, f"Agent未运行 (status={srv.agent_status})")
     
     # Try Agent scan
-    data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+    data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
     if not data:
         # Fallback: try cached services
-        data = fetch_agent_services(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+        data = fetch_agent_services(agent_host, srv.agent_port or 19100, srv.agent_token or "")
     if not data:
         raise HTTPException(502, "Agent连接失败，请检查Agent是否正常运行")
     
@@ -1601,6 +1629,9 @@ def get_agent_services(server_id: str):
         "containers": data.get("containers", []),
         "ports": data.get("ports", []),
         "systemd_services": data.get("systemd_services", []),
+        "nginx_services": data.get("nginx_services", []),
+        "pve_guests": data.get("pve_guests", []),
+        "pve_services": data.get("pve_services", []),
         "scan_time_ms": data.get("scan_time_ms", 0),
         "source": "agent",
     }
@@ -1619,7 +1650,7 @@ def _extract_public_ports(container):
     # Try port_summary first (Docker standard format)
     if port_summary:
         source = port_summary
-        matches = re.findall(r'0\.0\.0\.0:(\d+)->|:::(\d+)->', source)
+        matches = re.findall(r'0\.0\.0\.0:(\d+)->|(?:\[?::\]?|\*):(\d+)->', source)
         if matches:
             return list(dict.fromkeys(m[0] or m[1] for m in matches if m[0] or m[1]))
     
@@ -1630,13 +1661,71 @@ def _extract_public_ports(container):
             # Integer port, include all (Agent only returns bound ports)
             result.append(str(p))
         elif isinstance(p, dict):
-            # Dict format: {"port": 8000, "bind": "0.0.0.0"}
-            bind = p.get("bind", "")
-            port = p.get("port")
-            if port and (bind == "0.0.0.0" or bind == "[::]" or bind.startswith("0.0.0.0") or bind.startswith("[::]")):
+            # Agent scanner uses host_port; older clients used port/bind.
+            bind = p.get("bind_ip", p.get("bind", "0.0.0.0"))
+            port = p.get("host_port", p.get("port"))
+            if port and _is_reachable_bind(bind):
                 result.append(str(port))
     
     return list(dict.fromkeys(result))
+
+
+def _is_reachable_bind(bind_ip):
+    """True for wildcard or non-loopback binds that are reachable through the managed host."""
+    value = str(bind_ip or '').strip().strip('[]').lower()
+    if value in ('', '*', '0.0.0.0', '::', ':::'):
+        return True
+    return not (value == 'localhost' or value == '::1' or value.startswith('127.'))
+
+
+def _sync_pve_guest_services(srv, db, scan_data):
+    """Persist bounded web probes from QEMU/LXC guests discovered by the PVE Agent."""
+    added = updated = 0
+    for item in scan_data.get('pve_services', []):
+        address = str(item.get('address', '')).strip()
+        port = item.get('port')
+        vmid = item.get('vmid')
+        if not address or not str(port).isdigit() or not str(vmid).isdigit():
+            continue
+        port = int(port)
+        url = item.get('url') or f"{'https' if port in (443, 8006, 8443, 9443) else 'http'}://{address}:{port}/"
+        dedup_key = f"pve:{item.get('guest_type', 'guest')}:{vmid}:{address}:{port}"
+        existing = db.query(Service).filter(
+            Service.server_id == srv.id,
+            Service.container_name == dedup_key,
+        ).first()
+        values = {
+            'name': item.get('name') or f"{item.get('guest_name', 'PVE Guest')} · {port}",
+            'url': url,
+            'description': f"PVE {str(item.get('guest_type', 'guest')).upper()} {vmid} · {address}:{port}",
+            'category': '应用服务',
+            'icon': 'fa-server',
+        }
+        if existing:
+            changed = False
+            for field, value in values.items():
+                if value and getattr(existing, field) != value:
+                    setattr(existing, field, value)
+                    changed = True
+            existing.status = ServiceStatus.up.value
+            existing.last_scanned_at = datetime.utcnow()
+            updated += int(changed)
+            continue
+        service = Service(
+            server_id=srv.id,
+            source=ServiceSource.agent.value,
+            status=ServiceStatus.up.value,
+            container_name=dedup_key,
+            port=port,
+            proto='tcp',
+            host_ip=address,
+            last_scanned_at=datetime.utcnow(),
+            **values,
+        )
+        db.add(service)
+        added += 1
+        _auto_assign_group(str(srv.id), str(service.id), service.category)
+    return {'added': added, 'updated': updated}
 
 
 def _build_svc_url_for_remote(name, host, container):
@@ -1955,7 +2044,14 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
                 synced += 1
                 _auto_assign_group(str(srv.id), str(new_svc.id), new_svc.category)
 
-    return {"added": synced, "updated": updated, "errors": errors}
+    pve_result = _sync_pve_guest_services(srv, db, scan_data)
+    return {
+        "added": synced + pve_result['added'],
+        "updated": updated + pve_result['updated'],
+        "errors": errors,
+        "pve_added": pve_result['added'],
+        "pve_updated": pve_result['updated'],
+    }
 
 
 def _sync_port_driven_scan(srv, db, scan_data):
@@ -2067,7 +2163,7 @@ def _do_sync_ports_systemd(srv, db, scan_data):
     
     for process, port_list in port_services.items():
         # Pick the most interesting port (lowest public port, prefer TCP over UDP)
-        public_ports = [p for p in port_list if p.get("bind_ip", "") == "0.0.0.0"]
+        public_ports = [p for p in port_list if _is_reachable_bind(p.get("bind_ip", ""))]
         if not public_ports:
             # Use localhost ports only if they look like real services
             local_ports = [p for p in port_list if p.get("bind_ip", "").startswith("127.0.0.1")]
@@ -2804,87 +2900,53 @@ def ssh_test(server_id: str, password: Optional[str] = None):
         return {"success": True, "message": f"SSH连接成功，发现 {count} 个服务", "discovered": count}
 
 # === Scan & Discovery ===
-@app.post("/api/v2/scan")
-def scan_all():
+_service_scan_lock = threading.Lock()
+
+
+def _scan_all_impl():
     with get_db() as db:
         total_added = 0
         total_updated = 0
         server_results = []
-        # Local servers
-        servers = db.query(Server).filter(Server.agent_type == "local").all()
+        servers = db.query(Server).order_by(Server.created_at.asc()).all()
         for srv in servers:
-            sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "docker_local", "added": 0, "updated": 0, "status": "ok"}
-            if srv.docker_available:
-                discovered = discover_docker_services(srv, db, srv.host)
-                for d in discovered:
-                    _auto_assign_group(str(srv.id), str(d.id), d.category or "")
-                nginx_cnt = 0
-                try:
-                    nginx_routes = parse_nginx_config(host=srv.host)
-                    for route in nginx_routes:
-                        existing = db.query(Service).filter(
-                            Service.server_id == srv.id,
-                            Service.url == route["url"],
-                        ).first()
-                        if not existing:
-                            ns = Service(
-                                server_id=srv.id,
-                                name=route["name"],
-                                url=route["url"],
-                                source=ServiceSource.nginx.value,
-                                category="网络与代理",
-                                icon="fa-globe",
-                                status=ServiceStatus.unknown.value,
-                                last_scanned_at=datetime.utcnow(),
-                            )
-                            db.add(ns)
-                            nginx_cnt += 1
-                            _auto_assign_group(str(srv.id), str(ns.id), ns.category)
-                except Exception as e:
-                    print(f"[WARN] scan_all nginx parse: {e}")
-                srv.last_seen = datetime.utcnow()
-                sr_detail["added"] = len(discovered) + nginx_cnt
-                sr_detail["nginx_added"] = nginx_cnt
-                total_added += len(discovered) + nginx_cnt
-            server_results.append(sr_detail)
-        # Remote servers: try Agent first, then SSH fallback
-            # Check local Agent status too
-            local_srv = db.query(Server).filter(Server.agent_type == "local").first()
-            if local_srv:
-                try:
-                    local_data = fetch_agent_metrics("127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or "")
-                    if local_data:
-                        local_srv.agent_status = "running"
-                        local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
-                        local_srv.last_seen = datetime.utcnow()
-                    else:
-                        local_srv.agent_status = "stopped"
-                except Exception as e:
-                    print(f"[AgentHealthCheck] Local Agent error: {e}")
-                    local_srv.agent_status = "stopped"
-
-        remote_servers = db.query(Server).filter(Server.agent_type != "local").all()
-        for srv in remote_servers:
             sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "", "added": 0, "updated": 0, "status": "ok"}
             try:
-                # Try Agent if running
+                agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
                 if srv.agent_status == "running" and srv.agent_port:
-                    scan_data = trigger_agent_scan(srv.host, srv.agent_port or 19100, srv.agent_token or "")
+                    scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
                     if scan_data:
                         result = _sync_agent_scan_to_db(srv, db, scan_data)
-                        _sync_port_driven_scan(srv, db, scan_data)
+                        port_result = _sync_port_driven_scan(srv, db, scan_data)
                         srv.status = ServerStatus.online.value
                         srv.last_seen = datetime.utcnow()
-                        srv.docker_available = True
-                        total_added += result["added"]
-                        total_updated += result["updated"]
+                        srv.docker_available = bool(scan_data.get('containers'))
+                        added = result["added"] + port_result["added"]
+                        updated = result["updated"] + port_result["updated"]
+                        total_added += added
+                        total_updated += updated
                         sr_detail["source"] = "agent"
-                        sr_detail["added"] = result["added"]
-                        sr_detail["updated"] = result["updated"]
+                        sr_detail["added"] = added
+                        sr_detail["updated"] = updated
+                        sr_detail["pve_guests"] = len(scan_data.get('pve_guests', []))
+                        sr_detail["pve_services"] = len(scan_data.get('pve_services', []))
                         db.commit()
                         server_results.append(sr_detail)
                         continue
-                # Agent not available, fallback to SSH
+
+                if srv.agent_type == "local":
+                    discovered = discover_docker_services(srv, db, srv.host)
+                    nginx_result = _sync_nginx_routes(srv, db)
+                    added = len(discovered) + nginx_result['added']
+                    updated = nginx_result['updated']
+                    total_added += added
+                    total_updated += updated
+                    sr_detail.update(source='docker_local', added=added, updated=updated)
+                    srv.last_seen = datetime.utcnow()
+                    db.commit()
+                    server_results.append(sr_detail)
+                    continue
+
                 client = get_ssh_client(srv)
                 if not client:
                     sr_detail["status"] = "skipped"
@@ -2914,6 +2976,37 @@ def scan_all():
                 sr_detail["error"] = str(e)
             server_results.append(sr_detail)
         return {"discovered": total_added + total_updated, "added": total_added, "updated": total_updated, "servers": server_results, "message": f"Scan complete, {total_added} added, {total_updated} updated"}
+
+
+@app.post("/api/v2/scan")
+def scan_all():
+    if not _service_scan_lock.acquire(blocking=False):
+        raise HTTPException(409, "服务扫描正在进行，请稍后重试")
+    try:
+        return _scan_all_impl()
+    finally:
+        _service_scan_lock.release()
+
+
+def _run_auto_service_scan():
+    if not _service_scan_lock.acquire(blocking=False):
+        return
+    try:
+        result = _scan_all_impl()
+        print(f"[ServiceDiscovery] added={result['added']} updated={result['updated']}", flush=True)
+    except Exception as exc:
+        print(f"[ServiceDiscovery] failed: {exc}", flush=True)
+    finally:
+        _service_scan_lock.release()
+
+
+async def background_service_discovery():
+    """Synchronize every Agent scan into the plaza instead of leaving it in Agent cache."""
+    await asyncio.sleep(30)
+    interval = max(60, int(os.getenv('SERVICE_SCAN_INTERVAL_SECONDS', '300')))
+    while True:
+        await asyncio.to_thread(_run_auto_service_scan)
+        await asyncio.sleep(interval)
 
 
 # === Monitor (Prometheus proxy) ===

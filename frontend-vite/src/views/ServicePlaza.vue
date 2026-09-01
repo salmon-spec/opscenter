@@ -9,6 +9,7 @@
         <input v-model="search" class="input" style="width:280px" placeholder="搜索服务名称 / 地址…" />
         <button class="btn btn-primary" @click="openAdd">添加服务</button>
         <button class="btn" @click="openHidden">隐藏服务<span v-if="hiddenServices.length"> ({{ hiddenServices.length }})</span></button>
+        <button class="btn" :disabled="scanBusy" @click="scanAllServices">{{ scanBusy ? '扫描中…' : '扫描全部主机' }}</button>
         <button class="btn" @click="reload">刷新</button>
       </div>
     </div>
@@ -135,6 +136,7 @@ const addVisible = ref(false)
 const hiddenVisible = ref(false)
 const hiddenLoading = ref(false)
 const saving = ref(false)
+const scanBusy = ref(false)
 const categories = ['应用服务', '代码与CI/CD', '监控与日志', '安全与运维', '开发工具', '文档工具', '未分类']
 const emptyForm = () => ({ server_id: '', name: '', url: '', category: '应用服务', description: '', health_path: '', pinned: false, account: '', password: '' })
 const form = ref(emptyForm())
@@ -236,6 +238,20 @@ async function loadHosts() {
   if (!hosts.value.length) hosts.value = await api.get('/servers')
 }
 
+async function scanAllServices() {
+  scanBusy.value = true
+  try {
+    const result = await api.post('/scan')
+    await reload(true)
+    const failed = (result.servers || []).filter((item) => item.status !== 'ok').length
+    toast(`扫描完成：新增 ${result.added || 0}，更新 ${result.updated || 0}${failed ? `，${failed} 台主机未完成` : ''}`, failed ? 'warning' : 'success')
+  } catch (error) {
+    toast(`扫描失败：${error.message}`, 'error')
+  } finally {
+    scanBusy.value = false
+  }
+}
+
 async function openAdd() {
   try {
     await loadHosts()
@@ -302,7 +318,7 @@ function kindLabel(service) {
 async function hideService(service) {
   if (!confirm(`确认从服务广场隐藏「${service.name}」？之后可在“隐藏服务”中恢复。`)) return
   try {
-    if (service.manual && service.service_id) {
+    if (service.service_id) {
       await api.put(`/services/${service.service_id}`, { hidden: true })
     } else {
       await api.put(`/services/plaza/${encodeURIComponent(service.key)}/visibility`, { hidden: true })

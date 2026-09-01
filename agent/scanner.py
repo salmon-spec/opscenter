@@ -11,6 +11,10 @@ import os
 import subprocess
 import re
 import time
+import ipaddress
+import socket
+import ssl
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def run_cmd(cmd, timeout=5):
@@ -129,12 +133,14 @@ def scan_docker_containers():
                     host_part = p.split('->')[0]
                     container_part = p.split('->')[1]
                     host_port = host_part.split(':')[-1] if ':' in host_part else host_part
+                    bind_ip = host_part.rsplit(':', 1)[0].strip('[]') if ':' in host_part else '0.0.0.0'
                     container_port = container_part.split('/')[0] if '/' in container_part else container_part
                     proto = container_part.split('/')[1] if '/' in container_part else 'tcp'
                     ports.append({
                         'host_port': host_port,
                         'container_port': container_port,
                         'proto': proto,
+                        'bind_ip': bind_ip,
                         'raw': p,
                     })
 
@@ -384,19 +390,168 @@ PORT_PROTOCOL_HINTS = {
     27017: 'mongodb', 9200: 'http', 15672: 'http',
 }
 
+PVE_WEB_PORTS = (
+    80, 443, 3000, 3001, 5000, 5601, 5678, 8000, 8001, 8006, 8080, 8081,
+    8082, 8083, 8088, 8090, 8091, 8092, 8093, 8094, 8443, 8888, 9000,
+    9090, 9091, 9443, 9999, 12110, 15672,
+)
+
+
+def _usable_guest_ip(value):
+    """Return a routable guest address, excluding loopback/link-local/container bridges."""
+    try:
+        address = ipaddress.ip_address(str(value).split('/')[0])
+    except ValueError:
+        return ''
+    if address.version != 4 or address.is_loopback or address.is_link_local or address.is_unspecified:
+        return ''
+    if address in ipaddress.ip_network('172.17.0.0/16'):
+        return ''
+    return str(address)
+
+
+def _neighbor_ips(config):
+    macs = {
+        value.lower()
+        for value in re.findall(r'(?:virtio|e1000|vmxnet3|rtl8139|hwaddr)[=:]([0-9a-f:]{17})', config, re.I)
+    }
+    if not macs:
+        return []
+    result = []
+    for line in run_cmd(['ip', 'neigh', 'show'], timeout=4).splitlines():
+        match = re.search(r'^(\S+).*\blladdr\s+([0-9a-f:]{17})\b', line, re.I)
+        if match and match.group(2).lower() in macs:
+            result.append(match.group(1))
+    return result
+
+
+def _guest_ips(guest):
+    vmid = str(guest.get('vmid', ''))
+    guest_type = guest.get('type', '')
+    if not vmid.isdigit():
+        return []
+    candidates = []
+    if guest_type == 'lxc':
+        output = run_cmd(['pct', 'exec', vmid, '--', 'hostname', '-I'], timeout=5)
+        candidates.extend(output.split())
+        config = run_cmd(['pct', 'config', vmid], timeout=5)
+        candidates.extend(re.findall(r'ip=([^,\s]+)', config))
+        candidates.extend(_neighbor_ips(config))
+    elif guest_type == 'qemu':
+        output = run_cmd(['qm', 'guest', 'cmd', vmid, 'network-get-interfaces'], timeout=8)
+        try:
+            payload = json.loads(output or '[]')
+            for interface in payload if isinstance(payload, list) else payload.get('result', []):
+                for address in interface.get('ip-addresses', []):
+                    candidates.append(address.get('ip-address', ''))
+        except (TypeError, ValueError):
+            pass
+        config = run_cmd(['qm', 'config', vmid], timeout=5)
+        candidates.extend(re.findall(r'ip=([^,\s]+)', config))
+        candidates.extend(_neighbor_ips(config))
+    result = []
+    for value in candidates:
+        address = _usable_guest_ip(value)
+        if address and address not in result:
+            result.append(address)
+    def priority(value):
+        if value.startswith('10.66.66.'):
+            return 0
+        if value.startswith('192.168.'):
+            return 1
+        if value.startswith('172.17.'):
+            return 4
+        return 2 if ipaddress.ip_address(value).is_private else 3
+    return sorted(result, key=priority)[:2]
+
+
+def scan_pve_guests():
+    """Discover running Proxmox VE QEMU/LXC guests and their management IPs."""
+    if not os.path.exists('/etc/pve'):
+        return []
+    output = run_cmd(['pvesh', 'get', '/cluster/resources', '--type', 'vm', '--output-format', 'json'], timeout=10)
+    try:
+        resources = json.loads(output or '[]')
+    except ValueError:
+        return []
+    guests = []
+    for item in resources if isinstance(resources, list) else []:
+        guest_type = item.get('type')
+        if guest_type not in ('qemu', 'lxc') or item.get('status') != 'running':
+            continue
+        guest = {
+            'vmid': int(item.get('vmid', 0)),
+            'name': item.get('name') or f"{guest_type}-{item.get('vmid')}",
+            'type': guest_type,
+            'status': 'running',
+            'node': item.get('node', ''),
+        }
+        guest['ips'] = _guest_ips(guest)
+        guests.append(guest)
+    return guests[:50]
+
+
+def _probe_guest_port(address, port):
+    connection = None
+    try:
+        connection = socket.create_connection((address, port), timeout=0.2)
+        scheme = 'https' if port in (443, 8006, 8443, 9443) else 'http'
+        if scheme == 'https':
+            context = ssl._create_unverified_context()
+            connection = context.wrap_socket(connection, server_hostname=address)
+        connection.settimeout(0.4)
+        connection.sendall(f'HEAD / HTTP/1.0\r\nHost: {address}\r\n\r\n'.encode('ascii'))
+        if not connection.recv(16).startswith(b'HTTP/'):
+            return None
+        return {'address': address, 'port': port, 'url': f'{scheme}://{address}:{port}/'}
+    except (OSError, ssl.SSLError):
+        return None
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+
+def scan_pve_guest_services(guests):
+    """Probe a bounded web-port allowlist only on IPs owned by discovered PVE guests."""
+    targets = [(guest, address, port) for guest in guests for address in guest.get('ips', []) for port in PVE_WEB_PORTS]
+    services = []
+    with ThreadPoolExecutor(max_workers=48) as pool:
+        futures = {pool.submit(_probe_guest_port, address, port): guest for guest, address, port in targets}
+        for future in as_completed(futures):
+            result = future.result()
+            if not result:
+                continue
+            guest = futures[future]
+            result.update({
+                'vmid': guest['vmid'],
+                'guest_name': guest['name'],
+                'guest_type': guest['type'],
+                'name': f"{guest['name']} · {result['port']}",
+                'source': 'pve_guest',
+            })
+            services.append(result)
+    return sorted(services, key=lambda item: (item['vmid'], item['port']))
+
 
 def scan_all():
     """Run all scanners and return combined result."""
     now = time.time()
-    return {
+    pve_guests = scan_pve_guests()
+    result = {
         'containers': scan_docker_containers(),
         'stopped_containers': scan_stopped_containers(),
         'ports': scan_listening_ports(),
         'systemd_services': scan_systemd_services(),
         'nginx_services': scan_nginx_configs(),
+        'pve_guests': pve_guests,
+        'pve_services': scan_pve_guest_services(pve_guests),
         'scanned_at': now,
-        'scan_duration_ms': int((time.time() - now) * 1000),
     }
+    result['scan_duration_ms'] = int((time.time() - now) * 1000)
+    return result
 
 
 def diff_scans(old_result, new_result):

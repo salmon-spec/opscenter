@@ -153,6 +153,52 @@ def test_manual_web_service_is_merged_without_credentials(monkeypatch):
     assert "account" not in row and "password" not in row
 
 
+def test_scanned_web_service_is_merged_into_plaza(monkeypatch):
+    server = SimpleNamespace(id="server-pve", host="10.66.66.3", name="主机2 PVE")
+    scanned = SimpleNamespace(
+        id="scan-1", server_id=server.id, source="agent", hidden=False,
+        name="PVE Guest App", url="http://10.66.66.31:18080/", health_path=None,
+        description="PVE 来宾应用", category="应用服务", icon="server",
+        account="", password="",
+    )
+
+    class Query:
+        def __init__(self, model):
+            self.model = model
+
+        def filter(self, *_args):
+            return self
+
+        def all(self):
+            if self.model is plaza.Service:
+                return [scanned]
+            if self.model in (plaza.PlazaServicePreference, plaza.PlazaServiceProfile):
+                return []
+            return [server]
+
+    class Db:
+        def query(self, model):
+            return Query(model)
+
+    @contextmanager
+    def fake_db():
+        yield Db()
+
+    monkeypatch.setattr(plaza, "get_db", fake_db)
+    monkeypatch.setattr(
+        plaza,
+        "_health_checks",
+        lambda catalog: {
+            item["key"]: {"status": "up", "http_status": 200, "latency_ms": 1, "health_error": ""}
+            for item in catalog
+        },
+    )
+    row = next(item for item in plaza.list_plaza_services() if item["key"] == "scan-scan-1")
+    assert row["service_id"] == "scan-1"
+    assert row["scanned"] is True and row["manual"] is False
+    assert row["source"] == "agent"
+
+
 def test_catalog_visibility_is_persisted(monkeypatch):
     created = []
 
