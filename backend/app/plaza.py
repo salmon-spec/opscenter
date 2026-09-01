@@ -652,7 +652,14 @@ def _health_checks(catalog: list[dict]) -> dict[str, dict]:
                     "health_error": "", "checked_at": None,
                 }
         active = [item for item in catalog if item.get("probe_enabled") is not False]
-        stale = not _cached_checks or now - _cached_at >= _CACHE_TTL
+        # A scan can add Web services while the catalog cache is still fresh.
+        # Probe those new entries immediately instead of leaving them "unknown"
+        # until the next timed refresh.
+        stale = (
+            not _cached_checks
+            or now - _cached_at >= _CACHE_TTL
+            or any(item["key"] not in _cached_checks for item in active)
+        )
         if active and stale and not _refreshing:
             _refreshing = True
             threading.Thread(

@@ -28,6 +28,27 @@ def test_health_probe_is_stale_while_revalidate_and_never_blocks(monkeypatch):
     assert plaza._cached_checks["fast-ui"]["status"] == "up"
 
 
+def test_health_probe_refreshes_new_service_even_when_cache_is_fresh(monkeypatch):
+    monkeypatch.setattr(plaza, "_cached_checks", {
+        "known-ui": {"status": "up", "http_status": 200, "latency_ms": 1, "health_error": ""},
+    })
+    monkeypatch.setattr(plaza, "_cached_at", time.monotonic())
+    monkeypatch.setattr(plaza, "_refreshing", False)
+    monkeypatch.setattr(plaza, "_persist_probe_results", lambda *_args: None)
+    monkeypatch.setattr(plaza, "_probe", lambda item: {
+        "status": "up", "http_status": 200, "latency_ms": 1,
+        "health_error": "", "checked_at": "now",
+    })
+    plaza._health_checks([
+        {"key": "known-ui", "enabled": True, "health_url": "http://example.test/"},
+        {"key": "new-ui", "enabled": True, "health_url": "http://example.test/new"},
+    ])
+    deadline = time.time() + 1
+    while plaza._refreshing and time.time() < deadline:
+        time.sleep(0.02)
+    assert plaza._cached_checks["new-ui"]["status"] == "up"
+
+
 class _Query:
     def __init__(self, model):
         self.model = model
