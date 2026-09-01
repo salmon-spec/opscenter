@@ -6,29 +6,28 @@
         <p class="view-sub">统一入口 · 完整信息与登录凭证集中管理</p>
       </div>
       <div style="display:flex;gap:8px">
-        <input v-model="search" class="input" style="width:280px" placeholder="搜索服务名称 / 地址…" />
-        <button class="btn btn-primary" @click="openAdd">添加服务</button>
-        <button class="btn" @click="openHidden">隐藏服务<span v-if="hiddenServices.length"> ({{ hiddenServices.length }})</span></button>
-        <button class="btn" :disabled="scanBusy" @click="scanAllServices">{{ scanBusy ? '扫描中…' : '扫描全部主机' }}</button>
-        <button class="btn" @click="reload">刷新</button>
+        <input v-model="search" class="input" style="width:280px" :disabled="sortMode" placeholder="搜索服务名称 / 地址…" />
+        <template v-if="sortMode"><button class="btn btn-primary" :disabled="orderSaving" @click="saveOrder">{{ orderSaving ? '保存中…' : '保存顺序' }}</button><button class="btn" @click="cancelOrder">取消排序</button></template>
+        <button v-else class="btn" @click="startOrder">调整顺序</button>
+        <template v-if="!sortMode"><button class="btn btn-primary" @click="openAdd">添加服务</button><button class="btn" @click="openHidden">隐藏服务<span v-if="hiddenServices.length"> ({{ hiddenServices.length }})</span></button><button class="btn" :disabled="scanBusy" @click="scanAllServices">{{ scanBusy ? '扫描中…' : '扫描全部主机' }}</button><button class="btn" @click="reload">刷新</button></template>
       </div>
     </div>
 
     <div class="health-overview">
-      <button class="health-stat" :class="{active:healthFilter==='all'}" @click="healthFilter='all'"><strong>{{ overview.summary.total ?? services.length }}</strong><span>全部服务</span></button>
-      <button class="health-stat is-up" :class="{active:healthFilter==='up'}" @click="healthFilter='up'"><strong>{{ overview.summary.up ?? statusCount('up') }}</strong><span>在线</span></button>
-      <button class="health-stat is-down" :class="{active:healthFilter==='down'}" @click="healthFilter='down'"><strong>{{ overview.summary.down ?? statusCount('down') }}</strong><span>离线</span></button>
-      <button class="health-stat is-warn" :class="{active:healthFilter==='degraded'}" @click="healthFilter='degraded'"><strong>{{ overview.summary.degraded ?? statusCount('degraded') }}</strong><span>波动中</span></button>
-      <button class="health-stat" :class="{active:healthFilter==='unknown'}" @click="healthFilter='unknown'"><strong>{{ (overview.summary.unknown ?? statusCount('unknown')) + (overview.summary.disabled ?? statusCount('disabled')) }}</strong><span>未检测 / 停用</span></button>
+      <button class="health-stat" :disabled="sortMode" :class="{active:healthFilter==='all'}" @click="healthFilter='all'"><strong>{{ overview.summary.total ?? services.length }}</strong><span>全部服务</span></button>
+      <button class="health-stat is-up" :disabled="sortMode" :class="{active:healthFilter==='up'}" @click="healthFilter='up'"><strong>{{ overview.summary.up ?? statusCount('up') }}</strong><span>在线</span></button>
+      <button class="health-stat is-down" :disabled="sortMode" :class="{active:healthFilter==='down'}" @click="healthFilter='down'"><strong>{{ overview.summary.down ?? statusCount('down') }}</strong><span>离线</span></button>
+      <button class="health-stat is-warn" :disabled="sortMode" :class="{active:healthFilter==='degraded'}" @click="healthFilter='degraded'"><strong>{{ overview.summary.degraded ?? statusCount('degraded') }}</strong><span>波动中</span></button>
+      <button class="health-stat" :disabled="sortMode" :class="{active:healthFilter==='unknown'}" @click="healthFilter='unknown'"><strong>{{ (overview.summary.unknown ?? statusCount('unknown')) + (overview.summary.disabled ?? statusCount('disabled')) }}</strong><span>未检测 / 停用</span></button>
       <div class="health-stat availability"><strong>{{ overview.summary.average_uptime_percent == null ? '-' : `${overview.summary.average_uptime_percent}%` }}</strong><span>24h 综合可用率</span><small v-if="overview.generated_at">统计于 {{ shortTime(overview.generated_at) }}</small></div>
     </div>
 
     <!-- 分组标签 -->
     <div class="group-tabs">
-      <button class="g-tab" :class="{ active: activeGroup === 'all' }" @click="activeGroup = 'all'">全部 ({{ searched.length }})</button>
+      <button class="g-tab" :disabled="sortMode" :class="{ active: activeGroup === 'all' }" @click="activeGroup = 'all'">全部 ({{ searched.length }})</button>
       <button
         v-for="g in visibleGroups" :key="g.id"
-        class="g-tab" :class="{ active: activeGroup === g.id }"
+        class="g-tab" :disabled="sortMode" :class="{ active: activeGroup === g.id }"
         @click="activeGroup = g.id"
       >{{ g.name }} ({{ groupCount(g) }})</button>
     </div>
@@ -36,10 +35,10 @@
     <div v-if="loading && !services.length" class="loading"><span class="spinner"></span>正在加载服务…</div>
     <EmptyState v-else-if="!filtered.length" icon="🔍" text="没有匹配的服务" />
     <div v-else class="svc-grid">
-      <div v-for="s in filtered" :key="s.id" class="card svc-card" @click="openDetail(s)" @mouseenter="warmService(s)">
+      <div v-for="s in filtered" :key="s.id" class="card svc-card" :class="{'sorting-card':sortMode}" :draggable="sortMode" @dragstart="draggedKey=s.key" @dragover.prevent @drop="dropService(s.key)" @click="!sortMode&&openDetail(s)" @mouseenter="warmService(s)">
         <div class="svc-top">
           <span class="svc-icon" :style="{ background: groupColor(s) + '1a', color: groupColor(s) }">{{ iconOf(s) }}</span>
-          <span class="dot" :class="statusDotClass(s.status)"></span>
+          <div v-if="sortMode" class="order-actions"><button class="btn btn-ghost btn-sm" title="上移" @click.stop="moveService(s,-1)">↑</button><button class="btn btn-ghost btn-sm" title="下移" @click.stop="moveService(s,1)">↓</button></div><span v-else class="dot" :class="statusDotClass(s.status)"></span>
         </div>
         <div class="svc-name">{{ s.name }}</div>
         <div class="svc-desc">{{ s.description || s.category || '' }}</div>
@@ -47,7 +46,7 @@
           <span>{{ s.server_name || '' }}</span>
           <span>{{ s.has_credentials ? '🔐 已配凭证' : (s.version ? `v${s.version}` : '') }}</span>
         </div>
-        <div class="svc-actions">
+        <div v-if="!sortMode" class="svc-actions">
           <a
             class="btn btn-primary btn-sm enter-btn"
             :href="s.entry_url" target="_blank" rel="noopener noreferrer"
@@ -137,6 +136,7 @@ const hiddenVisible = ref(false)
 const hiddenLoading = ref(false)
 const saving = ref(false)
 const scanBusy = ref(false)
+const sortMode = ref(false), sortDraft = ref([]), draggedKey = ref(''), orderSaving = ref(false)
 const categories = ['应用服务', '代码与CI/CD', '监控与日志', '安全与运维', '开发工具', '文档工具', '未分类']
 const emptyForm = () => ({ server_id: '', name: '', url: '', category: '应用服务', description: '', health_path: '', pinned: false, account: '', password: '' })
 const form = ref(emptyForm())
@@ -184,7 +184,7 @@ function groupCount(g) {
 
 const searched = computed(() => {
   const kw = search.value.trim().toLowerCase()
-  return services.value
+  return (sortMode.value ? sortDraft.value : services.value)
     .filter((s) => !kw || s.name.toLowerCase().includes(kw) || (s.entry_url || '').toLowerCase().includes(kw) || (s.description || '').toLowerCase().includes(kw))
 })
 
@@ -192,7 +192,6 @@ const filtered = computed(() => {
   return searched.value
     .filter((s) => activeGroup.value === 'all' || groupOf(s) === activeGroup.value)
     .filter((s) => healthFilter.value === 'all' || (healthFilter.value === 'unknown' ? ['unknown','disabled'].includes(s.status || 'unknown') : s.status === healthFilter.value))
-    .sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0))
 })
 
 const visibleGroups = computed(() => groups.value.filter((g) => groupCount(g) > 0))
@@ -208,6 +207,12 @@ function openDetail(s) {
   selected.value = s
   drawerVisible.value = true
 }
+
+function startOrder(){search.value='';activeGroup.value='all';healthFilter.value='all';sortDraft.value=[...services.value];sortMode.value=true}
+function cancelOrder(){sortMode.value=false;sortDraft.value=[];draggedKey.value=''}
+function moveService(service,delta){const from=sortDraft.value.findIndex(item=>item.key===service.key),to=from+delta;if(from<0||to<0||to>=sortDraft.value.length)return;const rows=[...sortDraft.value];rows.splice(to,0,rows.splice(from,1)[0]);sortDraft.value=rows}
+function dropService(targetKey){const from=sortDraft.value.findIndex(item=>item.key===draggedKey.value),to=sortDraft.value.findIndex(item=>item.key===targetKey);if(from<0||to<0||from===to)return;const rows=[...sortDraft.value];rows.splice(to,0,rows.splice(from,1)[0]);sortDraft.value=rows;draggedKey.value=''}
+async function saveOrder(){orderSaving.value=true;try{await api.put('/services/plaza/order',{ordered_keys:sortDraft.value.map(item=>item.key)});services.value=[...sortDraft.value];localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}));cancelOrder();toast('服务顺序已保存','success')}catch(error){toast(`顺序保存失败：${error.message}`,'error')}finally{orderSaving.value=false}}
 
 function statusCount(status){return services.value.filter(s=>(s.status||'unknown')===status).length}
 function shortTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'-':date.toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'})}
@@ -357,6 +362,7 @@ onMounted(()=>reload(true))
 .svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
 .svc-card { display: flex; flex-direction: column; gap: 8px; cursor: pointer; transition: all .15s; }
 .svc-card:hover { border-color: var(--brand); box-shadow: 0 8px 22px rgba(37,99,235,.12); transform: translateY(-2px); }
+.sorting-card{cursor:grab;border-style:dashed}.sorting-card:active{cursor:grabbing}.order-actions{display:flex;gap:2px}
 .svc-top { display: flex; align-items: flex-start; justify-content: space-between; }
 .svc-icon {
   width: 40px; height: 40px; border-radius: 10px; display: flex; align-items: center;

@@ -2,6 +2,7 @@
 import socket
 import uuid
 from datetime import datetime, timedelta
+from http.client import BadStatusLine
 from urllib.error import URLError
 
 import pytest
@@ -12,6 +13,7 @@ from app.main import Base, SessionLocal, app, engine
 from app.models import (
     PlazaCredentialAccess, PlazaHealthIncident, PlazaHealthState,
     PlazaProbeResult, PlazaServiceProfile,
+    PlazaServiceCredential,
 )
 from app import plaza
 
@@ -92,6 +94,54 @@ def test_blank_password_preserves_existing_and_explicit_clear_removes_it():
     assert client.post("/api/v2/services/plaza/gitea/credentials/reveal").status_code == 404
 
 
+def test_plaza_order_is_persisted_for_catalog_entries(monkeypatch):
+    monkeypatch.setattr(plaza, "_health_checks", lambda _items: {})
+    response = client.put("/api/v2/services/plaza/order", json={
+        "ordered_keys": ["jenkins", "gitea", "gitlab"],
+    })
+    assert response.status_code == 200, response.text
+    keys = [row["key"] for row in client.get("/api/v2/services/plaza").json()]
+    assert keys[:3] == ["jenkins", "gitea", "gitlab"]
+    with SessionLocal() as db:
+        orders = {
+            row.plaza_key: row.sort_order for row in db.query(PlazaServiceProfile).filter(
+                PlazaServiceProfile.plaza_key.in_(["jenkins", "gitea", "gitlab"]),
+            ).all()
+        }
+        assert orders == {"jenkins": 0, "gitea": 1, "gitlab": 2}
+
+
+def test_multiple_credentials_are_encrypted_revealed_and_deleted():
+    first = client.post("/api/v2/services/plaza/gitea/credentials", json={
+        "label": "管理员", "username": "root-admin", "password": "root-secret",
+        "notes": "仅用于维护", "is_default": True,
+    })
+    second = client.post("/api/v2/services/plaza/gitea/credentials", json={
+        "label": "只读账号", "username": "viewer", "password": "viewer-secret",
+    })
+    assert first.status_code == 201 and second.status_code == 201
+    rows = client.get("/api/v2/services/plaza/gitea/credentials").json()
+    assert [row["label"] for row in rows] == ["管理员", "只读账号"]
+    assert all("password" not in row and "secret_ciphertext" not in row for row in rows)
+    with SessionLocal() as db:
+        stored = db.query(PlazaServiceCredential).filter(
+            PlazaServiceCredential.plaza_key == "gitea",
+        ).all()
+        assert all("secret" not in (row.secret_ciphertext or "") for row in stored)
+
+    revealed = client.post(
+        f"/api/v2/services/plaza/gitea/credentials/{second.json()['id']}/reveal",
+    )
+    assert revealed.status_code == 200
+    assert revealed.headers["cache-control"].startswith("no-store")
+    assert revealed.json()["password"] == "viewer-secret"
+    assert client.delete(
+        f"/api/v2/services/plaza/gitea/credentials/{first.json()['id']}",
+    ).status_code == 200
+    remaining = client.get("/api/v2/services/plaza/gitea/credentials").json()
+    assert len(remaining) == 1 and remaining[0]["is_default"] is True
+
+
 def test_manual_service_creation_stores_credentials_in_profile_only():
     server_id = add_host("10.66.66.20")
     response = client.post(f"/api/v2/services?server_id={server_id}", json={
@@ -159,6 +209,7 @@ def test_probe_success_status_validation():
     (URLError(ConnectionRefusedError(10061, "refused")), "connection_refused", "目标拒绝连接"),
     (URLError(socket.timeout("timed out")), "timeout", "连接超时"),
     (URLError(socket.gaierror(11001, "host not found")), "dns_error", "域名解析失败"),
+    (BadStatusLine("invalid response"), "network_error", "网络连接失败"),
 ])
 def test_probe_network_errors_are_classified(exc, expected_code, expected_message):
     assert plaza._classify_probe_exception(exc) == (expected_code, expected_message)

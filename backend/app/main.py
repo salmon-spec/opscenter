@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
+from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
 from app.credential_crypto import encrypt_secret
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
@@ -1119,6 +1119,8 @@ def _ensure_new_columns():
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_failure_threshold INTEGER DEFAULT 3 NOT NULL",
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_recovery_threshold INTEGER DEFAULT 1 NOT NULL",
         "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS probe_notifications_enabled BOOLEAN DEFAULT TRUE NOT NULL",
+        "ALTER TABLE plaza_service_profiles ADD COLUMN IF NOT EXISTS sort_order INTEGER",
+        "ALTER TABLE plaza_credential_access ADD COLUMN IF NOT EXISTS credential_id UUID",
         "ALTER TABLE plaza_probe_results ADD COLUMN IF NOT EXISTS error_code VARCHAR(40)",
         "ALTER TABLE plaza_health_states ADD COLUMN IF NOT EXISTS last_error_code VARCHAR(40)",
         "ALTER TABLE plaza_health_incidents ADD COLUMN IF NOT EXISTS first_error_code VARCHAR(40)",
@@ -1160,6 +1162,23 @@ def _migrate_legacy_service_credentials():
                 service.account = ""
                 service.password = ""
                 changed = True
+            profiles = db.query(PlazaServiceProfile).filter(
+                (PlazaServiceProfile.username != None) | (PlazaServiceProfile.secret_ciphertext != None),  # noqa: E711
+            ).all()
+            for profile in profiles:
+                if not (profile.username or profile.secret_ciphertext):
+                    continue
+                exists = db.query(PlazaServiceCredential.id).filter(
+                    PlazaServiceCredential.plaza_key == profile.plaza_key,
+                ).first()
+                if not exists:
+                    db.add(PlazaServiceCredential(
+                        plaza_key=profile.plaza_key, label="默认账号",
+                        username=profile.username or "",
+                        secret_ciphertext=profile.secret_ciphertext,
+                        notes=profile.login_notes, is_default=True, sort_order=0,
+                    ))
+                    changed = True
             if changed:
                 db.commit()
     except Exception as exc:
@@ -2476,11 +2495,21 @@ def create_service(data: ServiceCreate, server_id: str = Query(...)):
         )
         db.add(svc)
         db.flush()
+        last_order = db.query(PlazaServiceProfile.sort_order).filter(
+            PlazaServiceProfile.sort_order != None,  # noqa: E711
+        ).order_by(PlazaServiceProfile.sort_order.desc()).first()
+        profile = PlazaServiceProfile(
+            plaza_key=f"manual-{svc.id}", server_id=srv.id,
+            sort_order=(last_order[0] + 1) if last_order else 1000,
+        )
+        db.add(profile)
         if data.account or data.password:
-            db.add(PlazaServiceProfile(
-                plaza_key=f"manual-{svc.id}", server_id=srv.id,
-                username=data.account or "",
-                secret_ciphertext=encrypt_secret(data.password or ""),
+            profile.username = data.account or ""
+            profile.secret_ciphertext = encrypt_secret(data.password or "")
+            db.add(PlazaServiceCredential(
+                plaza_key=profile.plaza_key, label="默认账号",
+                username=data.account or "", secret_ciphertext=profile.secret_ciphertext,
+                is_default=True, sort_order=0,
             ))
         db.commit()
         db.refresh(svc)
@@ -2510,6 +2539,19 @@ def update_service(service_id: str, data: ServiceUpdate):
                 profile.username = account or ""
             if password_present:
                 profile.secret_ciphertext = encrypt_secret(password or "")
+            credential = db.query(PlazaServiceCredential).filter(
+                PlazaServiceCredential.plaza_key == plaza_key,
+                PlazaServiceCredential.is_default == True,  # noqa: E712
+            ).first()
+            if not credential:
+                credential = PlazaServiceCredential(
+                    plaza_key=plaza_key, label="默认账号", is_default=True, sort_order=0,
+                )
+                db.add(credential)
+            if account_present:
+                credential.username = account or ""
+            if password_present:
+                credential.secret_ciphertext = profile.secret_ciphertext
             svc.account = ""
             svc.password = ""
         db.commit()
@@ -2546,6 +2588,9 @@ def delete_service(service_id: str):
             raise HTTPException(400, "Cannot delete auto-discovered service; hide it instead")
         db.query(PlazaServiceProfile).filter(
             PlazaServiceProfile.plaza_key == f"manual-{svc.id}",
+        ).delete()
+        db.query(PlazaServiceCredential).filter(
+            PlazaServiceCredential.plaza_key == f"manual-{svc.id}",
         ).delete()
         db.delete(svc)
         db.commit()

@@ -12,6 +12,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from http.client import HTTPException as HTTPProtocolError
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as UrlRequest, urlopen
@@ -26,7 +27,7 @@ from app.database import get_db
 from app.models import (
     PlazaCredentialAccess, PlazaHealthIncident, PlazaHealthSilence,
     PlazaHealthState, PlazaProbeResult, PlazaServicePreference,
-    PlazaServiceProfile, Server, Service, ServiceSource,
+    PlazaServiceCredential, PlazaServiceProfile, Server, Service, ServiceSource,
 )
 from app.topology import _service_relations
 
@@ -44,6 +45,50 @@ _cycle_lock = threading.Lock()
 
 class PlazaVisibilityUpdate(BaseModel):
     hidden: bool
+
+
+class PlazaOrderUpdate(BaseModel):
+    ordered_keys: list[str] = Field(min_length=1, max_length=200)
+
+    @field_validator("ordered_keys")
+    @classmethod
+    def validate_ordered_keys(cls, value: list[str]):
+        if len(value) != len(set(value)):
+            raise ValueError("服务排序中不能包含重复项")
+        if any(not key or len(key) > 140 for key in value):
+            raise ValueError("服务标识格式不正确")
+        return value
+
+
+class PlazaCredentialCreate(BaseModel):
+    label: str = Field(default="账号", min_length=1, max_length=100)
+    username: str = Field(default="", max_length=200)
+    password: str = Field(default="", max_length=1000)
+    notes: str = Field(default="", max_length=4000)
+    is_default: bool = False
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, value: str):
+        if not value.strip():
+            raise ValueError("凭证名称不能为空")
+        return value.strip()
+
+
+class PlazaCredentialUpdate(BaseModel):
+    label: str | None = Field(None, min_length=1, max_length=100)
+    username: str | None = Field(None, max_length=200)
+    password: str | None = Field(None, max_length=1000)
+    notes: str | None = Field(None, max_length=4000)
+    is_default: bool | None = None
+    clear_password: bool = False
+
+    @field_validator("label")
+    @classmethod
+    def validate_label(cls, value: str | None):
+        if value is not None and not value.strip():
+            raise ValueError("凭证名称不能为空")
+        return value.strip() if value is not None else value
 
 
 class PlazaServiceUpdate(BaseModel):
@@ -207,6 +252,7 @@ def _apply_profile(item: dict, profile: PlazaServiceProfile | None, servers_by_i
         item["owner"] = ""
         item["tags"] = []
         item["profile_updated_at"] = None
+        item["sort_order"] = None
         item.update({
             "probe_enabled": True, "probe_interval_seconds": 60,
             "probe_timeout_seconds": 4.0,
@@ -232,6 +278,7 @@ def _apply_profile(item: dict, profile: PlazaServiceProfile | None, servers_by_i
     item["owner"] = profile.owner or ""
     item["tags"] = profile.tags or []
     item["profile_updated_at"] = profile.updated_at.isoformat() if profile.updated_at else None
+    item["sort_order"] = profile.sort_order
     item["probe_enabled"] = profile.probe_enabled is not False
     item["probe_interval_seconds"] = profile.probe_interval_seconds or 60
     item["probe_timeout_seconds"] = profile.probe_timeout_seconds or 4.0
@@ -273,10 +320,16 @@ def _scanned_item(service: Service, server: Server | None) -> dict:
 
 def _load_plaza_items() -> tuple[list[dict], dict[str, Server]]:
     catalog = load_catalog()
+    for index, item in enumerate(catalog):
+        item["_default_order"] = index
     with get_db() as db:
         servers = {server.host: server for server in db.query(Server).all()}
         servers_by_id = {server.id: server for server in servers.values()}
         profiles = {row.plaza_key: row for row in db.query(PlazaServiceProfile).all()}
+        credentials_by_key: dict[str, list] = {}
+        for row in db.query(PlazaServiceCredential).all():
+            if hasattr(row, "plaza_key"):
+                credentials_by_key.setdefault(row.plaza_key, []).append(row)
         hidden_catalog_keys = {
             row.catalog_key for row in db.query(PlazaServicePreference).filter(
                 PlazaServicePreference.hidden == True,  # noqa: E712
@@ -290,7 +343,7 @@ def _load_plaza_items() -> tuple[list[dict], dict[str, Server]]:
         catalog = [_apply_profile(dict(item), profiles.get(item["key"]), servers_by_id) for item in catalog]
         catalog_urls = {item["entry_url"].rstrip("/") for item in catalog}
         catalog = [item for item in catalog if item["key"] not in hidden_catalog_keys]
-        for service in manual_services:
+        for manual_index, service in enumerate(manual_services):
             if getattr(service, "source", None) != ServiceSource.manual.value:
                 continue
             url = (service.url or "").rstrip("/")
@@ -298,10 +351,22 @@ def _load_plaza_items() -> tuple[list[dict], dict[str, Server]]:
                 continue
             key = f"manual-{service.id}"
             base_item = _manual_item(service, servers_by_id.get(service.server_id))
+            base_item["_default_order"] = 10000 + manual_index
             catalog.append(_apply_profile(
                 base_item, profiles.get(key), servers_by_id,
             ))
             catalog_urls.add(url)
+        for item in catalog:
+            credentials = credentials_by_key.get(item["key"], [])
+            if credentials:
+                item["credential_count"] = len(credentials)
+                item["has_credentials"] = any(bool(row.secret_ciphertext) for row in credentials)
+            else:
+                item["credential_count"] = 1 if item.get("credential_username") or item.get("has_credentials") else 0
+        catalog.sort(key=lambda item: (
+            item.get("sort_order") if item.get("sort_order") is not None else item.get("_default_order", 10000),
+            item["key"],
+        ))
     return catalog, servers
 
 
@@ -371,7 +436,7 @@ def _probe(item: dict) -> dict:
         status = "up" if code in success_codes else "down"
         error = "" if status == "up" else f"HTTP {code} 状态不符合成功策略"
         error_code = "" if status == "up" else "http_status"
-    except (URLError, TimeoutError, OSError) as exc:
+    except (URLError, TimeoutError, OSError, HTTPProtocolError) as exc:
         code = None
         status = "down"
         error_code, error = _classify_probe_exception(exc)
@@ -733,6 +798,33 @@ def _serialize_silence(row: PlazaHealthSilence) -> dict:
     }
 
 
+def _serialize_credential(row: PlazaServiceCredential) -> dict:
+    return {
+        "id": str(row.id), "label": row.label, "username": row.username or "",
+        "notes": row.notes or "", "is_default": bool(row.is_default),
+        "sort_order": row.sort_order, "has_password": bool(row.secret_ciphertext),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _credential_rows(db, plaza_key: str) -> list[PlazaServiceCredential]:
+    return db.query(PlazaServiceCredential).filter(
+        PlazaServiceCredential.plaza_key == plaza_key,
+    ).order_by(
+        PlazaServiceCredential.is_default.desc(),
+        PlazaServiceCredential.sort_order,
+        PlazaServiceCredential.created_at,
+    ).all()
+
+
+def _sync_legacy_default(profile: PlazaServiceProfile, rows: list[PlazaServiceCredential]) -> None:
+    default = next((row for row in rows if row.is_default), rows[0] if rows else None)
+    profile.username = default.username if default else ""
+    profile.secret_ciphertext = default.secret_ciphertext if default else ""
+    profile.login_notes = default.notes if default else ""
+
+
 @router.get("/services/plaza")
 def list_plaza_services():
     """Return curated and user-created Web entries without credentials."""
@@ -772,6 +864,8 @@ def list_plaza_services():
             "icon": item.get("icon", "box"),
             "auth_mode": item["auth_mode"],
             "has_credentials": bool(item.get("has_credentials")),
+            "credential_count": int(item.get("credential_count") or 0),
+            "sort_order": item.get("sort_order"),
             "enabled": True,
             "manual": item.get("manual", False),
             "scanned": item.get("scanned", False),
@@ -791,6 +885,34 @@ def list_plaza_services():
             "profile_updated_at": item.get("profile_updated_at"),
         })
     return result
+
+
+@router.put("/services/plaza/order")
+def update_plaza_order(payload: PlazaOrderUpdate, _current_user=Depends(get_current_user)):
+    """Persist one global order for catalog and manually added plaza entries."""
+    with get_db() as db:
+        valid_keys = {item["key"] for item in load_catalog()}
+        valid_keys.update(
+            f"manual-{row.id}" for row in db.query(Service).filter(
+                Service.source == ServiceSource.manual.value,
+            ).all()
+        )
+        unknown = [key for key in payload.ordered_keys if key not in valid_keys]
+        if unknown:
+            raise HTTPException(404, f"服务不存在：{unknown[0]}")
+        profiles = {
+            row.plaza_key: row for row in db.query(PlazaServiceProfile).filter(
+                PlazaServiceProfile.plaza_key.in_(payload.ordered_keys),
+            ).all()
+        }
+        for index, key in enumerate(payload.ordered_keys):
+            profile = profiles.get(key)
+            if not profile:
+                profile = PlazaServiceProfile(plaza_key=key)
+                db.add(profile)
+            profile.sort_order = index
+        db.commit()
+    return {"ok": True, "ordered_keys": payload.ordered_keys}
 
 
 @router.get("/services/plaza/health-overview")
@@ -983,6 +1105,8 @@ def get_plaza_service_detail(plaza_key: str):
     with get_db() as db:
         item, service, profile, server_info = _resolve_item(db, plaza_key)
         server = server_info["selected"]
+        credentials = _credential_rows(db, plaza_key)
+        default_credential = next((row for row in credentials if row.is_default), credentials[0] if credentials else None)
         health = _health_checks([item]).get(
             item["key"], {"status": "unknown", "http_status": None, "latency_ms": None, "health_error": ""},
         )
@@ -1018,8 +1142,10 @@ def get_plaza_service_detail(plaza_key: str):
             "latency_ms": health["latency_ms"],
             "health_error_code": health.get("health_error_code", ""),
             "health_error": health["health_error"],
-            "credential_username": item.get("credential_username", ""),
-            "has_credentials": bool(item.get("has_credentials")),
+            "credential_username": default_credential.username if default_credential else item.get("credential_username", ""),
+            "has_credentials": any(bool(row.secret_ciphertext) for row in credentials) if credentials else bool(item.get("has_credentials")),
+            "credential_count": len(credentials),
+            "credentials": [_serialize_credential(row) for row in credentials],
             "login_notes": item.get("login_notes", ""),
             "documentation_url": item.get("documentation_url", ""),
             "owner": item.get("owner", ""), "tags": item.get("tags", []),
@@ -1079,6 +1205,7 @@ def get_plaza_service_detail(plaza_key: str):
 def update_plaza_service(plaza_key: str, payload: PlazaServiceUpdate):
     """Persist editable plaza metadata and encrypt an optional login password."""
     values = payload.model_dump(exclude_unset=True)
+    provided = set(values)
     with get_db() as db:
         item, service, profile, server_info = _resolve_item(db, plaza_key)
         if not profile:
@@ -1123,6 +1250,22 @@ def update_plaza_service(plaza_key: str, payload: PlazaServiceUpdate):
             profile.secret_ciphertext = ""
         elif password not in (None, ""):
             profile.secret_ciphertext = encrypt_secret(password)
+        if provided & {"username", "password", "clear_password", "login_notes"}:
+            credentials = _credential_rows(db, plaza_key)
+            default = next((row for row in credentials if row.is_default), credentials[0] if credentials else None)
+            if not default:
+                default = PlazaServiceCredential(
+                    plaza_key=plaza_key, label="默认账号", is_default=True, sort_order=0,
+                )
+                db.add(default)
+                credentials.append(default)
+            default.username = profile.username or ""
+            default.notes = profile.login_notes or ""
+            if clear_password:
+                default.secret_ciphertext = ""
+            elif password not in (None, ""):
+                default.secret_ciphertext = profile.secret_ciphertext
+            _sync_legacy_default(profile, credentials)
         if service:
             for field in ("name", "description", "category", "icon"):
                 if field in values:
@@ -1139,6 +1282,115 @@ def update_plaza_service(plaza_key: str, payload: PlazaServiceUpdate):
     return {"ok": True, "key": plaza_key, "has_credentials": has_credentials}
 
 
+def _parse_credential_id(credential_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(credential_id)
+    except ValueError:
+        raise HTTPException(400, "凭证标识格式不正确")
+
+
+@router.get("/services/plaza/{plaza_key}/credentials")
+def list_plaza_credentials(plaza_key: str, _current_user=Depends(get_current_user)):
+    with get_db() as db:
+        _resolve_item(db, plaza_key)
+        return [_serialize_credential(row) for row in _credential_rows(db, plaza_key)]
+
+
+@router.post("/services/plaza/{plaza_key}/credentials", status_code=201)
+def create_plaza_credential(
+    plaza_key: str, payload: PlazaCredentialCreate,
+    _current_user=Depends(get_current_user),
+):
+    with get_db() as db:
+        _item, _service, profile, _server_info = _resolve_item(db, plaza_key)
+        if not profile:
+            profile = PlazaServiceProfile(plaza_key=plaza_key)
+            db.add(profile)
+        rows = _credential_rows(db, plaza_key)
+        if len(rows) >= 20:
+            raise HTTPException(409, "每个服务最多保存 20 组凭证")
+        make_default = payload.is_default or not rows
+        if make_default:
+            for row in rows:
+                row.is_default = False
+        credential = PlazaServiceCredential(
+            plaza_key=plaza_key, label=payload.label.strip(),
+            username=payload.username, notes=payload.notes,
+            secret_ciphertext=encrypt_secret(payload.password) if payload.password else None,
+            is_default=make_default,
+            sort_order=max((row.sort_order for row in rows), default=-1) + 1,
+        )
+        db.add(credential)
+        db.flush()
+        _sync_legacy_default(profile, [*rows, credential])
+        db.commit()
+        db.refresh(credential)
+        return _serialize_credential(credential)
+
+
+@router.put("/services/plaza/{plaza_key}/credentials/{credential_id}")
+def update_plaza_credential(
+    plaza_key: str, credential_id: str, payload: PlazaCredentialUpdate,
+    _current_user=Depends(get_current_user),
+):
+    with get_db() as db:
+        _item, _service, profile, _server_info = _resolve_item(db, plaza_key)
+        row = db.query(PlazaServiceCredential).filter(
+            PlazaServiceCredential.id == _parse_credential_id(credential_id),
+            PlazaServiceCredential.plaza_key == plaza_key,
+        ).first()
+        if not row:
+            raise HTTPException(404, "凭证不存在")
+        values = payload.model_dump(exclude_unset=True)
+        clear_password = values.pop("clear_password", False)
+        password = values.pop("password", None)
+        rows = _credential_rows(db, plaza_key)
+        if values.get("is_default") is True:
+            for current in rows:
+                current.is_default = current.id == row.id
+        elif values.get("is_default") is False and row.is_default:
+            replacement = next((current for current in rows if current.id != row.id), None)
+            if not replacement:
+                raise HTTPException(409, "服务至少需要保留一个默认凭证")
+            replacement.is_default = True
+        for field in ("label", "username", "notes", "is_default"):
+            if field in values:
+                setattr(row, field, values[field].strip() if isinstance(values[field], str) else values[field])
+        if clear_password:
+            row.secret_ciphertext = ""
+        elif password not in (None, ""):
+            row.secret_ciphertext = encrypt_secret(password)
+        if not profile:
+            profile = PlazaServiceProfile(plaza_key=plaza_key)
+            db.add(profile)
+        _sync_legacy_default(profile, rows)
+        db.commit()
+        db.refresh(row)
+        return _serialize_credential(row)
+
+
+@router.delete("/services/plaza/{plaza_key}/credentials/{credential_id}")
+def delete_plaza_credential(
+    plaza_key: str, credential_id: str, _current_user=Depends(get_current_user),
+):
+    with get_db() as db:
+        _item, _service, profile, _server_info = _resolve_item(db, plaza_key)
+        row = db.query(PlazaServiceCredential).filter(
+            PlazaServiceCredential.id == _parse_credential_id(credential_id),
+            PlazaServiceCredential.plaza_key == plaza_key,
+        ).first()
+        if not row:
+            raise HTTPException(404, "凭证不存在")
+        rows = [current for current in _credential_rows(db, plaza_key) if current.id != row.id]
+        if row.is_default and rows:
+            rows[0].is_default = True
+        db.delete(row)
+        if profile:
+            _sync_legacy_default(profile, rows)
+        db.commit()
+    return {"ok": True}
+
+
 @router.post("/services/plaza/{plaza_key}/credentials/reveal")
 def reveal_plaza_credentials(
     plaza_key: str, request: Request, response: Response,
@@ -1149,19 +1401,51 @@ def reveal_plaza_credentials(
     response.headers["Pragma"] = "no-cache"
     with get_db() as db:
         _item, _service, profile, _server_info = _resolve_item(db, plaza_key)
-        if not profile or not profile.secret_ciphertext:
+        credentials = _credential_rows(db, plaza_key)
+        default = next((row for row in credentials if row.is_default), credentials[0] if credentials else None)
+        ciphertext = default.secret_ciphertext if default else (profile.secret_ciphertext if profile else None)
+        if not ciphertext:
             raise HTTPException(404, "该服务尚未保存密码")
         try:
-            password = decrypt_secret(profile.secret_ciphertext)
+            password = decrypt_secret(ciphertext)
         except ValueError as exc:
             raise HTTPException(500, str(exc))
         db.add(PlazaCredentialAccess(
             plaza_key=plaza_key,
+            credential_id=default.id if default else None,
             actor=getattr(current_user, "username", None),
             ip=request.client.host if request.client else None,
         ))
         db.commit()
-        return {"username": profile.username or "", "password": password}
+        return {"username": default.username if default else profile.username or "", "password": password}
+
+
+@router.post("/services/plaza/{plaza_key}/credentials/{credential_id}/reveal")
+def reveal_one_plaza_credential(
+    plaza_key: str, credential_id: str, request: Request, response: Response,
+    current_user=Depends(get_current_user),
+):
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    with get_db() as db:
+        _resolve_item(db, plaza_key)
+        row = db.query(PlazaServiceCredential).filter(
+            PlazaServiceCredential.id == _parse_credential_id(credential_id),
+            PlazaServiceCredential.plaza_key == plaza_key,
+        ).first()
+        if not row or not row.secret_ciphertext:
+            raise HTTPException(404, "该凭证尚未保存密码")
+        try:
+            password = decrypt_secret(row.secret_ciphertext)
+        except ValueError as exc:
+            raise HTTPException(500, str(exc))
+        db.add(PlazaCredentialAccess(
+            plaza_key=plaza_key, credential_id=row.id,
+            actor=getattr(current_user, "username", None),
+            ip=request.client.host if request.client else None,
+        ))
+        db.commit()
+        return {"id": str(row.id), "username": row.username or "", "password": password}
 
 
 @router.get("/services/plaza/{plaza_key}/credential-access-history")
@@ -1177,6 +1461,7 @@ def get_credential_access_history(
         ).order_by(PlazaCredentialAccess.created_at.desc()).limit(limit).all()
         return [{
             "id": str(row.id), "action": row.action, "actor": row.actor or "-",
+            "credential_id": str(row.credential_id) if row.credential_id else None,
             "ip": row.ip or "-", "created_at": row.created_at.isoformat(),
         } for row in rows]
 

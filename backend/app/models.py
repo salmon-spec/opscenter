@@ -181,6 +181,7 @@ class PlazaServiceProfile(Base):
     documentation_url = Column(Text, nullable=True)
     owner = Column(String(100), nullable=True)
     tags = Column(JSONB, default=list)
+    sort_order = Column(Integer, nullable=True)
     probe_enabled = Column(Boolean, default=True, nullable=False)
     probe_interval_seconds = Column(Integer, default=60, nullable=False)
     probe_timeout_seconds = Column(Float, default=4.0, nullable=False)
@@ -189,6 +190,23 @@ class PlazaServiceProfile(Base):
     probe_failure_threshold = Column(Integer, default=3, nullable=False)
     probe_recovery_threshold = Column(Integer, default=1, nullable=False)
     probe_notifications_enabled = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PlazaServiceCredential(Base):
+    """One encrypted login credential belonging to a service-plaza entry."""
+    __tablename__ = "plaza_service_credentials"
+    __table_args__ = (Index("ix_plaza_service_credential_order", "plaza_key", "sort_order"),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plaza_key = Column(String(140), nullable=False, index=True)
+    label = Column(String(100), default="默认账号", nullable=False)
+    username = Column(String(200), default="", nullable=False)
+    secret_ciphertext = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    is_default = Column(Boolean, default=False, nullable=False)
+    sort_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -279,6 +297,7 @@ class PlazaCredentialAccess(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     plaza_key = Column(String(140), nullable=False)
+    credential_id = Column(UUID(as_uuid=True), nullable=True)
     action = Column(String(30), default="reveal", nullable=False)
     actor = Column(String(100), nullable=True)
     ip = Column(String(64), nullable=True)
