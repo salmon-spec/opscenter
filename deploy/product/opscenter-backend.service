@@ -1,0 +1,16 @@
+[Unit]
+Description=OpsCenter Backend API
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/opscenter/secrets.env
+WorkingDirectory=/opt/opscenter/backend
+ExecStart=/opt/opscenter/venv/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 9091
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
