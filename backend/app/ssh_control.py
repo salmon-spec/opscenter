@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
+from app.config import CONTAINERIZED
 from app.database import get_db
 from app.models import Server
 from app.ssh_manager import get_ssh_client, ssh_exec
@@ -66,7 +67,7 @@ def _server(server_id: str) -> Server:
 
 
 def _run(server: Server, command: str, timeout: int = 20) -> tuple[str, str, int]:
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         try:
             result = subprocess.run(["sh", "-lc", command], capture_output=True, text=True, timeout=timeout)
             return result.stdout, result.stderr, result.returncode

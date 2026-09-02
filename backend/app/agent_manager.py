@@ -6,6 +6,7 @@ import secrets
 from pathlib import Path
 from typing import Optional, Tuple, Dict
 from app.models import Server
+from app.config import LOCAL_AGENT_HOST
 
 
 # 动态读取Agent版本号
@@ -30,6 +31,11 @@ AGENT_DIR = "/opt/opsagent"
 AGENT_SCRIPT = "opsagent.py"
 AGENT_SERVICE = "opsagent.service"
 AGENT_DEFAULT_PORT = 19100
+
+
+def resolve_agent_host(server: Server) -> str:
+    """Return the reachable Agent address for either deployment mode."""
+    return LOCAL_AGENT_HOST if server.agent_type == "local" else server.host
 
 
 def _get_ssh_client(server: Server, password: str = None) -> Optional[paramiko.SSHClient]:

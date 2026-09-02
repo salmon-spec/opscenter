@@ -7,8 +7,9 @@ set -euo pipefail
 [ $# -eq 1 ] || { echo "Usage: BACKUP_PASSWORD=... CONFIRM_RESTORE=YES sudo -E $0 backup.tar.gz.enc" >&2; exit 1; }
 
 APP_DIR=${OPSCENTER_HOME:-/opt/opscenter}
+MUTABLE_DIR=${OPSCENTER_MUTABLE_DIR:-"$APP_DIR/frontend"}
 SECRETS_FILE=${OPSCENTER_SECRETS_FILE:-/etc/opscenter/secrets.env}
-COMPOSE_FILE="$APP_DIR/deploy/product/postgres.compose.yml"
+COMPOSE_FILE=${COMPOSE_FILE:-"$APP_DIR/deploy/product/postgres.compose.yml"}
 SERVICE_CONTROL=${SERVICE_CONTROL:-true}
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:9091/openapi.json}
 work=$(mktemp -d)
@@ -42,7 +43,7 @@ docker compose --env-file "$work/config/secrets.env" -f "$COMPOSE_FILE" exec -T 
   <"$work/database/opscenter.dump"
 install -m 0600 "$work/config/secrets.env" "$SECRETS_FILE"
 for file in groups.json services.json; do
-  [ -f "$work/mutable/$file" ] && install -m 0644 "$work/mutable/$file" "$APP_DIR/frontend/$file"
+  [ -f "$work/mutable/$file" ] && install -m 0644 "$work/mutable/$file" "$MUTABLE_DIR/$file"
 done
 if [ -f "$work/database/loki-data.tar.gz" ]; then
   install -d -m 0755 "$LOKI_DATA_DIR"

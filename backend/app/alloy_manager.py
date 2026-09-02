@@ -12,7 +12,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 import requests
 
-from app.config import ALLOY_VERSION, LOKI_TIMEOUT_SECONDS, LOKI_URL
+from app.config import ALLOY_VERSION, LOKI_PUBLIC_URL, LOKI_TIMEOUT_SECONDS, LOKI_URL
 from app.database import get_db
 from app.models import Server
 from app.ssh_manager import get_ssh_client, ssh_exec
@@ -36,10 +36,10 @@ def _systemd_escape(value: str) -> str:
 
 
 def _push_url() -> str:
-    parsed = urlparse(LOKI_URL)
+    parsed = urlparse(LOKI_PUBLIC_URL)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("请先配置有效的 LOKI_URL")
-    return f"{LOKI_URL}/loki/api/v1/push"
+        raise ValueError("请先配置有效的 LOKI_PUBLIC_URL")
+    return f"{LOKI_PUBLIC_URL}/loki/api/v1/push"
 
 
 def _probe_ingestion(server_id: str, now: datetime) -> dict:

@@ -1,0 +1,88 @@
+name: opscenter
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-opscenter}
+      POSTGRES_USER: ${POSTGRES_USER:-opscenter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-/opt/opscenter-data/postgres}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -U $$POSTGRES_USER -d $$POSTGRES_DB -Atqc 'select 1' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  loki:
+    image: grafana/loki:3.7.2
+    restart: unless-stopped
+    command: -config.file=/etc/loki/config.yml
+    ports:
+      - "${LOKI_BIND_IP:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ../observability/loki.yml:/etc/loki/config.yml:ro
+      - ${LOKI_DATA_DIR:-/opt/opscenter-data/loki}:/loki
+    healthcheck:
+      test: ["CMD", "/usr/bin/loki", "-version"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/backend.Dockerfile
+    image: ${OPSCENTER_BACKEND_IMAGE:-opscenter/backend:4.7.0}
+    restart: unless-stopped
+    env_file:
+      - ${OPSCENTER_SECRETS_FILE:-/etc/opscenter/secrets.env}
+    environment:
+      CONTAINERIZED: "true"
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-opscenter}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opscenter}
+      GROUPS_JSON_PATH: /opt/opscenter/frontend/groups.json
+      LOCAL_AGENT_HOST: host.docker.internal
+      LOKI_URL: http://loki:3100
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "${OPSCENTER_API_BIND:-127.0.0.1}:${OPSCENTER_API_PORT:-9091}:9091"
+    volumes:
+      - ${OPSCENTER_CONFIG_DIR:-/opt/opscenter-data/config}:/opt/opscenter/frontend
+    depends_on:
+      db:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9091/openapi.json', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    logging: *logging
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/frontend.Dockerfile
+    image: ${OPSCENTER_FRONTEND_IMAGE:-opscenter/frontend:4.7.0}
+    restart: unless-stopped
+    ports:
+      - "${OPSCENTER_HTTP_BIND:-0.0.0.0}:${OPSCENTER_HTTP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    logging: *logging

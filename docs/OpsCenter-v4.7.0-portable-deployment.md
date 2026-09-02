@@ -24,6 +24,8 @@
 
 源码包内 `deploy/product/` 是唯一的标准新装入口；根目录旧 `docker-compose.yml` 只保留历史兼容，不用于生产安装。
 
+需要控制面 Docker 化时使用 `deploy/docker/`，不要使用根目录的历史 Compose。完整步骤见 `docs/OpsCenter-v4.7.0-docker-deployment.md`。
+
 ## 3. 压缩包内容
 
 - `backend/`、`frontend-vite/`、`frontend-vite/dist/`、`agent/`：源码、锁文件与已构建前端。

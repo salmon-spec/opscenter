@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import get_current_user
+from app.config import CONTAINERIZED
 from app.database import get_db
 from app.models import Server
 from app.ssh_manager import get_ssh_client, ssh_exec
@@ -77,7 +78,7 @@ def _source(value: str) -> str:
 
 
 def _execute(server: Server, args: list[str], timeout: int = 20) -> str:
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         try:
             result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
         except FileNotFoundError:
@@ -98,7 +99,7 @@ def _execute(server: Server, args: list[str], timeout: int = 20) -> str:
 
 
 def _detect(server: Server) -> Optional[str]:
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         if shutil.which("ufw"):
             return "ufw"
         if shutil.which("firewall-cmd"):

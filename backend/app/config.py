@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     local_domain: str = "ops.salmon.xin"
     local_server_name: str = "本机 (OpsCenter)"
     local_agent_token: str = ""
+    # Docker 部署时指向宿主机网关；systemd 部署继续使用 127.0.0.1。
+    local_agent_host: str = "127.0.0.1"
 
     # ── Auth（免登录默认，OPS_AUTH_ENABLED=true 恢复 JWT） ──
     jwt_secret: str = "opscenter-default-secret-change-me-1234567890"
@@ -43,6 +45,7 @@ class Settings(BaseSettings):
     credential_key: str = "opscenter-default-database-credential-key-change-me"
     auth_enabled: bool = False
     preview_mode: bool = False
+    containerized: bool = False
 
     # ── Alerting (v3.26, F4/F5) ──
     alerting_enabled: bool = True                       # ALERTING_ENABLED=false 一键关停告警引擎
@@ -64,6 +67,7 @@ class Settings(BaseSettings):
     retention_rollup_5m_days: int = 365                 # 5分钟聚合保留1年
     retention_rollup_1h_days: int = 0                   # 0=小时聚合长期保存
     loki_url: str = ""                                  # 中央 Loki，例如 http://10.66.66.5:3100
+    loki_public_url: str = ""                           # 远程 Alloy 可访问的地址；为空时沿用 loki_url
     loki_timeout_seconds: float = 12.0
     loki_retention_days: int = 365
     loki_data_dir: str = "/opt/opscenter-data/loki"
@@ -78,12 +82,14 @@ LOCAL_HOST = _settings.local_host or _detect_local_ip()
 LOCAL_DOMAIN = _settings.local_domain
 LOCAL_SERVER_NAME = _settings.local_server_name
 LOCAL_AGENT_TOKEN = _settings.local_agent_token
+LOCAL_AGENT_HOST = _settings.local_agent_host
 JWT_SECRET = _settings.jwt_secret
 ADMIN_USER = _settings.admin_user
 ADMIN_PASSWORD = _settings.admin_password
 CREDENTIAL_KEY = _settings.credential_key
 OPS_AUTH_ENABLED = _settings.auth_enabled
 PREVIEW_MODE = _settings.preview_mode
+CONTAINERIZED = _settings.containerized
 
 # ── Alerting (v3.26) ──
 ALERTING_ENABLED = _settings.alerting_enabled
@@ -113,6 +119,7 @@ RETENTION_STATS_DAYS = _settings.retention_stats_days
 RETENTION_ROLLUP_5M_DAYS = _settings.retention_rollup_5m_days
 RETENTION_ROLLUP_1H_DAYS = _settings.retention_rollup_1h_days
 LOKI_URL = _settings.loki_url.rstrip("/")
+LOKI_PUBLIC_URL = (_settings.loki_public_url or _settings.loki_url).rstrip("/")
 LOKI_TIMEOUT_SECONDS = _settings.loki_timeout_seconds
 LOKI_RETENTION_DAYS = _settings.loki_retention_days
 LOKI_DATA_DIR = _settings.loki_data_dir

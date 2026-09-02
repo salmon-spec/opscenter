@@ -1,0 +1,16 @@
+[Unit]
+Description=OpsCenter Host Agent
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/opsagent.env
+WorkingDirectory=/opt/opsagent
+ExecStart=/usr/bin/python3 /opt/opsagent/opsagent.py --port 19100 --token ${OPSAGENT_TOKEN}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

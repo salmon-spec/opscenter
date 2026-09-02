@@ -7,6 +7,7 @@ import uuid
 
 from app.database import get_session
 from app.models import Server, Service, MetricHistory
+from app.config import LOCAL_AGENT_HOST
 
 router = APIRouter(tags=["monitor"])
 
@@ -21,7 +22,7 @@ def get_monitor(server_id: str, db: Session = Depends(get_session)):
     # For local server, try Agent directly
     try:
         import requests
-        host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        host = LOCAL_AGENT_HOST if srv.agent_type == "local" else srv.host
         port = srv.agent_port or 19100
         token = srv.agent_token or ""
         url = f"http://{host}:{port}/api/metrics"

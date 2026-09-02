@@ -15,7 +15,7 @@ from app.credential_crypto import encrypt_secret
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
-from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version
+from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
 from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
@@ -34,7 +34,7 @@ from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
 )
-from app.config import PREVIEW_MODE, RETENTION_METRIC_DAYS
+from app.config import CONTAINERIZED, PREVIEW_MODE, RETENTION_METRIC_DAYS
 
 # === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康） ===
 from app.api_keys import router as api_keys_router
@@ -305,7 +305,7 @@ def _run_server_health_check():
 
         results = {}
         for server_id, agent_type, host, ssh_port, agent_port in sorted(targets, key=lambda item: str(item[0])):
-            check_host = "127.0.0.1" if agent_type == "local" else host
+            check_host = os.getenv("LOCAL_AGENT_HOST", "127.0.0.1") if agent_type == "local" else host
             check_port = agent_port if agent_type == "local" else ssh_port
             try:
                 with socket.create_connection((check_host, check_port), timeout=3):
@@ -345,7 +345,7 @@ def _run_agent_health_check():
         if local_srv:
             try:
                 local_data = fetch_agent_metrics(
-                    "127.0.0.1", local_srv.agent_port or 19100, local_srv.agent_token or ""
+                    resolve_agent_host(local_srv), local_srv.agent_port or 19100, local_srv.agent_token or ""
                 )
                 if local_data:
                     local_srv.agent_status = "running"
@@ -1239,7 +1239,7 @@ async def startup():
                 if _st.get("agent_token"):
                     local.agent_token = _st["agent_token"]
                     db.commit()
-            local_agent = fetch_agent_metrics("127.0.0.1", local.agent_port or 19100, local.agent_token or "")
+            local_agent = fetch_agent_metrics(resolve_agent_host(local), local.agent_port or 19100, local.agent_token or "")
             if local_agent:
                 local.agent_status = "running"
                 local.agent_version = local_agent.get("agent_version", "2.2.0")
@@ -1344,7 +1344,7 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
             if not srv:
                 return
             db.expunge(srv)
-        if srv.agent_type == "local":
+        if srv.agent_type == "local" and not CONTAINERIZED:
             from app.agent_manager import upgrade_local_agent
             result = upgrade_local_agent()
             if result.get("success"):
@@ -1387,7 +1387,7 @@ def _upgrade_outdated_agents_once() -> list[str]:
         targets = [
             str(server.id) for server in db.query(Server).filter(Server.agent_status == "running").all()
             if _version_parts(server.agent_version) < _version_parts(current)
-            and (server.agent_type == "local" or bool(server.ssh_key))
+            and ((server.agent_type == "local" and not CONTAINERIZED) or bool(server.ssh_key))
         ]
         if targets:
             db.query(Server).filter(Server.id.in_([uuid.UUID(item) for item in targets])).update(
@@ -1446,7 +1446,7 @@ def update_server(server_id: str, data: ServerUpdate):
         if not srv:
             raise HTTPException(404, "Server not found")
         values = data.model_dump(exclude_unset=True)
-        if srv.agent_type == "local" or srv.is_local:
+        if (srv.agent_type == "local" or srv.is_local) and not CONTAINERIZED:
             protected = {"host", "ssh_port", "ssh_user", "ssh_key", "ssh_password"}
             if protected.intersection(values):
                 raise HTTPException(400, "本地主机只允许修改名称、标签和备注")
@@ -1491,7 +1491,7 @@ def delete_server(server_id: str):
         db.commit()
         # Clean up groups.json - remove deleted server's services
         try:
-            groups_path = "/opt/opscenter/frontend/groups.json"
+            groups_path = os.getenv("GROUPS_JSON_PATH", "/opt/opscenter/frontend/groups.json")
             import json
             with open(groups_path, 'r') as gf:
                 groups_data = json.load(gf)
@@ -1514,7 +1514,7 @@ def scan_server(server_id: str, password: Optional[str] = None):
             raise HTTPException(404, "Server not found")
         
         # Unified: All servers use Agent-first approach
-        agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        agent_host = resolve_agent_host(srv)
         
         # Try Agent if deployed and running
         if srv.agent_status == "running" and srv.agent_port:
@@ -1541,7 +1541,7 @@ def scan_server(server_id: str, password: Optional[str] = None):
                 }
         
         # Fallback: Docker SDK (local) or SSH (remote)
-        if srv.agent_type == "local":
+        if srv.agent_type == "local" and not CONTAINERIZED:
             discovered = discover_docker_services(srv, db, srv.host)
             for d in discovered:
                 _auto_assign_group(str(srv.id), str(d.id), d.category or "")
@@ -1576,10 +1576,10 @@ def test_server(server_id: str, password: Optional[str] = None):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type == "local":
+        if srv.agent_type == "local" and not CONTAINERIZED:
             # Local server: try Agent health check
             try:
-                agent_data = fetch_agent_metrics("127.0.0.1", srv.agent_port or 19100, srv.agent_token or "")
+                agent_data = fetch_agent_metrics(resolve_agent_host(srv), srv.agent_port or 19100, srv.agent_token or "")
                 if agent_data:
                     srv.status = ServerStatus.online.value
                     srv.last_seen = datetime.utcnow()
@@ -1635,7 +1635,7 @@ def get_agent_services(server_id: str):
             raise HTTPException(400, f"Agent未运行 (status={srv.agent_status})")
     
     # Try Agent scan
-    agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+    agent_host = resolve_agent_host(srv)
     data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
     if not data:
         # Fallback: try cached services
@@ -2390,7 +2390,7 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
         if not srv:
             raise HTTPException(404, "Server not found")
         
-        agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        agent_host = resolve_agent_host(srv)
         
         # Unified: all servers use Agent-first approach
         if srv.agent_status == "running" and srv.agent_port:
@@ -2411,7 +2411,7 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
                 }
         
         # Fallback: Docker SDK (local) or SSH (remote)
-        if srv.agent_type == "local":
+        if srv.agent_type == "local" and not CONTAINERIZED:
             discovered = discover_docker_services(srv, db, srv.host)
             for d in discovered:
                 _auto_assign_group(str(srv.id), str(d.id), d.category or "")
@@ -2614,7 +2614,7 @@ def toggle_pin(service_id: str):
 def _agent_request(server, path, timeout=5):
     """向 Agent 发起 HTTP 请求，返回 JSON 或 None。"""
     import requests as req
-    host = "127.0.0.1" if server.agent_type == "local" else server.host
+    host = resolve_agent_host(server)
     port = server.agent_port or 19100
     token = server.agent_token or ""
     try:
@@ -2886,7 +2886,7 @@ def ssh_test(server_id: str, password: Optional[str] = None):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type == "local":
+        if srv.agent_type == "local" and not CONTAINERIZED:
             return {"success": True, "message": "本机服务器无需SSH"}
         
         client = get_ssh_client(srv, password=password)
@@ -2957,7 +2957,7 @@ def _scan_all_impl():
         for srv in servers:
             sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "", "added": 0, "updated": 0, "status": "ok"}
             try:
-                agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+                agent_host = resolve_agent_host(srv)
                 if srv.agent_status == "running" and srv.agent_port:
                     scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
                     if scan_data:
@@ -2979,7 +2979,7 @@ def _scan_all_impl():
                         server_results.append(sr_detail)
                         continue
 
-                if srv.agent_type == "local":
+                if srv.agent_type == "local" and not CONTAINERIZED:
                     discovered = discover_docker_services(srv, db, srv.host)
                     nginx_result = _sync_nginx_routes(srv, db)
                     added = len(discovered) + nginx_result['added']
@@ -3066,7 +3066,7 @@ def get_monitor(server_id: str):
     
     # All servers: try Agent first
     if srv.agent_status == "running" and srv.agent_port:
-        agent_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
+        agent_host = resolve_agent_host(srv)
         agent_data = fetch_agent_metrics(agent_host, srv.agent_port or 19100, srv.agent_token or "")
         if agent_data:
             containers = agent_data.get("containers", [])
@@ -3338,7 +3338,7 @@ def deploy_agent_api(server_id: str):
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         if not srv:
             raise HTTPException(404, "Server not found")
-        if srv.agent_type == "local":
+        if srv.agent_type == "local" and not CONTAINERIZED:
             # 本机Agent升级：复制源码 + systemctl restart
             from app.agent_manager import upgrade_local_agent
             result = upgrade_local_agent()
@@ -3415,7 +3415,7 @@ def upgrade_agent_async(server_id: str, background_tasks: BackgroundTasks):
         server = db.query(Server).filter(Server.id == server_uuid).first()
         if not server:
             raise HTTPException(404, "Server not found")
-        if server.agent_type != "local" and not server.ssh_key:
+        if (server.agent_type != "local" or CONTAINERIZED) and not server.ssh_key:
             raise HTTPException(400, "主机未配置 SSH 凭证，无法升级 Agent")
         server.agent_status = "deploying"
         db.commit()
@@ -3430,7 +3430,7 @@ def upgrade_outdated_agents(background_tasks: BackgroundTasks):
         targets = [
             str(server.id) for server in db.query(Server).filter(Server.agent_status == "running").all()
             if _version_parts(server.agent_version) < _version_parts(current)
-            and (server.agent_type == "local" or bool(server.ssh_key))
+            and ((server.agent_type == "local" and not CONTAINERIZED) or bool(server.ssh_key))
         ]
         if targets:
             db.query(Server).filter(Server.id.in_([uuid.UUID(item) for item in targets])).update(
@@ -3450,7 +3450,7 @@ def agent_status_api(server_id: str):
         if not srv:
             raise HTTPException(404, "Server not found")
     
-    if srv.agent_type == "local":
+    if srv.agent_type == "local" and not CONTAINERIZED:
         import subprocess
         try:
             result = subprocess.run(['systemctl', 'is-active', 'opsagent'], capture_output=True, text=True, timeout=5)
@@ -3531,7 +3531,7 @@ def _collect_agent_metrics():
             future_map = {
                 executor.submit(
                     fetch_agent_metrics,
-                    "127.0.0.1" if target.agent_type == "local" else target.host,
+                    resolve_agent_host(target),
                     target.agent_port,
                     target.agent_token,
                 ): target
@@ -3633,7 +3633,7 @@ def get_agent_metrics_api(server_id: str):
     if srv.agent_status != "running":
         return {"error": "Agent未运行", "agent_status": srv.agent_status}
     
-    data = fetch_agent_metrics("127.0.0.1" if srv.agent_type == "local" else srv.host, srv.agent_port or 19100, srv.agent_token or "")
+    data = fetch_agent_metrics(resolve_agent_host(srv), srv.agent_port or 19100, srv.agent_token or "")
     if not data:
         # Update status
         with get_db() as db:
@@ -3815,7 +3815,7 @@ def health_check_url(url: str = Query(..., description="URL to check")):
 
 
 # === Group Config API (read/write groups.json) ===
-GROUPS_JSON_PATH = "/opt/opscenter/frontend/groups.json"
+GROUPS_JSON_PATH = os.getenv("GROUPS_JSON_PATH", "/opt/opscenter/frontend/groups.json")
 
 def _read_groups_json():
     import json as _json
@@ -4130,8 +4130,8 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         srv_id = str(srv.id)
         srv_name = srv.name
         # Local server: use 127.0.0.1 instead of public IP (cannot loopback via public IP on cloud)
-        srv_host = "127.0.0.1" if srv.agent_type == "local" else srv.host
-        srv_is_local = srv.agent_type == "local"
+        srv_is_local = srv.agent_type == "local" and not CONTAINERIZED
+        srv_host = "127.0.0.1" if srv_is_local else srv.host
         srv_port = srv.ssh_port or 22
         srv_user = srv.ssh_user or "root"
         # ssh_key field stores either a real key or __password__<password>

@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
+from app.config import CONTAINERIZED
 from app.database import get_db
 from app.models import Server
 from app.ssh_manager import get_ssh_client
@@ -135,7 +136,7 @@ def _remove_tree(remote: bool, sftp, path: str) -> None:
 
 @contextmanager
 def _filesystem(server: Server):
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         yield False, None, None
         return
     client = get_ssh_client(server)

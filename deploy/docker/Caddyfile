@@ -1,0 +1,20 @@
+:80 {
+    encode zstd gzip
+
+    handle /api/* {
+        reverse_proxy backend:9091
+    }
+    handle /ws/* {
+        reverse_proxy backend:9091
+    }
+    handle /v3/* {
+        root * /srv
+        file_server
+    }
+    handle {
+        rewrite * /v3/index.html
+        root * /srv
+        header Cache-Control "no-cache, no-store, must-revalidate"
+        file_server
+    }
+}

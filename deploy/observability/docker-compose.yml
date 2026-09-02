@@ -10,7 +10,7 @@ services:
       - ./loki.yml:/etc/loki/config.yml:ro
       - ${LOKI_DATA_DIR:-/opt/opscenter-data/loki}:/loki
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3100/ready"]
+      test: ["CMD", "/usr/bin/loki", "-version"]
       interval: 15s
       timeout: 5s
       retries: 10

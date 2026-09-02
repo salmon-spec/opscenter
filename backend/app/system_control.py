@@ -11,9 +11,9 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.agent_manager import fetch_agent_metrics, fetch_agent_processes, fetch_agent_system_summary
+from app.agent_manager import fetch_agent_metrics, fetch_agent_processes, fetch_agent_system_summary, resolve_agent_host
 from app.auth import get_current_user
-from app.config import PREVIEW_MODE
+from app.config import CONTAINERIZED, PREVIEW_MODE
 from app.database import get_db
 from app.models import Server
 from app.ssh_manager import collect_remote_metrics, get_ssh_client, ssh_exec
@@ -115,7 +115,7 @@ def system_summary(server_id: str, refresh: bool = Query(False)):
             "cached": False, "cache_age_seconds": 0, "cache_ttl_seconds": 2,
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
         }
-    host = "127.0.0.1" if server.agent_type == "local" else server.host
+    host = resolve_agent_host(server)
     data = None
     source = "agent"
     if server.agent_status == "running":
@@ -184,20 +184,20 @@ def list_processes(server_id: str, search: str = Query("", max_length=80), user:
         rows = [row for row in rows if (not needle or needle in f"{row['pid']} {row['command']} {row['user']}".lower()) and (not user or row["user"] == user) and (not state or row["state"].startswith(state))]
         rows.sort(key=lambda row: row["cpu_percent" if sort == "cpu" else "memory_percent"], reverse=True)
         return {"items": rows[:limit], "total": len(rows), "timestamp": time.time(), "source": "preview"}
-    host = "127.0.0.1" if server.agent_type == "local" else server.host
+    host = resolve_agent_host(server)
     result = None
     if server.agent_status == "running":
         result = fetch_agent_processes(host, server.agent_port or 19100, server.agent_token or "", search=search, user=user, state=state, sort=sort, limit=limit)
     if result is not None:
         return {**result, "source": "agent"}
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         raise HTTPException(status_code=502, detail="本机 Agent 不支持进程列表，请升级至 2.4.0")
     rows = _ssh_process_rows(server, search, user, state, sort, limit)
     return {"items": rows, "total": len(rows), "timestamp": time.time(), "source": "ssh"}
 
 
 def _process_command(server: Server, command: str, timeout: int = 10) -> str:
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             raise HTTPException(status_code=502, detail=(result.stderr or result.stdout)[-300:])
@@ -240,7 +240,7 @@ def signal_process(server_id: str, pid: int, payload: ProcessSignalRequest):
     if PREVIEW_MODE:
         raise HTTPException(status_code=403, detail="隔离预览环境禁止发送进程信号")
     server = _server(server_id)
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         try:
             os.kill(pid, _VALID_SIGNALS[name])
         except ProcessLookupError:

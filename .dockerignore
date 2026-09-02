@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+frontend-vite/dist
+/backup/
+/backup_*/
+data
+*.tar.gz
+*.tar.gz.enc
+*-test.db

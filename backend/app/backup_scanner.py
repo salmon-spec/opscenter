@@ -10,7 +10,7 @@ import asyncio
 import logging
 from datetime import datetime
 
-from app.config import BACKUP_CHECK_ENABLED
+from app.config import BACKUP_CHECK_ENABLED, LOCAL_AGENT_HOST
 from app.database import get_db
 from app.models import BackupCheck, MetricHistory, Server
 
@@ -20,7 +20,7 @@ logger = logging.getLogger("opscenter.backup")
 def _agent_backup_check(server: Server, target: str, min_size: int = 0, timeout: float = 8.0):
     """调用远端 Agent 的 backup/check 端点。"""
     import requests
-    host = "127.0.0.1" if server.agent_type == "local" else server.host
+    host = LOCAL_AGENT_HOST if server.agent_type == "local" else server.host
     port = server.agent_port or 19100
     token = server.agent_token or ""
     url = f"http://{host}:{port}/api/v1/backup/check"

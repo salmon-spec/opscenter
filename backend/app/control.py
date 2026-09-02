@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.auth import get_current_user
-from app.config import PREVIEW_MODE
+from app.config import CONTAINERIZED, PREVIEW_MODE
 from app.database import get_db
 from app.models import Server, Service
 from app.ssh_manager import get_ssh_client, ssh_exec
@@ -245,7 +245,7 @@ def _remote_container_rows(client, include_stats: bool = True) -> List[Dict[str,
 
 
 def _load_container_rows(server: Server, include_stats: bool = True) -> List[Dict[str, Any]]:
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         try:
             import docker
             client = docker.from_env()
@@ -312,7 +312,7 @@ def _remote_container_resource_usage(client) -> tuple[set[str], set[str]]:
 def _load_docker_resources(server: Server, resource: str) -> List[Dict[str, Any]]:
     if resource not in _VALID_DOCKER_RESOURCES:
         raise HTTPException(status_code=404, detail="Docker 资源类型不存在")
-    if server.agent_type == "local":
+    if server.agent_type == "local" and not CONTAINERIZED:
         try:
             import docker
             client = docker.from_env()
@@ -405,7 +405,7 @@ def control_service(service_id: str, payload: ServiceControlRequest):
 
         kind, target = _resolve_service_target(svc)
 
-        if server.agent_type == "local":
+        if server.agent_type == "local" and not CONTAINERIZED:
             # 本机：使用 docker SDK 直接操作容器
             if kind != "docker":
                 raise HTTPException(status_code=400, detail="本机 systemd 服务操控暂不支持，请在主机上执行")
@@ -493,7 +493,7 @@ def get_service_logs(
 
         kind, target = _resolve_service_target(svc)
 
-        if server.agent_type == "local":
+        if server.agent_type == "local" and not CONTAINERIZED:
             if kind != "docker":
                 raise HTTPException(status_code=400, detail="本机 systemd 日志读取暂不支持，请在主机上执行 journalctl")
             try:
@@ -596,7 +596,7 @@ def list_server_containers(
         "cache_age_seconds": round(max(0, time.time() - timestamp), 2),
         "cache_ttl_seconds": ttl,
         "stats_included": include_stats,
-        "source": "local-docker" if server.agent_type == "local" else "ssh-docker",
+        "source": "local-docker" if server.agent_type == "local" and not CONTAINERIZED else "ssh-docker",
         "duration_ms": round((time.perf_counter() - started) * 1000, 2),
     }
 
@@ -607,7 +607,7 @@ def inspect_server_container(server_id: str, container_id: str):
     target = _container_id(container_id)
     with get_db() as db:
         server = _server_or_404(db, server_id)
-        if server.agent_type == "local":
+        if server.agent_type == "local" and not CONTAINERIZED:
             try:
                 import docker
                 attrs = docker.from_env().containers.get(target).attrs
@@ -650,7 +650,7 @@ def get_container_logs(
     target = _container_id(container_id)
     with get_db() as db:
         server = _server_or_404(db, server_id)
-        if server.agent_type == "local":
+        if server.agent_type == "local" and not CONTAINERIZED:
             try:
                 import docker
                 content = docker.from_env().containers.get(target).logs(tail=lines, timestamps=True).decode("utf-8", errors="replace")
@@ -679,7 +679,7 @@ def operate_server_containers(server_id: str, payload: ContainerActionRequest):
     results = []
     with get_db() as db:
         server = _server_or_404(db, server_id)
-        if server.agent_type == "local":
+        if server.agent_type == "local" and not CONTAINERIZED:
             try:
                 import docker
                 client = docker.from_env()
@@ -727,7 +727,7 @@ def prune_server_containers(server_id: str):
     """清理当前主机的已停止容器。"""
     with get_db() as db:
         server = _server_or_404(db, server_id)
-        if server.agent_type == "local":
+        if server.agent_type == "local" and not CONTAINERIZED:
             try:
                 import docker
                 result = docker.from_env().containers.prune()
@@ -804,7 +804,7 @@ def delete_server_docker_resources(server_id: str, resource: str, payload: Docke
             }
             if any(item in protected for item in targets):
                 raise HTTPException(status_code=400, detail="Docker 默认网络不允许删除")
-        if server.agent_type == "local":
+        if server.agent_type == "local" and not CONTAINERIZED:
             try:
                 import docker
                 client = docker.from_env()
@@ -849,7 +849,7 @@ def prune_server_docker_resources(server_id: str, resource: str):
         raise HTTPException(status_code=404, detail="Docker 资源类型不存在")
     with get_db() as db:
         server = _server_or_404(db, server_id)
-        if server.agent_type == "local":
+        if server.agent_type == "local" and not CONTAINERIZED:
             try:
                 import docker
                 client = docker.from_env()
