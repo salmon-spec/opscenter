@@ -10,6 +10,7 @@ SOURCE_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 APP_DIR=${OPSCENTER_HOME:-/opt/opscenter}
 SECRETS_FILE=${OPSCENTER_SECRETS_FILE:-/etc/opscenter/secrets.env}
 COMPOSE_FILE="$APP_DIR/deploy/docker/compose.yml"
+INSTALL_HOST_AGENT=${INSTALL_HOST_AGENT:-true}
 
 for command in docker openssl rsync curl systemctl; do
   command -v "$command" >/dev/null || { echo "Missing prerequisite: $command" >&2; exit 1; }
@@ -27,6 +28,13 @@ if [ "$SOURCE_DIR" != "$APP_DIR" ]; then
 fi
 
 local_host=${LOCAL_HOST:-$(hostname -I | awk '{print $1}')}
+agent_token=""
+if [ "$INSTALL_HOST_AGENT" = false ]; then
+  agent_token=$(systemctl show opsagent.service -p ExecStart --value 2>/dev/null | sed -n 's/.*--token \([^ ;}]\+\).*/\1/p' | head -1)
+  [ ${#agent_token} -ge 16 ] || { echo "Existing opsagent token could not be read" >&2; exit 1; }
+else
+  agent_token=$(openssl rand -hex 32)
+fi
 if [ ! -f "$SECRETS_FILE" ]; then
   db_password=$(openssl rand -hex 24)
   admin_password=$(openssl rand -base64 24 | tr -d '\n')
@@ -49,7 +57,7 @@ OPS_JWT_SECRET=$(openssl rand -hex 32)
 OPS_ADMIN_USER=admin
 OPS_ADMIN_PASSWORD=$admin_password
 CREDENTIAL_KEY=$(openssl rand -hex 32)
-LOCAL_AGENT_TOKEN=$(openssl rand -hex 32)
+LOCAL_AGENT_TOKEN=$agent_token
 LOCAL_HOST=$local_host
 LOCAL_SERVER_NAME=OpsCenter
 PREVIEW_MODE=false
@@ -69,14 +77,16 @@ ensure_env LOKI_BIND_IP "$local_host"
 ensure_env LOKI_PORT 3100
 ensure_env LOKI_DATA_DIR /opt/opscenter-data/loki
 ensure_env LOKI_PUBLIC_URL "http://$local_host:3100"
-ensure_env LOCAL_AGENT_TOKEN "$(openssl rand -hex 32)"
+ensure_env LOCAL_AGENT_TOKEN "$agent_token"
 chmod 0600 "$SECRETS_FILE"
 
 for file in groups.json services.json; do
   [ -f "/opt/opscenter-data/config/$file" ] || install -m 0644 "$APP_DIR/frontend/$file" "/opt/opscenter-data/config/$file"
 done
 
-"$APP_DIR/deploy/docker/install-agent.sh"
+if [ "$INSTALL_HOST_AGENT" = true ]; then
+  "$APP_DIR/deploy/docker/install-agent.sh"
+fi
 
 docker compose --env-file "$SECRETS_FILE" -f "$COMPOSE_FILE" up -d --build
 curl --retry 30 --retry-delay 2 --retry-connrefused -fsS http://127.0.0.1:9091/openapi.json >/dev/null

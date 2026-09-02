@@ -27,6 +27,8 @@ def test_docker_installer_syncs_host_agent_token():
     assert "install-agent.sh" in installer
     assert "LOCAL_AGENT_TOKEN" in agent_installer
     assert "opsagent.service" in agent_installer
+    assert "INSTALL_HOST_AGENT" in installer
+    assert "systemctl show opsagent.service" in installer
 
 
 def test_containerized_local_docker_management_uses_ssh(monkeypatch):

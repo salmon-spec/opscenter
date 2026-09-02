@@ -36,6 +36,14 @@ sudo ./deploy/docker/install.sh
 4. 构建前后端镜像并启动数据库、Loki、后端和 Web。
 5. 等待 OpenAPI 与首页健康检查成功。
 
+如果目标主机已经由另一套 OpsCenter 管理，必须复用现有 Agent，避免改变 Token：
+
+```bash
+sudo INSTALL_HOST_AGENT=false LOCAL_HOST=10.66.66.3 ./deploy/docker/install.sh
+```
+
+该模式会读取现有 `opsagent.service` 的 Token，只配置新控制面，不覆盖或重启 Agent。
+
 首次安装后记录管理员密码：
 
 ```bash
