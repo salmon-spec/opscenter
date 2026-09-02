@@ -27,7 +27,12 @@ for file in groups.json services.json; do
   [ -f "$MUTABLE_DIR/$file" ] && cp "$MUTABLE_DIR/$file" "$work/mutable/$file"
 done
 if docker inspect "$LOKI_CONTAINER" >/dev/null 2>&1; then
-  docker exec "$LOKI_CONTAINER" tar -C /loki -czf - . >"$work/database/loki-data.tar.gz"
+  loki_source=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/loki"}}{{.Source}}{{end}}{{end}}' "$LOKI_CONTAINER")
+  if [ -d "$loki_source" ]; then
+    tar -C "$loki_source" -czf "$work/database/loki-data.tar.gz" .
+  else
+    docker exec "$LOKI_CONTAINER" tar -C /loki -czf - . >"$work/database/loki-data.tar.gz"
+  fi
 fi
 printf 'created_at=%s\nversion=%s\n' "$(date -Iseconds)" "$(cat "$APP_DIR/backend/app/version.py" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" >"$work/metadata.txt"
 tar -C "$work" -czf - . | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASSWORD -out "$OUTPUT"
