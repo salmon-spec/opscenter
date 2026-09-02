@@ -35,6 +35,8 @@ def test_docker_installer_syncs_host_agent_token():
     assert "opsagent.service" in agent_installer
     assert "INSTALL_HOST_AGENT" in installer
     assert "systemctl show opsagent.service" in installer
+    assert "LOKI_BIND_IP" in installer
+    assert "http://$loki_probe_host:$loki_probe_port/ready" in installer
 
 
 def test_containerized_local_docker_management_uses_ssh(monkeypatch):

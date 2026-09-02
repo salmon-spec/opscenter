@@ -97,11 +97,14 @@ fi
 docker compose --env-file "$SECRETS_FILE" -f "$COMPOSE_FILE" up -d --build
 curl --retry 30 --retry-delay 2 --retry-connrefused -fsS "http://127.0.0.1:$(sed -n 's/^OPSCENTER_API_PORT=//p' "$SECRETS_FILE" | tail -1)/openapi.json" >/dev/null
 curl --retry 30 --retry-delay 2 --retry-connrefused -fsS "http://127.0.0.1:$(sed -n 's/^OPSCENTER_HTTP_PORT=//p' "$SECRETS_FILE" | tail -1)/" >/dev/null
+loki_probe_host=$(sed -n 's/^LOKI_BIND_IP=//p' "$SECRETS_FILE" | tail -1)
+case "$loki_probe_host" in 0.0.0.0|::|'') loki_probe_host=127.0.0.1 ;; esac
+loki_probe_port=$(sed -n 's/^LOKI_PORT=//p' "$SECRETS_FILE" | tail -1)
 for _ in $(seq 1 30); do
-  curl -fsS "http://127.0.0.1:$(sed -n 's/^LOKI_PORT=//p' "$SECRETS_FILE" | tail -1)/ready" >/dev/null 2>&1 && break
+  curl -fsS "http://$loki_probe_host:$loki_probe_port/ready" >/dev/null 2>&1 && break
   sleep 2
 done
-curl -fsS "http://127.0.0.1:$(sed -n 's/^LOKI_PORT=//p' "$SECRETS_FILE" | tail -1)/ready" >/dev/null
+curl -fsS "http://$loki_probe_host:$loki_probe_port/ready" >/dev/null
 
 echo "OpsCenter Docker installation completed: http://$local_host:$(sed -n 's/^OPSCENTER_HTTP_PORT=//p' "$SECRETS_FILE" | tail -1)/"
 echo "For full management of this host, save its SSH credential in Manage Hosts; Docker socket is intentionally not mounted."
