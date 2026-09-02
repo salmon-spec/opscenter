@@ -23,7 +23,7 @@ if [ "$SOURCE_DIR" != "$APP_DIR" ]; then
   rsync -a --delete \
     --exclude=.git --exclude=.venv --exclude=venv --exclude=node_modules \
     --exclude=__pycache__ --exclude=.pytest_cache --exclude=data \
-    --exclude=backup --exclude='backup_*' \
+    --exclude='/backup/' --exclude='/backup_*/' \
     "$SOURCE_DIR/" "$APP_DIR/"
 fi
 

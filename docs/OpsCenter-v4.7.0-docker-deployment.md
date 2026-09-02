@@ -1,5 +1,7 @@
 # OpsCenter v4.7.0 Docker 部署与迁移手册
 
+> PVE 兼容说明：发布包包含 `frontend-vite/dist` 预构建静态资源。目标主机仅需 Docker，不需要在受 AppArmor 限制的容器内运行 Node、pnpm 或 Vite。
+
 ## 1. 支持范围
 
 Docker 版将前端、后端、PostgreSQL 和 Loki 放入 Compose，宿主机保留一个 systemd OpsAgent。正式支持 Ubuntu 22.04/24.04、Debian 12、Docker Engine、Compose v2、systemd、x86_64 和 arm64。

@@ -21,6 +21,12 @@ def test_docker_bundle_has_persistent_state_and_healthchecks():
     assert "CONTAINERIZED" in compose
 
 
+def test_docker_bundle_contains_prebuilt_frontend():
+    dockerfile = (ROOT / "deploy/docker/frontend.Dockerfile").read_text(encoding="utf-8")
+    assert "COPY frontend-vite/dist /srv/v3" in dockerfile
+    assert (ROOT / "frontend-vite/dist/index.html").is_file()
+
+
 def test_docker_installer_syncs_host_agent_token():
     installer = (ROOT / "deploy/docker/install.sh").read_text(encoding="utf-8")
     agent_installer = (ROOT / "deploy/docker/install-agent.sh").read_text(encoding="utf-8")

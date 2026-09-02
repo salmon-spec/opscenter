@@ -105,6 +105,38 @@ def test_missing_agent_remains_explicitly_not_deployed(monkeypatch):
     assert db.committed
 
 
+def test_containerized_local_agent_uses_gateway_without_ssh(monkeypatch):
+    server = SimpleNamespace(
+        agent_type="local",
+        agent_port=19100,
+        agent_token="",
+    )
+    monkeypatch.setattr(agent_manager, "CONTAINERIZED", True)
+    monkeypatch.setattr(agent_manager, "LOCAL_AGENT_TOKEN", "existing-token")
+    monkeypatch.setattr(agent_manager, "LOCAL_AGENT_HOST", "host.docker.internal")
+    monkeypatch.setattr(
+        agent_manager,
+        "fetch_agent_metrics",
+        lambda host, port, token: {"agent_version": "2.5.1"}
+        if (host, port, token) == ("host.docker.internal", 19100, "existing-token")
+        else None,
+    )
+    monkeypatch.setattr(
+        agent_manager,
+        "_get_ssh_client",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("SSH must not be used")),
+    )
+
+    result = agent_manager.check_agent_status(server)
+
+    assert result == {
+        "status": "running",
+        "agent_port": 19100,
+        "agent_token": "existing-token",
+        "agent_version": "2.5.1",
+    }
+
+
 class _RemoteFile(io.StringIO):
     def __init__(self, path, files):
         super().__init__()

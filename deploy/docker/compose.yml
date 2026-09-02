@@ -4,6 +4,12 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # This host's Docker AppArmor profile blocks container unix-socket creation
+    # (af_unix mediation with runc 1.1.15 / kernel 7.0.14-6-pve), which makes
+    # PostgreSQL unable to create its /var/run/postgresql socket. Disable the
+    # AppArmor profile for this service only; seccomp and capabilities remain.
+    security_opt:
+      - apparmor=unconfined
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-opscenter}
       POSTGRES_USER: ${POSTGRES_USER:-opscenter}
@@ -43,6 +49,10 @@ services:
       dockerfile: deploy/docker/backend.Dockerfile
     image: ${OPSCENTER_BACKEND_IMAGE:-opscenter/backend:4.7.0}
     restart: unless-stopped
+    # Same host AppArmor af_unix restriction: uvloop needs socketpair() for its
+    # signal wakeup pipe. Disable the profile for this service only.
+    security_opt:
+      - apparmor=unconfined
     env_file:
       - ${OPSCENTER_SECRETS_FILE:-/etc/opscenter/secrets.env}
     environment:

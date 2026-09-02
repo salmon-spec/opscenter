@@ -34,7 +34,7 @@ from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
 )
-from app.config import CONTAINERIZED, PREVIEW_MODE, RETENTION_METRIC_DAYS
+from app.config import CONTAINERIZED, LOCAL_AGENT_TOKEN, LOCAL_SERVER_NAME, PREVIEW_MODE, RETENTION_METRIC_DAYS
 
 # === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康） ===
 from app.api_keys import router as api_keys_router
@@ -1215,7 +1215,7 @@ async def startup():
         local = db.query(Server).filter((Server.is_local == True) | (Server.agent_type == "local")).first()
         if not local:
             local = Server(
-                name="MFA Server",
+                name=LOCAL_SERVER_NAME,
                 host=LOCAL_HOST,
                 ssh_port=22,
                 ssh_user="root",
@@ -1223,6 +1223,7 @@ async def startup():
                 docker_available=True,
                 is_local=True,
                 agent_type='local',
+                agent_token=LOCAL_AGENT_TOKEN,
             )
             db.add(local)
             db.commit()

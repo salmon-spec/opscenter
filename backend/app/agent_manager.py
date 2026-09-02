@@ -6,7 +6,7 @@ import secrets
 from pathlib import Path
 from typing import Optional, Tuple, Dict
 from app.models import Server
-from app.config import LOCAL_AGENT_HOST
+from app.config import CONTAINERIZED, LOCAL_AGENT_HOST, LOCAL_AGENT_TOKEN
 
 
 # 动态读取Agent版本号
@@ -203,6 +203,18 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
 
 def check_agent_status(server: Server, password: str = None) -> Dict:
     """Check if OpsAgent is running on the remote server."""
+    if server.agent_type == "local" and CONTAINERIZED:
+        token = server.agent_token or LOCAL_AGENT_TOKEN
+        data = fetch_agent_metrics(LOCAL_AGENT_HOST, server.agent_port or AGENT_DEFAULT_PORT, token)
+        if data:
+            return {
+                "status": "running",
+                "agent_port": server.agent_port or AGENT_DEFAULT_PORT,
+                "agent_token": token,
+                "agent_version": data.get("agent_version", _AGENT_VERSION),
+            }
+        return {"status": "stopped", "message": "本机Agent不可达"}
+
     client = _get_ssh_client(server, password=password)
     if not client:
         return {"status": "unreachable", "message": "SSH连接失败"}

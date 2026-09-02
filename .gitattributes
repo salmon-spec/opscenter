@@ -3,3 +3,4 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 Caddyfile text eol=lf
+frontend-vite/dist/** text eol=lf
