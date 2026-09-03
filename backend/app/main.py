@@ -356,8 +356,12 @@ def _run_agent_health_check():
             except Exception as exc:
                 print(f"[AgentHealthCheck] Local Agent error: {exc}")
                 local_srv.agent_status = "stopped"
+            # Keep each host update in its own short transaction. The service
+            # scanner also updates hosts and used to deadlock with this loop's
+            # previous all-host commit.
+            db.commit()
 
-        remote_servers = db.query(Server).filter(Server.agent_type != "local").all()
+        remote_servers = db.query(Server).filter(Server.agent_type != "local").order_by(Server.id).all()
         for srv in remote_servers:
             try:
                 result = check_agent_status(srv)
@@ -384,10 +388,12 @@ def _run_agent_health_check():
                     srv.agent_status = "not_deployed"
                 else:
                     srv.agent_status = "error"
+                db.commit()
             except Exception as exc:
+                db.rollback()
                 print(f"[AgentHealthCheck] Error checking {srv.host}: {exc}")
-                srv.agent_status = "error"
-        db.commit()
+                db.query(Server).filter(Server.id == srv.id).update({Server.agent_status: "error"})
+                db.commit()
 
 
 async def _agent_health_check_loop():
@@ -1710,10 +1716,33 @@ def _sync_pve_guest_services(srv, db, scan_data):
         port = int(port)
         url = item.get('url') or f"{'https' if port in (443, 8006, 8443, 9443) else 'http'}://{address}:{port}/"
         dedup_key = f"pve:{item.get('guest_type', 'guest')}:{vmid}:{address}:{port}"
+        # A registered guest owns its own services. Keeping them on the PVE host
+        # creates a second copy beside the guest Agent's discovery result.
+        owner = db.query(Server).filter(Server.host == address).first() or srv
         existing = db.query(Service).filter(
-            Service.server_id == srv.id,
+            Service.server_id == owner.id,
             Service.container_name == dedup_key,
         ).first()
+        if not existing:
+            existing = db.query(Service).filter(
+                Service.server_id == owner.id,
+                Service.url == url,
+            ).first()
+        if not existing:
+            existing = db.query(Service).filter(
+                Service.server_id == owner.id,
+                Service.port == port,
+            ).first()
+
+        # Remove the legacy PVE-owned copy once the registered guest has an
+        # equivalent record. A later scan therefore repairs existing data too.
+        if owner.id != srv.id:
+            legacy = db.query(Service).filter(
+                Service.server_id == srv.id,
+                Service.container_name == dedup_key,
+            ).first()
+            if legacy and legacy is not existing:
+                db.delete(legacy)
         values = {
             'name': item.get('name') or f"{item.get('guest_name', 'PVE Guest')} · {port}",
             'url': url,
@@ -1723,16 +1752,19 @@ def _sync_pve_guest_services(srv, db, scan_data):
         }
         if existing:
             changed = False
-            for field, value in values.items():
-                if value and getattr(existing, field) != value:
-                    setattr(existing, field, value)
-                    changed = True
+            # Do not overwrite richer Agent metadata when URL/port dedup found
+            # an existing guest-owned service.
+            if existing.container_name == dedup_key:
+                for field, value in values.items():
+                    if value and getattr(existing, field) != value:
+                        setattr(existing, field, value)
+                        changed = True
             existing.status = ServiceStatus.up.value
             existing.last_scanned_at = datetime.utcnow()
             updated += int(changed)
             continue
         service = Service(
-            server_id=srv.id,
+            server_id=owner.id,
             source=ServiceSource.agent.value,
             status=ServiceStatus.up.value,
             container_name=dedup_key,
@@ -1744,7 +1776,7 @@ def _sync_pve_guest_services(srv, db, scan_data):
         )
         db.add(service)
         added += 1
-        _auto_assign_group(str(srv.id), str(service.id), service.category)
+        _auto_assign_group(str(owner.id), str(service.id), service.category)
     return {'added': added, 'updated': updated}
 
 
@@ -1962,36 +1994,6 @@ def _sync_agent_scan_to_db(srv, db, scan_data):
             print(f"[WARN] _sync_agent_scan_to_db skip container {c.get('name','?')}: {e}")
             errors += 1
     
-    # Sync stopped containers
-    stopped_data = scan_data.get('stopped_containers') or scan_data.get('stopped', [])
-    if stopped_data:
-        for cont in stopped_data:
-            raw_cname = cont.get('name', '')
-            cname = bounded(raw_cname)
-            if not cname:
-                continue
-            existing = db.query(Service).filter(
-                Service.server_id == srv.id,
-                Service.container_name == cname
-            ).first()
-            if not existing:
-                short_img = cont.get('image', '').split(':')[0].split('/')[-1] if cont.get('image') else ''
-                new_svc = Service(
-                    server_id=srv.id,
-                    name=bounded(f"{raw_cname.replace('-', ' ').replace('_', ' ').title()} [已停止]"),
-                    url="#none",
-                    category=cont.get('category', '') or classify_image(short_img),
-                    source='docker_auto',
-                    container_name=cname,
-                    image=cont.get('image', ''),
-                    status='down',
-                    ports=cont.get('ports', ''),
-                    last_scanned_at=datetime.utcnow(),
-                )
-                db.add(new_svc)
-                synced += 1
-                _auto_assign_group(str(srv.id), str(new_svc.id), new_svc.category)
-
     # Sync Nginx-discovered services with port-aware dedup
     nginx_data = scan_data.get('nginx_services') or scan_data.get('nginx', [])
     if nginx_data:

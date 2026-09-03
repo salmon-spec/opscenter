@@ -7,6 +7,10 @@
     handle /ws/* {
         reverse_proxy backend:9091
     }
+    @apiDocs path /openapi.json /docs /docs/* /redoc /redoc/*
+    handle @apiDocs {
+        reverse_proxy backend:9091
+    }
     handle /v3/* {
         root * /srv
         file_server

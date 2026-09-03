@@ -3,6 +3,7 @@ import paramiko
 import json
 import re as _re
 from typing import Optional, Tuple, List, Dict
+from app.config import CONTAINERIZED, LOCAL_AGENT_HOST
 from app.models import Server
 
 
@@ -10,10 +11,11 @@ def get_ssh_client(server: Server, password: str = None) -> Optional[paramiko.SS
     """Create and return an SSH client connected to the server."""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    hostname = LOCAL_AGENT_HOST if CONTAINERIZED and server.agent_type == "local" else server.host
     try:
         if password:
             client.connect(
-                hostname=server.host, port=server.ssh_port or 22,
+                hostname=hostname, port=server.ssh_port or 22,
                 username=server.ssh_user or 'root', password=password,
                 timeout=10, allow_agent=False, look_for_keys=False,
             )
@@ -22,7 +24,7 @@ def get_ssh_client(server: Server, password: str = None) -> Optional[paramiko.SS
             if server.ssh_key.startswith("__password__"):
                 pw = server.ssh_key[len("__password__"):]
                 client.connect(
-                    hostname=server.host, port=server.ssh_port or 22,
+                    hostname=hostname, port=server.ssh_port or 22,
                     username=server.ssh_user or 'root', password=pw,
                     timeout=10, allow_agent=False, look_for_keys=False,
                 )
@@ -30,7 +32,7 @@ def get_ssh_client(server: Server, password: str = None) -> Optional[paramiko.SS
                 key_file = io.StringIO(server.ssh_key)
                 pkey = paramiko.Ed25519Key.from_private_key(key_file)
                 client.connect(
-                    hostname=server.host, port=server.ssh_port or 22,
+                    hostname=hostname, port=server.ssh_port or 22,
                     username=server.ssh_user or 'root', pkey=pkey,
                     timeout=10, allow_agent=False, look_for_keys=False,
                 )

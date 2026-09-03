@@ -319,7 +319,7 @@ curl -fsS http://10.66.66.3:8088/api/v2/logs/agents/overview
 1. 在“管理主机”中检查每台远程主机的日志采集状态。
 2. 对缺失或仍指向 VM2 Loki 的主机重新部署日志采集。
 3. 可以调用 `POST /api/v2/logs/agents/deploy-missing` 批量安排缺失主机，但调用后必须再次检查 overview。
-4. VM2 的 `opscenter-alloy` 当前故意停止。只有确认其目标地址已改为 `http://10.66.66.3:3100/loki/api/v1/push` 后才允许重新启动或重新部署。
+4. VM2 的 `opscenter-alloy` 已改投 `http://10.66.66.3:3100/loki/api/v1/push` 并恢复运行。
 5. 在 Loki 查询中分别验证迁移前历史日志和迁移后新日志。
 
 ## 9. 成功切换后的源端处理
@@ -395,7 +395,7 @@ ssh pve 'BACKUP_PASSWORD=$(cat /root/.opscenter-recovery/pve-pre-migration.key) 
 
 - 目标 PVE 四个容器 healthy，PVE OpsAgent active。
 - 目标 Web 8088、OpenAPI、Loki ready 正常。
-- 7 台主机、194 条服务及关键历史表数量恢复。
+- 7 台主机、关键历史表数量恢复；自动停止容器清理后的服务资产基线为 185 条。
 - PVE 是唯一 local，VM2 作为 remote 可管理。
 - 服务广场排序、隐藏、详情、多账号凭据和 PVE HTTPS 探活正常。
 - 历史监控和历史 Loki 日志可查询，新监控和新日志继续写入。
@@ -403,3 +403,20 @@ ssh pve 'BACKUP_PASSWORD=$(cat /root/.opscenter-recovery/pve-pre-migration.key) 
 - 两份加密备份、各自独立密码和 SHA 校验均保留。
 - 临时 HTTP 服务和防火墙规则已经删除。
 - 完成一次 PVE Compose 重启后的恢复验证。
+
+## 14. 2026-09-03 最终收尾记录
+
+已完成：
+
+- VM2 的 `10.66.66.5`、`192.168.1.153` 和旧域名入口统一跳转到 `http://10.66.66.3:8088`；旧 backend 保持停止。
+- Web 代理同时开放标准 `/docs`、`/openapi.json` 和兼容 `/api/v2/docs`、`/api/v2/openapi.json`。
+- PVE 虚拟机服务扫描会优先归属已登记的 guest 主机，旧的 PVE→VM4 重复记录已归零。
+- 不再把停止容器写入服务资产；清理了 23 条自动产生的停止容器记录。当前服务资产基线为 185 条，服务广场仍为 18 条可见配置。
+- Agent 健康检查改为每台主机独立短事务，避免与服务扫描交叉更新多台主机时出现 PostgreSQL 死锁。
+- L1 防火墙的 Agent 白名单已从 VM2 `10.66.66.5` 切换到 PVE `10.66.66.3`，Agent 2.5.1 恢复 `running`。
+- PVE 创建了独立的 OpsCenter 本机回连 SSH 密钥；Proxmox host firewall 只允许 `opscenter_default` 子网访问宿主机 22、8006、19100 端口，容器管理恢复正常。
+- 新增收尾前加密备份 `/root/opscenter-backups/pre-stability-20260903.tar.gz.enc`，SHA-256 为 `4d02e486e5ab0be1b6b4d6809bec84413a376afd248ef68ac3480146d6bf71ec`；密码仅保存在 PVE root 恢复目录。
+
+已知外部阻塞：
+
+- `101.200.91.229` 的 SSH 凭证认证失败，Agent 状态为 `error`，日志最后写入时间已过期。保留该资产，不猜测凭证、不自动删除；恢复需要有效 SSH 凭证或主机侧人工处理。

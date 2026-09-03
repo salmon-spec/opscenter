@@ -22,6 +22,9 @@ class _Query:
     def all(self):
         return self.result
 
+    def order_by(self, *_args, **_kwargs):
+        return self
+
 
 class _Db:
     def __init__(self, remotes):
@@ -35,6 +38,9 @@ class _Db:
 
     def commit(self):
         self.committed = True
+
+    def rollback(self):
+        pass
 
 
 def _server(status="stopped"):

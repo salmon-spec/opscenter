@@ -3,6 +3,8 @@
 import json
 import os
 import sys
+from types import SimpleNamespace
+from uuid import uuid4
 
 from app import main
 from fastapi.testclient import TestClient
@@ -77,3 +79,62 @@ def test_pve_probe_is_bounded_to_configured_web_ports(monkeypatch):
     assert len(observed) == len(scanner.PVE_WEB_PORTS)
     assert services[0]['url'] == 'http://10.66.66.21:8080/'
     assert services[0]['source'] == 'pve_guest'
+
+
+def test_pve_guest_service_reuses_registered_guest_record(monkeypatch):
+    pve = SimpleNamespace(id=uuid4(), host='10.66.66.3')
+    guest = SimpleNamespace(id=uuid4(), host='10.66.66.12')
+    existing = SimpleNamespace(
+        container_name='jenkins', name='Jenkins', url='http://10.66.66.12:8080/',
+        port=8080, status='unknown', last_scanned_at=None,
+    )
+    legacy = SimpleNamespace(container_name='pve:qemu:104:10.66.66.12:8080')
+
+    class Query:
+        def __init__(self, value):
+            self.value = value
+
+        def filter(self, *_args):
+            return self
+
+        def first(self):
+            return self.value
+
+    class Database:
+        def __init__(self):
+            # guest owner, no owner pve-key row, URL match, legacy PVE row
+            self.results = iter((guest, None, existing, legacy))
+            self.deleted = []
+
+        def query(self, _model):
+            return Query(next(self.results))
+
+        def delete(self, value):
+            self.deleted.append(value)
+
+    db = Database()
+    monkeypatch.setattr(main, '_auto_assign_group', lambda *_args: None)
+    result = main._sync_pve_guest_services(pve, db, {'pve_services': [{
+        'address': guest.host, 'port': 8080, 'vmid': 104,
+        'guest_type': 'qemu', 'guest_name': 'vm4',
+        'url': existing.url,
+    }]})
+
+    assert result == {'added': 0, 'updated': 0}
+    assert existing.name == 'Jenkins'
+    assert existing.status == 'up'
+    assert db.deleted == [legacy]
+
+
+def test_stopped_containers_are_not_persisted_as_services():
+    class Database:
+        def add(self, _value):
+            raise AssertionError('stopped containers belong in the container view')
+
+    result = main._sync_agent_scan_to_db(
+        SimpleNamespace(id=uuid4(), host='10.66.66.4', host_domain=None),
+        Database(),
+        {'stopped_containers': [{'name': 'runner-job-123', 'image': 'runner:latest'}]},
+    )
+
+    assert result['added'] == 0

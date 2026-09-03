@@ -27,6 +27,12 @@ def test_docker_bundle_contains_prebuilt_frontend():
     assert (ROOT / "frontend-vite/dist/index.html").is_file()
 
 
+def test_web_proxies_standard_api_documentation_paths():
+    for path in ("deploy/docker/Caddyfile", "deploy/product/Caddyfile"):
+        caddyfile = (ROOT / path).read_text(encoding="utf-8")
+        assert "/openapi.json /docs /docs/* /redoc /redoc/*" in caddyfile
+
+
 def test_docker_installer_syncs_host_agent_token():
     installer = (ROOT / "deploy/docker/install.sh").read_text(encoding="utf-8")
     agent_installer = (ROOT / "deploy/docker/install-agent.sh").read_text(encoding="utf-8")
@@ -61,3 +67,27 @@ def test_containerized_local_process_management_uses_ssh(monkeypatch):
     monkeypatch.setattr(system_control, "ssh_exec", lambda *_args, **_kwargs: ("host-process", "", 0))
 
     assert system_control._process_command(server, "ps") == "host-process"
+
+
+def test_containerized_local_ssh_uses_host_gateway(monkeypatch):
+    from app import ssh_manager
+
+    calls = []
+
+    class Client:
+        def set_missing_host_key_policy(self, _policy):
+            pass
+
+        def connect(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(ssh_manager.paramiko, "SSHClient", Client)
+    monkeypatch.setattr(ssh_manager, "CONTAINERIZED", True)
+    monkeypatch.setattr(ssh_manager, "LOCAL_AGENT_HOST", "host.docker.internal")
+    server = SimpleNamespace(
+        agent_type="local", host="10.66.66.3", ssh_port=22,
+        ssh_user="root", ssh_key="__password__test",
+    )
+
+    assert ssh_manager.get_ssh_client(server) is not None
+    assert calls[0]["hostname"] == "host.docker.internal"
