@@ -278,6 +278,36 @@ def _normalize_agent_metrics(data: dict) -> dict:
     return result
 
 
+def fetch_agent_wireguard(host: str, port: int = AGENT_DEFAULT_PORT, token: str = "") -> Optional[Dict]:
+    """v2.6: 拉取 Agent 只读 WireGuard 状态。
+
+    Agent 侧已保证不返回私钥/PSK/完整公钥；此处仍按未知字段防御。
+    旧 Agent（<2.6）没有该接口 → 404/405，返回 None 表示不支持。
+    """
+    import requests as req
+    try:
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        resp = req.get(f"http://{host}:{port}/api/v1/wireguard", headers=headers, timeout=5)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not isinstance(data, dict):
+            return None
+        # 防御：剥离可能出现的敏感字段（即使 Agent 已过滤）
+        data.pop("private_key", None)
+        data.pop("preshared_key", None)
+        for iface in data.get("interfaces") or []:
+            iface.pop("private_key", None)
+            iface.pop("preshared_key", None)
+            for peer in iface.get("peers") or []:
+                peer.pop("private_key", None)
+                peer.pop("preshared_key", None)
+                peer.pop("public_key", None)  # 只留指纹
+        return data
+    except Exception:
+        return None
+
+
 def fetch_agent_metrics(host: str, port: int = AGENT_DEFAULT_PORT, token: str = "") -> Optional[Dict]:
     """Fetch metrics from a running OpsAgent via HTTP."""
     import requests as req

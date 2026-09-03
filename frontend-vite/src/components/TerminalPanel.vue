@@ -13,8 +13,11 @@
         <div v-show="tab === 'term'" class="term-body">
           <div ref="termEl" class="term-el"></div>
           <div v-if="wsState !== 'open'" class="term-state">
-            {{ wsState === 'connecting' ? '正在连接 SSH…' : '连接已断开' }}
-            <button v-if="wsState === 'closed'" class="reconnect" @click="reconnect">重新连接</button>
+            <template v-if="wsState === 'connecting'">正在连接 SSH…</template>
+            <template v-else-if="wsCloseReason === 'expired'">会话已过期，请新建终端标签</template>
+            <template v-else-if="wsCloseReason === 'error'">连接异常</template>
+            <template v-else>连接已断开（5 分钟内可重新连接）</template>
+            <button v-if="wsState === 'closed' && wsCloseReason !== 'expired'" class="reconnect" @click="reconnect">重新连接</button>
           </div>
         </div>
         <div v-show="tab === 'files'" class="files-body">
@@ -26,7 +29,7 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { wsUrl } from '../api'
@@ -37,16 +40,19 @@ const props = defineProps({
   title: { type: String, default: '' },
   allowFiles: { type: Boolean, default: true },
   embedded: { type: Boolean, default: false },
+  active: { type: Boolean, default: true },
 })
-defineEmits(['close'])
+const emit = defineEmits(['close', 'state'])
 
 const termEl = ref(null)
 const tab = ref('term')
 const wsState = ref('connecting')
+const wsCloseReason = ref('')
 let term = null
 let fitAddon = null
 let ws = null
 let resizeObserver = null
+let pingTimer = null
 
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
@@ -59,6 +65,9 @@ function fit() {
     send({ type: 'resize', cols: term.cols, rows: term.rows })
   } catch { /* 容器隐藏时忽略 */ }
 }
+
+// 多标签：标签重新激活时容器尺寸可能已变化，强制 fit 一次并同步 resize
+watch(() => props.active, (v) => { if (v) setTimeout(fit, 60) })
 
 function connect() {
   wsState.value = 'connecting'
@@ -80,10 +89,15 @@ function connect() {
   }
 
   ws = new WebSocket(wsUrl(`/ws/terminal/${props.sessionId}`))
-  ws.onopen = () => { wsState.value = 'open' }
+  ws.onopen = () => { wsState.value = 'open'; emit('state', 'connected') }
   ws.onmessage = (e) => term.write(String(e.data))
-  ws.onclose = () => { wsState.value = 'closed' }
-  ws.onerror = () => { wsState.value = 'closed' }
+  ws.onclose = (ev) => {
+    // 4004：会话已过期/服务端已销毁；其他：网络断开（宽限期内可重连）
+    wsCloseReason.value = ev && ev.code === 4004 ? 'expired' : 'disconnected'
+    wsState.value = 'closed'
+    emit('state', wsCloseReason.value === 'expired' ? 'closed' : 'disconnected')
+  }
+  ws.onerror = () => { wsState.value = 'closed'; wsCloseReason.value = 'error'; emit('state', 'error') }
 
   // 容器尺寸变化时自动 fit（含全屏/窗口缩放）
   if (!resizeObserver) {
@@ -102,8 +116,13 @@ function switchTab(t) {
   if (t === 'term') setTimeout(fit, 60)
 }
 
-onMounted(connect)
+onMounted(() => {
+  connect()
+  // 应用层心跳：每 25 秒更新服务端活动时间，不写入 shell
+  pingTimer = setInterval(() => send({ type: 'ping' }), 25000)
+})
 onUnmounted(() => {
+  if (pingTimer) clearInterval(pingTimer)
   if (ws) { try { ws.close() } catch { /* ignore */ } }
   if (resizeObserver) resizeObserver.disconnect()
   if (term) term.dispose()

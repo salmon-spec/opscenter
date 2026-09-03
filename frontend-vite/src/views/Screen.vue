@@ -2,8 +2,8 @@
   <div class="screen-root" ref="screenRoot">
     <header class="screen-head">
       <div>
-        <h1 class="screen-title">OpsCenter 监控大屏</h1>
-        <div class="screen-sub">最后刷新 {{ lastRefresh }}</div>
+        <h1 class="screen-title">OpsCenter 健康大屏</h1>
+        <div class="screen-sub">核心数据每 10 秒刷新 · 最后刷新 {{ lastRefresh }}<span v-if="pageHidden"> · 页面已隐藏，暂停轮询</span></div>
       </div>
       <div class="screen-tools">
         <router-link v-if="standalone" to="/" class="btn btn-ghost screen-btn">← 返回工作台</router-link>
@@ -11,20 +11,61 @@
       </div>
     </header>
 
+    <div v-if="partialErrors.length" class="partial-errors">
+      <span class="perr-icon">⚠</span>
+      <div class="perr-body">
+        <b>部分数据异常（时间 {{ lastRefresh }}）</b>
+        <p v-for="(e, i) in partialErrors" :key="i" class="perr-item">{{ e }}</p>
+      </div>
+    </div>
+
+    <!-- 资源总览卡 -->
+    <div class="res-grid">
+      <router-link to="/" class="res-card">
+        <div class="res-head"><span class="res-label">主机</span><b class="res-num">{{ fmtHosts() }}</b></div>
+        <p class="res-meta">在线 {{ hostsSummary.online || 0 }} / {{ hostsSummary.total || 0 }}<template v-if="hostsSummary.stale"> · 数据陈旧 {{ hostsSummary.stale }}</template></p>
+        <div class="res-risk">{{ riskTop('cpu', 'CPU') }}</div>
+      </router-link>
+      <router-link to="/container" class="res-card">
+        <div class="res-head"><span class="res-label">容器</span><b class="res-num">{{ containersSummary.running ?? '--' }}</b></div>
+        <p class="res-meta">运行中 · 已停止 {{ containersSummary.stopped ?? '--' }}<template v-if="containersSummary.unknown_hosts"> · 未知主机 {{ containersSummary.unknown_hosts }}</template></p>
+      </router-link>
+      <router-link to="/database" class="res-card">
+        <div class="res-head"><span class="res-label">数据库</span><b class="res-num">{{ databasesSummary.total ?? '--' }}</b></div>
+        <p class="res-meta">{{ databasesSummary.total === 0 ? '暂无实例' : `已连接 ${databasesSummary.connected || 0} · 待接入 ${databasesSummary.pending || 0} · 异常 ${databasesSummary.error || 0}` }}</p>
+      </router-link>
+      <router-link to="/service-health" class="res-card">
+        <div class="res-head"><span class="res-label">服务</span><b class="res-num">{{ servicesSummary.up ?? '--' }} / {{ servicesSummary.total ?? '--' }}</b></div>
+        <p class="res-meta">在线/总数 · 离线 {{ servicesSummary.down ?? '--' }}<template v-if="servicesSummary.incidents"> · 事件 {{ servicesSummary.incidents }}</template></p>
+      </router-link>
+      <router-link to="/logs" class="res-card">
+        <div class="res-head"><span class="res-label">日志</span><b class="res-num">{{ logsSummary.fresh ?? '--' }}/{{ logsSummary.total ?? '--' }}</b></div>
+        <p class="res-meta">采集正常/总数 · 陈旧 {{ logsSummary.stale ?? '--' }} · 异常 {{ logsSummary.abnormal ?? '--' }}</p>
+      </router-link>
+      <router-link :to="{ path: '/topology', query: { scenario: 'wireguard' } }" class="res-card">
+        <div class="res-head"><span class="res-label">WireGuard</span><b class="res-num">{{ wgSummary.managed ?? '--' }}</b></div>
+        <p class="res-meta">已纳管 · 健康 {{ wgSummary.healthy ?? '--' }} · 警告 {{ wgSummary.warning ?? '--' }} · 离线 {{ wgSummary.offline ?? '--' }} · 未纳管 {{ wgSummary.unmanaged ?? '--' }}</p>
+      </router-link>
+      <router-link to="/alerts" class="res-card">
+        <div class="res-head"><span class="res-label">告警</span><b class="res-num" :class="alertsSummary.firing ? 'res-err' : ''">{{ alertsSummary.firing ?? '--' }}</b></div>
+        <p class="res-meta">触发中 · 已确认 {{ alertsSummary.acknowledged ?? '--' }}</p>
+      </router-link>
+    </div>
+
     <div class="screen-grid">
       <!-- 主机水位 -->
       <section class="panel">
-        <div class="panel-title">主机资源水位</div>
-        <div v-if="!hosts.length" class="screen-empty">暂无主机数据</div>
-        <div v-for="h in hosts" :key="h.id" class="host-line">
+        <div class="panel-title">主机资源水位 <span class="screen-muted" style="font-size:12px">异常优先</span></div>
+        <div v-if="!servers.length" class="screen-empty">暂无主机数据</div>
+        <div v-for="h in sortedServers" :key="h.id" class="host-line">
           <div class="host-line-head">
-            <span>{{ h.name }}</span>
-            <span class="screen-muted">{{ h.host }}</span>
+            <span>{{ h.name }}<em v-if="h.stale" class="stale-tag">陈旧</em></span>
+            <span class="screen-muted">{{ h.host }} · {{ h.last_seen ? fmtTime(h.last_seen) : '无数据' }}</span>
           </div>
           <div class="host-line-bars">
-            <div class="hlb"><span>CPU</span><div class="hlb-track"><div class="hlb-fill" :style="{ width: (monitors[h.id]?.cpu || 0) + '%', background: levelColor(monitors[h.id]?.cpu) }"></div></div></div>
-            <div class="hlb"><span>MEM</span><div class="hlb-track"><div class="hlb-fill" :style="{ width: (monitors[h.id]?.memory || 0) + '%', background: levelColor(monitors[h.id]?.memory) }"></div></div></div>
-            <div class="hlb"><span>DISK</span><div class="hlb-track"><div class="hlb-fill" :style="{ width: (monitors[h.id]?.disk || 0) + '%', background: levelColor(monitors[h.id]?.disk) }"></div></div></div>
+            <div class="hlb"><span>CPU</span><div class="hlb-track"><div class="hlb-fill" :style="fillStyle(h.cpu)"></div></div><b class="hlb-val">{{ fmtPct(h.cpu) }}</b></div>
+            <div class="hlb"><span>MEM</span><div class="hlb-track"><div class="hlb-fill" :style="fillStyle(h.memory)"></div></div><b class="hlb-val">{{ fmtPct(h.memory) }}</b></div>
+            <div class="hlb"><span>DISK</span><div class="hlb-track"><div class="hlb-fill" :style="fillStyle(h.disk)"></div></div><b class="hlb-val">{{ fmtPct(h.disk) }}</b></div>
           </div>
         </div>
       </section>
@@ -34,14 +75,9 @@
         <div class="panel-title">服务健康矩阵
           <span class="screen-muted" style="font-size:12px">up {{ healthSummary.up }} / down {{ healthSummary.down }} / total {{ healthSummary.total }}</span>
         </div>
-        <div v-if="!healthServices.length" class="screen-empty">暂无服务数据</div>
+        <div v-if="!services.length" class="screen-empty">暂无服务数据</div>
         <div v-else class="health-grid">
-          <div
-            v-for="s in healthServices" :key="s.id"
-            class="health-tile" :class="'st-' + s.status"
-            :title="s.name + (s.url ? ' · ' + s.url : '')"
-            @click="selected = s; drawerVisible = true"
-          >
+          <div v-for="s in services" :key="s.id" class="health-tile" :class="'st-' + (s.status === 'unknown' ? 'unknown' : s.status)" :title="s.name" @click="go('/service-health')">
             <span class="tile-name">{{ s.name }}</span>
           </div>
         </div>
@@ -49,190 +85,209 @@
 
       <!-- 活跃告警 -->
       <section class="panel">
-        <div class="panel-title">活跃告警 <span class="screen-muted" style="font-size:12px">最近 24h</span></div>
-        <div v-if="!events.length" class="screen-empty">当前无告警 🎉</div>
+        <div class="panel-title">活跃告警 <span class="screen-muted" style="font-size:12px">触发中</span></div>
+        <div v-if="!alerts.length" class="screen-empty">当前无告警 🎉</div>
         <div v-else class="alert-list">
-          <div v-for="e in events" :key="e.id" class="alert-item">
-            <span class="alert-dot" :class="e.status === 'resolved' ? 'ok' : e.status === 'acked' ? 'warn' : 'err'"></span>
+          <div v-for="e in alerts" :key="e.id" class="alert-item" @click="go('/alerts')">
+            <span class="alert-dot err"></span>
             <div class="alert-main">
               <div class="alert-name">{{ e.rule_name || '未知规则' }}</div>
-              <div class="alert-meta">{{ e.server_name || '' }} · {{ fmtTime(e.fired_at) }}</div>
+              <div class="alert-meta">{{ e.server_name || '' }} · {{ fmtTime(e.fired_at || e.created_at) }} · {{ e.current_value || '' }}</div>
             </div>
-            <span class="tag" :class="e.status === 'resolved' ? 'tag-green' : e.status === 'acked' ? 'tag-amber' : 'tag-red'">{{ e.status }}</span>
+            <span class="tag tag-red">{{ e.status }}</span>
           </div>
         </div>
       </section>
 
       <!-- 资源趋势 -->
       <section class="panel panel-wide">
-        <div class="panel-title">资源趋势（CPU 6h）</div>
-        <div ref="cpuChartEl" class="chart"></div>
-      </section>
-
-      <!-- 网络趋势 -->
-      <section class="panel panel-wide">
-        <div class="panel-title">网络流量趋势（6h）
-          <select v-model="selectedNetHostId" class="screen-select" @change="loadNetworkTrend">
-            <option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</option>
+        <div class="panel-title">资源趋势
+          <select v-model="trendHost" class="screen-select" @change="queueTrend()">
+            <option value="__top3__">风险 Top 3 主机</option>
+            <option v-for="h in servers" :key="h.id" :value="h.id">{{ h.name }}</option>
+          </select>
+          <select v-model="trendMetric" class="screen-select" @change="queueTrend()">
+            <option value="cpu">CPU</option>
+            <option value="memory">内存</option>
+            <option value="disk">磁盘</option>
+            <option value="net">网络</option>
+          </select>
+          <select v-model="trendRange" class="screen-select" @change="queueTrend()">
+            <option value="1">近 1 小时</option>
+            <option value="6">近 6 小时</option>
+            <option value="24">近 24 小时</option>
           </select>
         </div>
-        <div ref="netChartEl" class="chart"></div>
+        <div ref="trendChartEl" class="chart"></div>
       </section>
     </div>
-
-    <ServiceDetailDrawer :visible="drawerVisible" :service="selected" @close="drawerVisible = false" />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import { api, fmtTime } from '../api'
-import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'
 
+const router = useRouter()
 const standalone = ref(!!(window.location.hash.includes('screen-standalone')))
 const screenRoot = ref(null)
-const cpuChartEl = ref(null)
-const netChartEl = ref(null)
+const trendChartEl = ref(null)
 const isFullscreen = ref(false)
 const lastRefresh = ref('-')
+const pageHidden = ref(false)
 
-const hosts = ref([])
-const monitors = ref({})
-const healthServices = ref([])
-const events = ref([])
+const summary = ref(null)
+const partialErrors = ref([])
 const drawerVisible = ref(false)
 const selected = ref(null)
-const selectedNetHostId = ref('')
+const trendHost = ref('__top3__')
+const trendMetric = ref('cpu')
+const trendRange = ref('6')
 
-let cpuChart = null
-let netChart = null
-let timer = null
-let trendsRefreshedAt = 0
+let trendChart = null
+let coreTimer = null
+let trendTimer = null
+let controller = null
+let requestInFlight = false
+let lastCoreAt = 0
+let refreshAfterHidden = false
+
+const hostsSummary = computed(() => summary.value?.hosts_summary || {})
+const containersSummary = computed(() => summary.value?.containers_summary || {})
+const databasesSummary = computed(() => summary.value?.databases_summary || {})
+const servicesSummary = computed(() => summary.value?.services_summary || {})
+const logsSummary = computed(() => summary.value?.logs_summary || {})
+const wgSummary = computed(() => summary.value?.wireguard_summary || {})
+const alertsSummary = computed(() => summary.value?.alerts_summary || {})
+const servers = computed(() => summary.value?.servers || [])
+const services = computed(() => summary.value?.services || [])
+const alerts = computed(() => summary.value?.active_alerts || [])
 
 const healthSummary = computed(() => {
-  const up = healthServices.value.filter((s) => s.status === 'up' || s.status === 'online').length
-  const down = healthServices.value.filter((s) => s.status === 'down' || s.status === 'offline').length
-  return { up, down, total: healthServices.value.length }
+  const up = services.value.filter((s) => s.status === 'up' || s.status === 'online').length
+  const down = services.value.filter((s) => s.status === 'down' || s.status === 'offline').length
+  return { up, down, total: services.value.length }
 })
+
+const sortedServers = computed(() => {
+  const score = (h) => {
+    const v = [h.cpu, h.memory, h.disk]
+    return Math.max(...v.map((x) => (x == null ? -1 : x)))
+  }
+  return [...servers.value].sort((a, b) => score(b) - score(a))
+})
+
+function fmtPct(v) { return v == null ? '--' : `${Number(v).toFixed(1)}%` }
+function fmtHosts() {
+  const s = hostsSummary.value
+  return s.total == null ? '--' : `${s.online || 0}/${s.total}`
+}
+function fillStyle(v) {
+  if (v == null) return { width: '0%' }
+  return { width: Math.min(100, Number(v)) + '%', background: levelColor(v) }
+}
 function levelColor(v) {
   if (v >= 90) return '#ef4444'
   if (v >= 70) return '#f59e0b'
   return '#22c55e'
 }
+function riskTop(metricKey, label) {
+  const top = sortedServers.value.slice(0, 3).filter((h) => h[metricKey] != null)
+  if (!top.length) return ''
+  return `<span class="risk">${label} 前三：${top.map((h) => `${h.name} ${fmtPct(h[metricKey])}`).join('，')}</span>`
+}
+function go(path) { router.push(path) }
 
-function normStatus(s) {
-  if (s === 'online' || s === 'up' || s === 'running') return 'up'
-  if (s === 'offline' || s === 'down') return 'down'
-  if (s === 'degraded') return 'warn'
-  return 'unknown'
+// ---------------- 核心聚合 ----------------
+async function loadSummary() {
+  if (requestInFlight) return
+  if (document.visibilityState !== 'visible') { refreshAfterHidden = true; return }
+  requestInFlight = true
+  if (controller) controller.abort()
+  controller = new AbortController()
+  try {
+    const data = await api.get('/screen/summary', null, { signal: controller.signal })
+    summary.value = data
+    partialErrors.value = data.partial_errors || []
+    lastRefresh.value = fmtTime(new Date().toISOString())
+    lastCoreAt = Date.now()
+  } catch (err) {
+    if (err.name !== 'AbortError') {
+      // 保留上一份可用数据；只更新时间戳
+      partialErrors.value = [...partialErrors.value, `核心聚合失败：${err.message}`].slice(-6)
+    }
+  } finally {
+    requestInFlight = false
+  }
 }
 
-async function loadAll() {
-  lastRefresh.value = fmtTime(new Date().toISOString())
-  // 主机 + 指标
-  const sv = await api.get('/servers').catch(() => [])
-  hosts.value = sv
-  if (!sv.some((h) => h.id === selectedNetHostId.value)) {
-    selectedNetHostId.value = sv[0]?.id || ''
-  }
-  const mon = {}
-  await Promise.allSettled(sv.map(async (h) => {
-    try {
-      const d = await api.get(`/servers/${h.id}/monitor`)
-      mon[h.id] = d.metrics || {}
-    } catch { mon[h.id] = null }
-  }))
-  monitors.value = mon
-
-  // 服务健康
-  const health = await api.get('/services/health').catch(() => null)
-  if (health?.services) {
-    healthServices.value = health.services.map((s) => ({ ...s, status: normStatus(s.status) }))
-  } else {
-    const list = await api.get('/services-with-status').catch(() => [])
-    healthServices.value = list.map((s) => ({ id: s.id, name: s.name, url: s.url, status: normStatus(s.status) }))
-  }
-
-  // 告警
-  events.value = await api.get('/alert-events', { days: 1 }).catch(() => [])
-
-  // 趋势
+async function queueTrend() {
+  if (document.visibilityState === 'hidden') return
+  // 趋势独立于核心刷新，60 秒节流
   const now = Date.now()
-  if (now - trendsRefreshedAt >= 30000) {
-    trendsRefreshedAt = now
-    await loadTrends()
-  }
+  if (now - (lastTrendAt || 0) < 15000) return
+  lastTrendAt = now
+  await loadTrend()
 }
+let lastTrendAt = 0
 
-async function loadTrends() {
+async function loadTrend() {
+  if (!trendChartEl.value) return
+  const hours = Number(trendRange.value)
+  const end = new Date()
+  const start = new Date(end.getTime() - hours * 3600 * 1000)
+  let ids = []
+  if (trendHost.value === '__top3__') {
+    ids = sortedServers.value.slice(0, 3).map((h) => h.id)
+  } else {
+    ids = [trendHost.value]
+  }
+  const isNet = trendMetric.value === 'net'
+  const metrics = isNet ? 'net_rx,net_tx' : trendMetric.value
   const series = []
-  await Promise.allSettled(hosts.value.map(async (h) => {
-    const d = await api.get(`/monitor/${h.id}/history`, { metric: 'cpu', hours: 6 }).catch(() => null)
-    if (d?.values?.length) {
-      series.push({
-        name: h.name,
-        type: 'line',
-        smooth: true,
-        showSymbol: false,
-        data: d.values.map(([t, v]) => [t * 1000, Number(v).toFixed(1)]),
-      })
+  const color = { cpu: '#3b82f6', memory: '#10b981', disk: '#f59e0b', net_rx: '#38bdf8', net_tx: '#fb7185' }
+  const unit = isNet ? 'KB/s' : '%'
+  await Promise.allSettled(ids.map(async (id) => {
+    const h = servers.value.find((x) => x.id === id)
+    if (!h) return
+    const d = await api.get(`/servers/${id}/metrics/timeseries`, {
+      metrics, start: start.toISOString(), end: end.toISOString(), resolution: 'auto',
+    }).catch(() => null)
+    if (!d?.series) return
+    for (const [name, points] of Object.entries(d.series)) {
+      if (points?.length) {
+        const isNetP = name === 'net_rx' || name === 'net_tx'
+        series.push({
+          name: isNetP ? `${h.name} ${name === 'net_rx' ? '下行' : '上行'}` : `${h.name}`,
+          type: 'line', smooth: true, showSymbol: false,
+          itemStyle: { color: color[name] || color[trendMetric.value] },
+          areaStyle: isNetP ? { opacity: .15 } : undefined,
+          data: points.map((pt) => [pt[0] * 1000, isNetP ? Number((pt[1] / 1024).toFixed(2)) : Number(pt[1].toFixed(1))]),
+        })
+      }
     }
   }))
-  if (cpuChart) {
-    cpuChart.setOption({
+  if (trendChart) {
+    trendChart.setOption({
       series,
       xAxis: { type: 'time' },
-      yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
+      yAxis: { type: 'value', max: isNet ? undefined : 100, axisLabel: { color: '#7f95b5', formatter: isNet ? '{value}' : '{value}%' }, name: unit },
     })
   }
-
-  await loadNetworkTrend()
 }
 
-async function loadNetworkTrend() {
-  const h = hosts.value.find((item) => item.id === selectedNetHostId.value)
-  if (h) {
-    const [rx, tx] = await Promise.allSettled([
-      api.get(`/monitor/${h.id}/history`, { metric: 'net_rx', hours: 6 }),
-      api.get(`/monitor/${h.id}/history`, { metric: 'net_tx', hours: 6 }),
-    ])
-    const toKbps = (v) => Number((v / 1024).toFixed(2))
-    if (netChart) {
-      netChart.setOption({
-        series: [
-          { name: '下行', type: 'line', smooth: true, showSymbol: false, areaStyle: { opacity: .2 }, data: rx.status === 'fulfilled' ? rx.value.values.map(([t, v]) => [t * 1000, toKbps(v)]) : [] },
-          { name: '上行', type: 'line', smooth: true, showSymbol: false, areaStyle: { opacity: .2 }, data: tx.status === 'fulfilled' ? tx.value.values.map(([t, v]) => [t * 1000, toKbps(v)]) : [] },
-        ],
-        xAxis: { type: 'time' },
-        yAxis: { type: 'value', name: 'KB/s' },
-      })
-    }
-  } else if (netChart) {
-    netChart.setOption({ series: [] })
-  }
-}
-
-function initCharts() {
-  cpuChart = echarts.init(cpuChartEl.value)
-  netChart = echarts.init(netChartEl.value)
-  const base = {
+function initChart() {
+  trendChart = echarts.init(trendChartEl.value)
+  trendChart.setOption({
     backgroundColor: 'transparent',
     textStyle: { color: '#7f95b5' },
     tooltip: { trigger: 'axis' },
-    legend: { textStyle: { color: '#7f95b5' }, top: 0 },
-    grid: { left: 44, right: 16, top: 32, bottom: 24 },
-  }
-  cpuChart.setOption({
-    ...base,
+    legend: { textStyle: { color: '#7f95b5' }, top: 0, type: 'scroll' },
+    grid: { left: 48, right: 16, top: 34, bottom: 24 },
     xAxis: { type: 'time', axisLine: { lineStyle: { color: '#2a4060' } }, axisLabel: { color: '#7f95b5' } },
-    yAxis: { type: 'value', max: 100, axisLabel: { color: '#7f95b5', formatter: '{value}%' }, splitLine: { lineStyle: { color: 'rgba(90,130,190,.12)' } } },
-    series: [],
-  })
-  netChart.setOption({
-    ...base,
-    xAxis: { type: 'time', axisLine: { lineStyle: { color: '#2a4060' } }, axisLabel: { color: '#7f95b5' } },
-    yAxis: { type: 'value', name: 'KB/s', axisLabel: { color: '#7f95b5' }, splitLine: { lineStyle: { color: 'rgba(90,130,190,.12)' } } },
+    yAxis: { type: 'value', axisLabel: { color: '#7f95b5' }, splitLine: { lineStyle: { color: 'rgba(90,130,190,.12)' } } },
     series: [],
   })
 }
@@ -246,23 +301,37 @@ function toggleFullscreen() {
   }
 }
 
+function onVisibility() {
+  const hidden = document.visibilityState !== 'visible'
+  pageHidden.value = hidden
+  if (!hidden) {
+    loadSummary()
+    queueTrend()
+  }
+}
+
 onMounted(() => {
-  initCharts()
-  loadAll()
-  timer = setInterval(loadAll, 5000)
+  initChart()
+  loadSummary()
+  queueTrend()
+  coreTimer = setInterval(loadSummary, 10000)
+  trendTimer = setInterval(queueTrend, 60000)
+  document.addEventListener('visibilitychange', onVisibility)
   document.addEventListener('fullscreenchange', onFsChange)
-  window.addEventListener('resize', resizeCharts)
+  window.addEventListener('resize', resizeChart)
 })
 onUnmounted(() => {
-  clearInterval(timer)
+  clearInterval(coreTimer)
+  clearInterval(trendTimer)
+  document.removeEventListener('visibilitychange', onVisibility)
   document.removeEventListener('fullscreenchange', onFsChange)
-  window.removeEventListener('resize', resizeCharts)
-  if (cpuChart) cpuChart.dispose()
-  if (netChart) netChart.dispose()
+  window.removeEventListener('resize', resizeChart)
+  if (controller) controller.abort()
+  if (trendChart) trendChart.dispose()
 })
 
 function onFsChange() { isFullscreen.value = !!document.fullscreenElement }
-function resizeCharts() { cpuChart?.resize(); netChart?.resize() }
+function resizeChart() { trendChart?.resize() }
 </script>
 
 <style scoped>
@@ -270,32 +339,44 @@ function resizeCharts() { cpuChart?.resize(); netChart?.resize() }
   height: 100%; overflow: auto; background: var(--screen-bg); color: var(--screen-text);
   padding: 18px 22px;
 }
-.screen-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
+.screen-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
 .screen-title { margin: 0; font-size: 22px; }
 .screen-sub { color: var(--screen-muted); font-size: 12px; margin-top: 4px; }
 .screen-tools { display: flex; gap: 8px; }
 .screen-btn { background: rgba(20,35,58,.8); border-color: var(--screen-border); color: var(--screen-text); }
 .screen-select { margin-left: auto; background: #14233a; color: var(--screen-text); border: 1px solid var(--screen-border); border-radius: 6px; padding: 4px 8px; }
-.screen-grid { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 14px; }
-.panel {
+.partial-errors { display: flex; gap: 10px; align-items: flex-start; background: rgba(180,83,9,.14); border: 1px solid rgba(245,158,11,.4); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; }
+.perr-icon { font-size: 16px; }
+.perr-body b { font-size: 13px; color: #fcd34d; }
+.perr-item { margin: 2px 0 0; font-size: 12px; color: var(--screen-muted); }
+.res-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.res-card {
   background: var(--screen-panel); border: 1px solid var(--screen-border); border-radius: 12px;
-  padding: 14px 16px; min-height: 240px;
+  padding: 12px 14px; text-decoration: none; color: var(--screen-text); display: block; transition: border-color .15s;
 }
+.res-card:hover { border-color: #3b82f6; }
+.res-head { display: flex; align-items: center; justify-content: space-between; }
+.res-label { font-size: 12px; color: var(--screen-muted); }
+.res-num { font-size: 22px; }
+.res-num.res-err { color: #f87171; }
+.res-meta { margin: 6px 0 0; font-size: 12px; color: var(--screen-muted); }
+.res-risk { margin-top: 6px; font-size: 11px; color: var(--screen-muted); }
+.screen-grid { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 14px; }
+.panel { background: var(--screen-panel); border: 1px solid var(--screen-border); border-radius: 12px; padding: 14px 16px; min-height: 240px; }
 .panel-wide { grid-column: span 1; }
-.panel-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.panel-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .screen-muted { color: var(--screen-muted); }
 .screen-empty { color: var(--screen-muted); font-size: 13px; text-align: center; padding: 30px 0; }
 .host-line { margin-bottom: 12px; }
 .host-line-head { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; }
+.host-line-head em { font-style: normal; color: #f59e0b; margin-left: 6px; border: 1px solid rgba(245,158,11,.5); border-radius: 4px; padding: 0 4px; font-size: 10px; }
 .host-line-bars { display: flex; gap: 10px; }
 .hlb { flex: 1; display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--screen-muted); }
 .hlb-track { flex: 1; height: 6px; background: rgba(127,149,181,.18); border-radius: 3px; overflow: hidden; }
 .hlb-fill { height: 100%; border-radius: 3px; transition: width .4s; }
-.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 300px; overflow: auto; }
-.health-tile {
-  border: 1px solid var(--screen-border); border-radius: 8px; padding: 8px 6px;
-  text-align: center; font-size: 12px; cursor: pointer; background: rgba(20,35,58,.5);
-}
+.hlb-val { min-width: 44px; text-align: right; font-weight: 600; font-size: 11px; }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; max-height: 300px; overflow: auto; }
+.health-tile { border: 1px solid var(--screen-border); border-radius: 8px; padding: 8px 6px; text-align: center; font-size: 12px; cursor: pointer; background: rgba(20,35,58,.5); }
 .health-tile:hover { border-color: #3b82f6; }
 .st-up { border-color: rgba(34,197,94,.45); color: #86efac; }
 .st-down { border-color: rgba(239,68,68,.55); color: #fca5a5; }
@@ -303,15 +384,13 @@ function resizeCharts() { cpuChart?.resize(); netChart?.resize() }
 .st-unknown { color: var(--screen-muted); }
 .tile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 .alert-list { max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
-.alert-item { display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px solid rgba(90,130,190,.14); padding-bottom: 8px; }
-.alert-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; }
-.alert-dot.ok { background: #22c55e; }
-.alert-dot.warn { background: #f59e0b; }
+.alert-item { display: flex; align-items: flex-start; gap: 8px; border-bottom: 1px solid rgba(90,130,190,.14); padding-bottom: 8px; cursor: pointer; }
+.alert-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; }
 .alert-dot.err { background: #ef4444; }
 .alert-main { flex: 1; min-width: 0; }
 .alert-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alert-meta { font-size: 11px; color: var(--screen-muted); margin-top: 2px; }
-.chart { height: 220px; }
+.chart { height: 240px; }
 @media (max-width: 1100px) {
   .screen-grid { grid-template-columns: 1fr; }
 }

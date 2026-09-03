@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.5.1 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.6.0 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -12,8 +12,11 @@ import time
 import argparse
 import threading
 import re
+import base64
+import hashlib
+from datetime import datetime
 
-AGENT_VERSION = "2.5.1"
+AGENT_VERSION = "2.6.0"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -239,6 +242,120 @@ def _collect_container_stats():
     except Exception:
         return []
 
+def _collect_wireguard():
+    """v2.6: 只读采集 WireGuard 状态（GET /api/v1/wireguard）。
+
+    安全约束：
+    - 只解析稳定的机器格式 `wg show all dump`，不解析面向人的本地化文本。
+    - 接口行第 2 列是接口私钥、Peer 行第 2 列是预共享密钥，解析时立即丢弃，
+      绝不能进入返回对象、日志或异常文本。
+    - 公钥只返回不可逆 SHA-256 短指纹，不返回完整公钥。
+    - 未安装 wg / 权限不足 / 超时 / 无接口时返回 supported:false 与结构化原因，不抛 500。
+
+    接口 dump 行：interface <ifname> <private_key> <listen_port> <fwmark>
+    Peer dump 行：peer <pubkey> <preshared_key> <endpoint> <allowed_ips> <latest_handshake> <rx> <tx> <keepalive>
+    """
+    result = {"supported": False, "generated_at": None, "interfaces": [], "reason": None}
+    try:
+        proc = subprocess.run(["wg", "show", "all", "dump"], capture_output=True, text=True, timeout=3)
+    except FileNotFoundError:
+        result["reason"] = "wg 命令未安装"
+        return result
+    except subprocess.TimeoutExpired:
+        result["reason"] = "wg 命令超时"
+        return result
+    except Exception as e:
+        result["reason"] = f"执行 wg 失败: {type(e).__name__}"
+        return result
+    if proc.returncode != 0:
+        result["reason"] = (proc.stderr or "wg 命令执行失败").strip()[:200] or "wg 命令执行失败"
+        return result
+    result["supported"] = True
+    result["generated_at"] = datetime.utcnow().isoformat() + "Z"
+    result["interfaces"] = _parse_wg_dump(proc.stdout)
+    # 地址读取失败不影响接口与 Peer 列表返回（/proc 数据不可用时静默跳过）
+    try:
+        addr_proc = subprocess.run(["ip", "-j", "addr", "show"], capture_output=True, text=True, timeout=3)
+        if addr_proc.returncode == 0:
+            iface_map = {}
+            for item in json.loads(addr_proc.stdout):
+                iface_map[item.get("ifname")] = [
+                    f"{a.get('local')}/{a.get('prefixlen')}"
+                    for a in (item.get("addr_info") or [])
+                    if a.get("local")
+                ]
+            for iface in result["interfaces"]:
+                iface["addresses"] = iface_map.get(iface["name"], [])
+    except Exception:
+        pass
+    return result
+
+
+def _parse_wg_dump(dump_text):
+    """解析 `wg show all dump` 机器格式，丢弃私钥/预共享密钥，只返回安全字段。
+
+    单独抽离便于单元测试：输入可包含私钥与 PSK，输出与日志中不得出现原值。
+    """
+    interfaces = []
+    current = None
+    now = time.time()
+    for raw_line in dump_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if parts[0] == "interface":
+            if len(parts) < 4:
+                continue
+            ifname = parts[1]
+            # parts[2] 是接口私钥 → 立即丢弃，绝不进入响应/日志
+            try:
+                listen_port = int(parts[3])
+            except (ValueError, IndexError):
+                listen_port = None
+            current = {"name": ifname, "addresses": [], "listen_port": listen_port,
+                       "public_key_fingerprint": None, "peers": []}
+            interfaces.append(current)
+        elif parts[0] == "peer" and current is not None:
+            if len(parts) < 9:
+                continue
+            pub_key = parts[1]
+            # parts[2] 是预共享密钥 → 立即丢弃，绝不进入响应/日志
+            try:
+                fingerprint = "sha256:" + hashlib.sha256(base64.b64decode(pub_key)).hexdigest()[:16]
+            except Exception:
+                fingerprint = None
+            endpoint = parts[3] or None
+            allowed_ips = [ip for ip in parts[4].split(",") if ip]
+            try:
+                latest_handshake = int(parts[5])
+            except ValueError:
+                latest_handshake = 0
+            try:
+                rx = int(parts[6])
+            except ValueError:
+                rx = 0
+            try:
+                tx = int(parts[7])
+            except ValueError:
+                tx = 0
+            current["peers"].append({
+                "public_key_fingerprint": fingerprint,
+                "endpoint": endpoint,
+                "allowed_ips": allowed_ips,
+                "latest_handshake_at": (
+                    datetime.utcfromtimestamp(latest_handshake).isoformat() + "Z"
+                    if latest_handshake else None
+                ),
+                "latest_handshake_age_seconds": (
+                    max(0, int(now - latest_handshake)) if latest_handshake else None
+                ),
+                "rx_bytes": rx,
+                "tx_bytes": tx,
+            })
+    return interfaces
+
+
 def collect_metrics(lightweight=False):
     """Collect system metrics from /proc filesystem."""
     m = {}
@@ -459,6 +576,11 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
 
         elif path == '/health':
             self._json_response({"status": "ok", "version": VERSION})
+
+        elif path == '/api/v1/wireguard':
+            if not self._check_auth():
+                return
+            self._json_response(_collect_wireguard())
 
         elif path == '/api/v1/services':
             if not self._check_auth():

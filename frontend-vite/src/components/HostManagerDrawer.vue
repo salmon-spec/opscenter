@@ -9,7 +9,7 @@
             <button class="host-main" @click="selectHost(host.id)"><span class="dot" :class="host.status==='online'?'ok':'off'"></span><span><b>{{ host.name }}</b><small>{{ host.host }}:{{ host.ssh_port }} · Agent {{ agentLabel(host.agent_status) }} {{ host.agent_version?`v${host.agent_version}`:'' }}</small><small>日志采集 {{ alloyLabel(host.log_agent_status) }} {{ host.log_agent_version?`v${host.log_agent_version}`:'' }}<em v-if="host.log_agent_error" :title="host.log_agent_error">查看错误</em></small></span></button>
             <button v-if="needsUpgrade(host)" class="link-btn" :disabled="host.agent_status==='deploying'" @click="upgradeHost(host)">升级</button>
             <button v-if="canManageAlloy(host)&&host.log_agent_status!=='running'" class="link-btn" :disabled="alloyWorking(host)||!lokiConfigured" @click="deployAlloy(host)">部署采集</button><button v-if="canManageAlloy(host)" class="link-btn" :disabled="alloyWorking(host)" @click="checkAlloy(host)">检查采集</button>
-            <button class="link-btn" @click="beginEdit(host)">编辑</button><button v-if="host.agent_type!=='local'&&!host.is_local" class="link-btn danger" @click="removeHost(host)">删除</button>
+            <button class="link-btn" @click="beginEdit(host)">编辑</button><button v-if="host.agent_type!=='local'&&!host.is_local" class="link-btn danger" :disabled="deletingId===host.id" @click="openDelete(host)">{{ deletingId===host.id?'删除中…':'删除' }}</button>
           </article>
         </div>
         <section v-if="editing" class="host-form">
@@ -27,6 +27,13 @@
           <footer><button class="btn" @click="editing=false">取消</button><button v-if="!isLocalEdit" class="btn" :disabled="busy" @click="testConnection">{{ testing?'测试中…':'测试 SSH' }}</button><button class="btn btn-primary" :disabled="busy||!form.name||!form.host" @click="save">{{ saving?'保存中…':'保存' }}</button></footer>
         </section>
       </aside>
+      <Modal :visible="deleteTarget!==null" title="删除主机" width="480px" @close="cancelDelete">
+        <div class="delete-confirm">
+          <p>删除后关联服务与监控历史也会一并移除。<b>删除资产不会卸载远端 Agent</b>；如需卸载，请先在该主机上单独执行 Agent 卸载。</p>
+          <label>请输入主机名称「<b>{{ deleteTarget?.name || '' }}</b>」以确认：<input v-model.trim="deleteConfirmText" :disabled="!!deletingId" placeholder="主机名称" /></label>
+          <footer><button class="btn" :disabled="!!deletingId" @click="deleteTarget=null">取消</button><button class="btn btn-danger" :disabled="!deleteConfirmText || deleteConfirmText!==deleteTarget?.name || !!deletingId" @click="confirmDelete">{{ deletingId?'正在删除主机…':'确认删除' }}</button></footer>
+        </div>
+      </Modal>
     </div>
   </Teleport>
 </template>
@@ -35,11 +42,12 @@
 import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import { api, toast } from '../api'
 import { useHostContext } from '../hostContext'
+import Modal from './Modal.vue'
 
 const props = defineProps({ visible: Boolean })
 defineEmits(['close'])
 const { hosts, selectedHostId, refreshHosts, selectHost } = useHostContext()
-const editing=ref(false),saving=ref(false),testing=ref(false),testMessage=ref(''),testOk=ref(false),currentAgentVersion=ref('2.5.1'),upgrading=ref(false),alloyBusy=ref(false),lokiConfigured=ref(false)
+const editing=ref(false),saving=ref(false),testing=ref(false),testMessage=ref(''),testOk=ref(false),currentAgentVersion=ref('2.5.1'),upgrading=ref(false),alloyBusy=ref(false),lokiConfigured=ref(false),deleteTarget=ref(null),deleteConfirmText=ref(''),deletingId=ref('')
 const form=reactive({id:'',name:'',host:'',ssh_port:22,ssh_user:'root',remark:'',tagsText:'',auth_type:'password',ssh_password:'',ssh_key:'',auto_deploy_agent:true,agent_type:'remote',is_local:false})
 const busy=computed(()=>saving.value||testing.value),isLocalEdit=computed(()=>!!form.id&&(form.agent_type==='local'||form.is_local))
 const versionParts=value=>String(value||'0').match(/\d+/g)?.slice(0,4).map(Number)||[0]
@@ -57,7 +65,9 @@ function agentLabel(value){return({running:'运行中',deploying:'部署中',err
 function alloyLabel(value){return({running:'运行中',deploying:'部署中',checking:'检查中',stopped:'已停止',error:'异常',not_deployed:'未部署',unknown:'未检查'})[value]||'未检查'}
 async function testConnection(){if(!form.host)return;testing.value=true;testMessage.value='';try{const data=await api.post('/test-ssh',{host:form.host,port:form.ssh_port,username:form.ssh_user,password:form.auth_type==='password'?form.ssh_password:null,ssh_key:form.auth_type==='key'?form.ssh_key:null});testOk.value=!!data.success;testMessage.value=data.message||data.error||(testOk.value?'连接成功':'连接失败')}catch(error){testOk.value=false;testMessage.value=error.message}finally{testing.value=false}}
 async function save(){saving.value=true;try{const payload={name:form.name,remark:form.remark,tags:form.tagsText.split(',').map(x=>x.trim()).filter(Boolean)};if(!isLocalEdit.value)Object.assign(payload,{host:form.host,ssh_port:Number(form.ssh_port),ssh_user:form.ssh_user,ssh_password:form.auth_type==='password'?form.ssh_password:undefined,ssh_key:form.auth_type==='key'?form.ssh_key:undefined});if(form.id){await api.put(`/servers/${form.id}`,payload);toast('主机信息已更新','ok')}else{Object.assign(payload,{auto_deploy_agent:form.auto_deploy_agent,is_local:false});const data=await api.post('/servers',payload);selectHost(data.id);toast(data.agent_status==='deploying'?'主机已添加，Agent 正在后台部署':'主机已添加','ok')}editing.value=false;await refreshHosts(true)}catch(error){toast(`保存失败：${error.message}`,'err')}finally{saving.value=false}}
-async function removeHost(host){const value=window.prompt(`删除后关联服务也会移除。请输入主机名称“${host.name}”确认：`);if(value!==host.name)return;try{await api.del(`/servers/${host.id}`);toast('主机已删除','ok');await refreshHosts(true)}catch(error){toast(`删除失败：${error.message}`,'err')}}
+async function openDelete(host){deleteConfirmText.value='';deleteTarget.value=host}
+function cancelDelete(){if(!deletingId.value)deleteTarget.value=null}
+async function confirmDelete(){const host=deleteTarget.value;if(!host||deleteConfirmText.value!==host.name)return;deletingId.value=host.id;try{const data=await api.del(`/servers/${host.id}`);toast(data.message||'主机已删除','ok');deleteTarget.value=null;if(selectedHostId.value===host.id){const local=hosts.value.find(h=>h.agent_type==='local'||h.is_local)||hosts.value[0];if(local)selectHost(local.id)}await refreshHosts(true)}catch(error){toast(`删除失败：${error.message}`,'err')}finally{deletingId.value=''}}
 async function loadAgentVersion(){try{const [agent,alloy]=await Promise.all([api.get('/agents/version'),api.get('/logs/agents/version')]);currentAgentVersion.value=agent.current_version||'2.5.1';lokiConfigured.value=!!alloy.loki_configured}catch{/* 使用内置目标版本 */}}
 async function upgradeHost(host){try{await api.post(`/servers/${host.id}/upgrade-agent`);toast(`${host.name} Agent 已进入后台升级`,'ok');await refreshHosts(true)}catch(error){toast(`升级失败：${error.message}`,'err')}}
 async function upgradeAll(){upgrading.value=true;try{const data=await api.post('/agents/upgrade-outdated');toast(`已安排 ${data.accepted||0} 台主机后台升级到 v${data.target_version}`,'ok');await refreshHosts(true)}catch(error){toast(`批量升级失败：${error.message}`,'err')}finally{upgrading.value=false}}
@@ -73,4 +83,8 @@ onUnmounted(()=>clearInterval(statusTimer))
 <style scoped>
 .drawer-mask{position:fixed;inset:0;background:rgba(15,23,42,.48);z-index:2400;display:flex;justify-content:flex-end}.host-drawer{width:min(560px,96vw);height:100%;background:var(--bg);box-shadow:-12px 0 40px rgba(15,23,42,.2);padding:20px;overflow:auto}.host-drawer header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--border);padding-bottom:14px}.host-drawer h2,.host-drawer h3{margin:0}.host-drawer p{margin:5px 0 0;color:var(--muted);font-size:13px}.drawer-actions{display:flex;gap:8px;margin:16px 0}.host-list{display:flex;flex-direction:column;gap:7px}.host-row{display:flex;align-items:center;border:1px solid var(--border);background:var(--card);border-radius:9px;padding:7px}.host-row.selected{border-color:var(--primary)}.host-main{border:0;background:none;color:var(--text);display:flex;align-items:center;gap:9px;flex:1;text-align:left;cursor:pointer}.host-main span:last-child{display:flex;flex-direction:column;gap:3px}.host-main small{color:var(--muted)}.dot{width:8px;height:8px;border-radius:50%}.dot.ok{background:var(--ok)}.dot.off{background:#94a3b8}.link-btn{border:0;background:none;color:var(--primary);cursor:pointer}.link-btn.danger{color:var(--err)}.host-form{margin-top:18px;padding:16px;background:var(--card);border:1px solid var(--border);border-radius:10px}.host-form>label,.form-grid label{display:flex;flex-direction:column;gap:5px;margin-top:11px;font-size:13px;color:var(--muted)}.host-form input,.host-form select,.host-form textarea{border:1px solid var(--border);background:var(--bg);color:var(--text);padding:9px;border-radius:6px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.host-form .check{flex-direction:row;align-items:center;color:var(--text)}.host-form footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}.test-result{margin-top:10px;padding:8px;border-radius:6px;font-size:12px}.test-result.ok{color:#15803d;background:#dcfce7}.test-result.bad{color:#b91c1c;background:#fee2e2}@media(max-width:600px){.form-grid{grid-template-columns:1fr}}
 .host-drawer{width:min(700px,96vw)}.drawer-actions{flex-wrap:wrap}.host-main small em{font-style:normal;color:var(--err);margin-left:5px}.link-btn{font-size:12px}
+.delete-confirm p{margin:0 0 12px;line-height:1.6;font-size:13px}
+.delete-confirm label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted)}
+.delete-confirm input{border:1px solid var(--border);background:var(--bg);color:var(--text);padding:9px;border-radius:6px}
+.delete-confirm footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
 </style>

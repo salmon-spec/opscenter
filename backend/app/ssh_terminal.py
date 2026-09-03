@@ -9,8 +9,8 @@ logger = logging.getLogger("ssh_terminal")
 
 _sessions: dict = {}
 MAX_SESSIONS_PER_SERVER = 5
-SESSION_TIMEOUT = 3600
-RECONNECT_GRACE = 30  # seconds to wait for WebSocket reconnect after disconnect
+SESSION_TIMEOUT = 14400  # v4.8: 4h idle timeout (was 3600)
+RECONNECT_GRACE = 300  # v4.8: 5min reconnect grace (was 30)
 
 
 class SSHTerminalSession:
@@ -32,6 +32,7 @@ class SSHTerminalSession:
         self.last_activity = time.time()
         self.pending_reconnect = False
         self._reconnect_timer = None
+        self.reconnect_started_at = 0.0
 
     def connect(self, cols=80, rows=24):
         try:
@@ -89,6 +90,10 @@ class SSHTerminalSession:
                 self.last_activity = time.time()
             except Exception:
                 pass
+
+    def touch(self):
+        """v4.8: application-level ping - update activity without writing to shell."""
+        self.last_activity = time.time()
 
     def recv(self, n=4096):
         if self.channel and self.connected:
@@ -222,6 +227,7 @@ class SSHTerminalSession:
     def mark_pending_reconnect(self):
         """Mark session as pending reconnect, start grace timer"""
         self.pending_reconnect = True
+        self.reconnect_started_at = time.time()
         self._reconnect_timer = threading.Timer(RECONNECT_GRACE, self._reconnect_timeout)
         self._reconnect_timer.daemon = True
         self._reconnect_timer.start()
@@ -320,6 +326,10 @@ class LocalTerminalSession(SSHTerminalSession):
             self.last_activity = time.time()
         except (BlockingIOError, OSError):
             pass
+
+    def touch(self):
+        """v4.8: application-level ping - update activity without writing to shell."""
+        self.last_activity = time.time()
 
     def recv(self, n=4096):
         if self.master_fd is None or not self.connected:

@@ -2,26 +2,66 @@
 """v3.29 T3：服务详情聚合 / 服务拓扑 / 监控大屏聚合 / 服务健康 / 历史指标查询。
 
 - /services/{id}/detail     服务详情（部署位置/版本/运行时长/依赖）
-- /topology                 三场景拓扑（cicd / monitoring / gateway），空场景自动播种
+- /topology                 四场景拓扑（cicd / monitoring / gateway / wireguard），空场景自动播种
 - /screen/summary           监控大屏一屏聚合数据
 - /services/health          全量服务健康（优先复用 service_health 模块快照）
 - /monitor/history          历史指标查询（时间范围）
 """
 from __future__ import annotations
 
+import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import text
 
+from app.agent_manager import (
+    AGENT_DEFAULT_PORT,
+    fetch_agent_wireguard,
+    resolve_agent_host,
+)
 from app.api_keys import require_api_key
+from app.config import CONTAINERIZED, LOCAL_AGENT_HOST
 from app.database import get_db
-from app.models import AlertEvent, ApiKey, MetricHistory, Server, Service, ServiceRelation
+from app.models import AlertEvent, ApiKey, DatabaseInstance, MetricHistory, Server, Service, ServiceRelation
 
 router = APIRouter(prefix="/api/v2", tags=["topology"])
 
-_VALID_SCENARIOS = ("cicd", "monitoring", "gateway")
+_VALID_SCENARIOS = ("cicd", "monitoring", "gateway", "wireguard")
+
+# WireGuard 拓扑：按主机缓存 30 秒，避免每次请求都并发访问 Agent
+_WG_CACHE_TTL = 30
+_WG_CACHE: dict = {}
+_WG_CACHE_LOCK = threading.Lock()
+_WG_MAX_WORKERS = 6
+_WG_AGENT_TIMEOUT = 5
+
+# 健康规则：最近握手 <=180s 健康；181-600s 警告；>600s 或从未握手 离线
+_WG_HEALTH_NOW_TOL = 180
+_WG_HEALTH_WARN_TOL = 600
+
+# 健康大屏：保留最近一次 Agent 采集摘要（容器计数等），避免为聚合触发容器列表/SSH 探测
+_AGENT_SNAPSHOT_LOCK = threading.Lock()
+_LAST_AGENT_SNAPSHOT: dict = {}  # server_id -> {container_running, container_stopped, ts}
+
+
+def record_agent_snapshot(server_id, data: dict) -> None:
+    """采集循环每轮写入最近一次 Agent 摘要（仅容器计数等轻量字段）。"""
+    if data is None:
+        return
+    try:
+        with _AGENT_SNAPSHOT_LOCK:
+            _LAST_AGENT_SNAPSHOT[str(server_id)] = {
+                "container_running": int(data.get("container_running") or 0),
+                "container_stopped": int(data.get("container_stopped") or 0),
+                "ts": time.time(),
+            }
+    except Exception:
+        pass
 
 # 默认关系播种规则：场景 -> [(源关键字, 目标关键字|"*", 关系类型, 连线标签)]
 # "*" 表示与场景内所有其他服务建边（如 gateway 的 Caddy 反代全部服务）
@@ -199,9 +239,14 @@ def get_topology(
     scenario: str = Query("cicd"),
     _: Optional[ApiKey] = Depends(require_api_key("read")),
 ):
-    """服务拓扑：nodes + edges。场景无数据时自动播种默认关系。"""
+    """服务拓扑：nodes + edges。场景无数据时自动播种默认关系。
+
+    scenario=wireguard 时切换到 WireGuard 内网拓扑（见 _build_wireguard_topology）。
+    """
     if scenario not in _VALID_SCENARIOS:
-        raise HTTPException(status_code=400, detail="scenario 仅支持 cicd / monitoring / gateway")
+        raise HTTPException(status_code=400, detail="scenario 仅支持 cicd / monitoring / gateway / wireguard")
+    if scenario == "wireguard":
+        return _build_wireguard_topology()
     with get_db() as db:
         rel_count = (
             db.query(ServiceRelation)
@@ -257,49 +302,385 @@ def get_topology(
         return {"scenario": scenario, "nodes": nodes, "edges": edges}
 
 
+def _wg_fetch_cached(server_id: str, host: str, port: int, token: str) -> Optional[dict]:
+    """按主机读取 30 秒缓存的 Agent WireGuard 状态；未命中时并发采集并回填。"""
+    now = time.time()
+    with _WG_CACHE_LOCK:
+        hit = _WG_CACHE.get(server_id)
+        if hit and now - hit[0] < _WG_CACHE_TTL:
+            return hit[1]
+    data = fetch_agent_wireguard(host, port, token)
+    with _WG_CACHE_LOCK:
+        _WG_CACHE[server_id] = (time.time(), data)
+    # 只保留最近 200 条缓存，避免长期运行内存膨胀
+    if len(_WG_CACHE) > 200:
+        for key in sorted(_WG_CACHE, key=lambda k: _WG_CACHE[k][0])[:len(_WG_CACHE) - 200]:
+            _WG_CACHE.pop(key, None)
+    return data
+
+
+def _wg_health(age_seconds):
+    """健康规则：<=180s 健康；181-600s 警告；>600s 或从未握手 离线。"""
+    if age_seconds is None:
+        return "offline"
+    if age_seconds <= _WG_HEALTH_NOW_TOL:
+        return "healthy"
+    if age_seconds <= _WG_HEALTH_WARN_TOL:
+        return "warning"
+    return "offline"
+
+
+def _wg_host_ip(ips) -> Optional[str]:
+    """从 allowed_ips 提取精确 /32 IPv4（Hub 的 Allowed IP 是权威 IP 分布）。"""
+    for ip in ips or []:
+        if "/" in ip:
+            addr, prefix = ip.rsplit("/", 1)
+            if prefix == "32":
+                return addr
+        elif "." in ip and ":" not in ip:
+            return ip
+    return None
+
+
+def _build_wireguard_topology() -> dict:
+    """WireGuard 内网拓扑。
+
+    - 从资产表读取主机快照后关闭 DB 会话，再用 ThreadPoolExecutor 并发请求各主机
+      Agent（最多 6 个 worker），单主机超时 5 秒（fetch_agent_wireguard 内部超时）。
+    - 按主机分别缓存 30 秒；某台超时只标记该节点数据陈旧，不阻塞/清空整个拓扑。
+    - 以 Hub 的 AllowedIPs 为权威 IP 分布：精确 /32 IP 与 Server.host 匹配；
+      匹配不到显示“未纳管 Peer”，不根据主机名猜测。
+    - 节点类型仅 hub / managed_host / unregistered_peer；节点 ID 使用服务器 UUID
+      或安全指纹，刷新前后保持稳定。
+    - 未纳管 Peer 可见但默认不生成告警事件。
+    """
+    started = time.time()
+    with get_db() as db:
+        servers = db.query(Server).all()
+        hosts = [
+            {
+                "id": str(s.id),
+                "name": s.name,
+                "host": s.host,
+                "agent_port": s.agent_port or AGENT_DEFAULT_PORT,
+                "agent_token": s.agent_token or "",
+                "is_local": s.agent_type == "local",
+                "status": s.status,
+            }
+            for s in servers
+        ]
+
+    nodes = []
+    edges = []
+    partial_errors = []
+    managed_found: dict = {}   # host_ip -> server dict
+    wg_interfaces: dict = {}   # server_id -> agent wireguard payload
+    total_rx = 0
+    total_tx = 0
+
+    # 1) 并发拉取各主机 Agent WireGuard 状态
+    def _pull(h):
+        try:
+            return h, _wg_fetch_cached(h["id"], resolve_agent_host_for(h), h["agent_port"], h["agent_token"])
+        except Exception as e:
+            return h, {"error": f"{type(e).__name__}: {e}"}
+
+    def resolve_agent_host_for(h):
+        # Docker 容器内的本机 Agent 通过 host.docker.internal 访问；远程主机直接连其 IP
+        return LOCAL_AGENT_HOST if (h["is_local"] and CONTAINERIZED) else h["host"]
+
+    with ThreadPoolExecutor(max_workers=_WG_MAX_WORKERS) as pool:
+        futures = [pool.submit(_pull, h) for h in hosts]
+        for fut in as_completed(futures, timeout=_WG_AGENT_TIMEOUT * 2):
+            try:
+                h, data = fut.result()
+            except Exception as e:
+                partial_errors.append(f"{h.get('name', h.get('id'))}: 采集超时({type(e).__name__})")
+                continue
+            if not data:
+                partial_errors.append(f"{h['name']}: Agent 不支持或不可达（需升级到 v2.6+）")
+                continue
+            if data.get("error"):
+                partial_errors.append(f"{h['name']}: {data['error']}")
+                continue
+            wg_interfaces[h["id"]] = data
+            for iface in data.get("interfaces") or []:
+                for peer in iface.get("peers") or []:
+                    total_rx += peer.get("rx_bytes") or 0
+                    total_tx += peer.get("tx_bytes") or 0
+
+    # 2) 识别 Hub：拥有最多 Peer 的主机（通常是中心节点 L1）
+    hub_candidates = []
+    for h in hosts:
+        data = wg_interfaces.get(h["id"])
+        if not data:
+            continue
+        peers = sum(len(i.get("peers") or []) for i in data.get("interfaces") or [])
+        if peers:
+            hub_candidates.append((peers, h, data))
+    hub = None
+    if hub_candidates:
+        hub_candidates.sort(key=lambda x: x[0], reverse=True)
+        hub = hub_candidates[0][1]
+        hub_data = hub_candidates[0][2]
+
+    # 3) 建节点：Hub 居中；纳管主机；未纳管 Peer
+    hub_node = None
+    if hub:
+        hub_node = {
+            "id": hub["id"],
+            "name": hub["name"],
+            "host": hub["host"],
+            "type": "hub",
+            "health": "healthy",
+            "data_source": "live",
+        }
+        nodes.append(hub_node)
+
+    hub_peers = []
+    if hub:
+        for iface in hub_data.get("interfaces") or []:
+            hub_peers.extend(iface.get("peers") or [])
+
+    host_by_ip = {h["host"]: h for h in hosts}
+    seen_unmanaged: dict = {}  # fingerprint -> node
+    for peer in hub_peers:
+        ip = _wg_host_ip(peer.get("allowed_ips"))
+        health = _wg_health(peer.get("latest_handshake_age_seconds"))
+        managed = host_by_ip.get(ip) if ip else None
+        if managed:
+            node_id = managed["id"]
+            if node_id == hub["id"]:
+                continue  # Hub 自身不重复建边
+            if not any(n["id"] == node_id for n in nodes):
+                nodes.append({
+                    "id": node_id,
+                    "name": managed["name"],
+                    "host": managed["host"],
+                    "type": "managed_host",
+                    "health": health,
+                    "wg_ip": ip,
+                    "endpoint": peer.get("endpoint"),
+                    "latest_handshake_age_seconds": peer.get("latest_handshake_age_seconds"),
+                    "latest_handshake_at": peer.get("latest_handshake_at"),
+                    "allowed_ips": peer.get("allowed_ips"),
+                    "rx_bytes": peer.get("rx_bytes") or 0,
+                    "tx_bytes": peer.get("tx_bytes") or 0,
+                    "data_source": "live",
+                })
+            managed_found[ip] = managed
+        else:
+            fp = peer.get("public_key_fingerprint") or f"peer-{len(seen_unmanaged)}"
+            if fp not in seen_unmanaged:
+                node = {
+                    "id": fp,
+                    "name": f"未纳管 Peer · {ip}" if ip else "未纳管 Peer",
+                    "host": None,
+                    "type": "unregistered_peer",
+                    "health": health,
+                    "wg_ip": ip,
+                    "endpoint": peer.get("endpoint"),
+                    "latest_handshake_age_seconds": peer.get("latest_handshake_age_seconds"),
+                    "latest_handshake_at": peer.get("latest_handshake_at"),
+                    "allowed_ips": peer.get("allowed_ips"),
+                    "rx_bytes": peer.get("rx_bytes") or 0,
+                    "tx_bytes": peer.get("tx_bytes") or 0,
+                    "data_source": "live",
+                }
+                nodes.append(node)
+                seen_unmanaged[fp] = node
+        if hub_node:
+            edges.append({
+                "source": hub["id"],
+                "target": managed["id"] if managed else (peer.get("public_key_fingerprint") or f"peer-{len(seen_unmanaged)}"),
+                "relation_type": "wireguard_link",
+                "label": "握手" if health != "offline" else "未握手",
+                "health": health,
+                "rx_bytes": peer.get("rx_bytes") or 0,
+                "tx_bytes": peer.get("tx_bytes") or 0,
+            })
+
+    # 4) 其他纳管主机（不在 Hub 的 AllowedIPs 中）：显示为 managed_host，状态取 Agent 数据
+    for h in hosts:
+        if any(n["id"] == h["id"] for n in nodes):
+            continue
+        data = wg_interfaces.get(h["id"])
+        health = "unknown"
+        if not data:
+            health = "unknown"
+        nodes.append({
+            "id": h["id"],
+            "name": h["name"],
+            "host": h["host"],
+            "type": "managed_host",
+            "health": health,
+            "wg_ip": None,
+            "data_source": "live" if data else "unknown",
+        })
+        if hub_node and h["id"] != hub["id"]:
+            edges.append({
+                "source": hub["id"], "target": h["id"],
+                "relation_type": "wireguard_link", "label": "未上报", "health": "unknown",
+            })
+
+    # 5) 汇总
+    managed_nodes = [n for n in nodes if n["type"] in ("hub", "managed_host")]
+    unmanaged_nodes = [n for n in nodes if n["type"] == "unregistered_peer"]
+    summary = {
+        "peer_total": len(hub_peers) if hub else 0,
+        "managed": len(managed_nodes),
+        "healthy": sum(1 for n in nodes if n["health"] == "healthy"),
+        "warning": sum(1 for n in nodes if n["health"] == "warning"),
+        "offline": sum(1 for n in nodes if n["health"] == "offline"),
+        "unknown": sum(1 for n in nodes if n["health"] == "unknown"),
+        "unmanaged": len(unmanaged_nodes),
+        "wg_rx_bytes": total_rx,
+        "wg_tx_bytes": total_tx,
+    }
+    return {
+        "scenario": "wireguard",
+        "nodes": nodes,
+        "edges": edges,
+        "summary": summary,
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "cached": True,
+        "partial_errors": partial_errors,
+        "elapsed_ms": int((time.time() - started) * 1000),
+    }
+
+
 @router.get("/screen/summary")
 def get_screen_summary(
     _: Optional[ApiKey] = Depends(require_api_key("read")),
 ):
-    """监控大屏聚合：主机水位 + 服务矩阵 + 活跃告警 + 指标趋势。"""
+    """监控大屏聚合（v4.8）：一次返回主机/容器/数据库/服务/日志/WG/告警汇总。
+
+    保留旧字段 servers/services/active_alerts/trends 以兼容既有调用方。
+    数据缺失返回 null/unknown 而非 0；慢子模块通过 partial_errors 降级。
+    """
+    started = time.time()
+    partial_errors = []
+    generated_at = datetime.utcnow().isoformat() + "Z"
+    now = datetime.utcnow()
+    freshness = {"metrics_at": None, "services_at": None, "wireguard_at": None}
+
+    # --- 主机：单条 DISTINCT ON 分组查询最新 CPU/MEM/DISK（不在循环内逐指标 SQL） ---
+    server_list = []
+    hosts_summary = {"total": 0, "online": 0, "offline": 0, "stale": 0}
     with get_db() as db:
         servers = db.query(Server).all()
-        server_list = []
-        for srv in servers:
-            latest = {}
-            for metric in ("cpu", "memory", "disk"):
-                row = (
-                    db.query(MetricHistory)
-                    .filter(MetricHistory.server_id == srv.id, MetricHistory.metric == metric)
-                    .order_by(MetricHistory.timestamp.desc())
-                    .first()
-                )
-                latest[metric] = round(row.value, 1) if row else None
-            server_list.append(
-                {
-                    "id": str(srv.id),
-                    "name": srv.name,
-                    "host": srv.host,
-                    "status": srv.status,
-                    "cpu": latest.get("cpu"),
-                    "memory": latest.get("memory"),
-                    "disk": latest.get("disk"),
+        latest = {}
+        try:
+            rows = db.execute(
+                text(
+                    "SELECT DISTINCT ON (server_id, metric) server_id, metric, value, timestamp "
+                    "FROM metric_history WHERE timestamp >= :cutoff "
+                    "ORDER BY server_id, metric, timestamp DESC"
+                ),
+                {"cutoff": now - timedelta(days=3)},
+            ).fetchall()
+            for sid, metric, value, ts in rows:
+                latest.setdefault(str(sid), {})[metric] = {
+                    "value": round(float(value), 1) if value is not None else None,
+                    "ts": ts,
                 }
-            )
+            fts = [row[3] for row in rows if row[3]]
+            if fts:
+                freshness["metrics_at"] = max(fts).isoformat() + "Z"
+        except Exception as e:
+            partial_errors.append(f"主机指标聚合失败: {type(e).__name__}")
+        for srv in servers:
+            rec = latest.get(str(srv.id), {})
+            online = srv.status == "online"
+            metric_ts = (rec.get("cpu") or {}).get("ts")
+            stale = bool(online and metric_ts and (now - metric_ts).total_seconds() > 30)
+            if online:
+                hosts_summary["online"] += 1
+            elif srv.status == "offline":
+                hosts_summary["offline"] += 1
+            if stale:
+                hosts_summary["stale"] += 1
+            server_list.append({
+                "id": str(srv.id), "name": srv.name, "host": srv.host,
+                "status": srv.status, "last_seen": srv.last_seen.isoformat() + "Z" if srv.last_seen else None,
+                "cpu": (rec.get("cpu") or {}).get("value"),
+                "memory": (rec.get("memory") or {}).get("value"),
+                "disk": (rec.get("disk") or {}).get("value"),
+                "stale": stale,
+            })
+        hosts_summary["total"] = len(servers)
 
-        services = db.query(Service).filter(Service.hidden != True).all()  # noqa: E712
-        server_name_map = {s.id: s.name for s in servers}
-        service_list = [
-            {
-                "id": str(s.id),
-                "name": s.name,
-                "category": s.category,
-                "status": s.status,
-                "server_name": server_name_map.get(s.server_id),
+        # --- 容器：复用最近 Agent 采集摘要缓存，不触发容器列表/SSH/docker stats ---
+        containers_summary = {"running": 0, "stopped": 0, "unknown_hosts": 0}
+        now_ts = time.time()
+        for srv in servers:
+            snap = _LAST_AGENT_SNAPSHOT.get(str(srv.id))
+            if snap and (now_ts - snap["ts"]) < 120:
+                containers_summary["running"] += snap["container_running"]
+                containers_summary["stopped"] += snap["container_stopped"]
+            elif srv.status == "online":
+                containers_summary["unknown_hosts"] += 1
+
+        # --- 数据库：实例元数据状态聚合（无实例时 total=0 是正常状态，不是错误） ---
+        db_rows = db.query(DatabaseInstance).all()
+        databases_summary = {"total": len(db_rows), "connected": 0, "pending": 0, "error": 0}
+        for inst in db_rows:
+            if inst.status == "online":
+                databases_summary["connected"] += 1
+            elif inst.status == "error":
+                databases_summary["error"] += 1
+            else:
+                databases_summary["pending"] += 1
+
+        # --- 服务：复用服务广场稳定健康快照，不主动执行探活 ---
+        try:
+            from app.service_health import get_health_snapshot
+            snapshot = get_health_snapshot()
+            services_tmp = db.query(Service).filter(Service.hidden != True).all()  # noqa: E712
+            snap_map = {r["service_id"]: r for r in snapshot}
+            service_list = []
+            up = down = 0
+            for s in services_tmp:
+                st = snap_map.get(str(s.id), {})
+                status = st.get("status") or (s.status if s.status in ("up", "down") else "unknown")
+                if status == "up":
+                    up += 1
+                elif status == "down":
+                    down += 1
+                service_list.append({
+                    "id": str(s.id), "name": s.name, "category": s.category,
+                    "status": status, "server_name": "",
+                    "last_checked": st.get("last_ok") or st.get("last_fail"),
+                })
+            services_summary = {"total": len(service_list), "up": up, "down": down, "incidents": down}
+        except Exception as e:
+            services_summary = {"total": 0, "up": 0, "down": 0, "incidents": 0}
+            service_list = []
+            partial_errors.append(f"服务健康快照失败: {type(e).__name__}")
+
+        # --- 日志：复用日志 Agent overview（DB 缓存），不在大屏触发探测 ---
+        try:
+            from app.alloy_manager import alloy_overview
+            logs = alloy_overview(probe=False)
+            logs_summary = {
+                "total": logs.get("total", 0),
+                "fresh": logs.get("fresh", 0),
+                "stale": max(0, logs.get("total", 0) - logs.get("fresh", 0) - logs.get("abnormal", 0)),
+                "abnormal": logs.get("abnormal", 0),
+                "running": logs.get("running", 0),
             }
-            for s in services
-        ]
+        except Exception as e:
+            logs_summary = {"total": 0, "fresh": 0, "stale": 0, "abnormal": 0}
+            partial_errors.append(f"日志汇总失败: {type(e).__name__}")
 
+        # --- 告警 ---
+        alert_rows = db.query(AlertEvent).filter(AlertEvent.status.in_(["pending", "firing", "acked"])).all()
+        alerts_summary = {"firing": 0, "acknowledged": 0}
+        for a in alert_rows:
+            if a.status == "acked":
+                alerts_summary["acknowledged"] += 1
+            else:
+                alerts_summary["firing"] += 1
         active_alerts = (
             db.query(AlertEvent)
             .filter(AlertEvent.status.in_(["pending", "firing"]))
@@ -309,21 +690,18 @@ def get_screen_summary(
         )
         alert_list = [
             {
-                "id": str(a.id),
-                "status": a.status,
+                "id": str(a.id), "status": a.status,
                 "current_value": a.current_value,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
             }
             for a in active_alerts
         ]
 
-        # 指标趋势：各取最近 60 个点（时序升序返回）
+        # --- 趋势（旧字段保留兼容） ---
         trends = {"cpu": [], "memory": [], "net_rx": [], "net_tx": []}
         for metric, key in (
-            ("cpu", "cpu"),
-            ("memory", "memory"),
-            ("net_rx", "net_rx"),
-            ("net_tx", "net_tx"),
+            ("cpu", "cpu"), ("memory", "memory"),
+            ("net_rx", "net_rx"), ("net_tx", "net_tx"),
         ):
             rows = (
                 db.query(MetricHistory)
@@ -333,19 +711,38 @@ def get_screen_summary(
                 .all()
             )
             trends[key] = [
-                {
-                    "ts": r.timestamp.isoformat() if r.timestamp else None,
-                    "value": r.value,
-                }
+                {"ts": r.timestamp.isoformat() if r.timestamp else None, "value": r.value}
                 for r in reversed(rows)
             ]
 
-        return {
-            "servers": server_list,
-            "services": service_list,
-            "active_alerts": alert_list,
-            "trends": trends,
-        }
+    # --- WireGuard：复用 30 秒拓扑缓存，不重复访问 Agent ---
+    wireguard_summary = {"managed": 0, "healthy": 0, "warning": 0, "offline": 0, "unmanaged": 0}
+    try:
+        wg = _build_wireguard_topology()
+        wireguard_summary = wg.get("summary", wireguard_summary)
+        freshness["wireguard_at"] = wg.get("generated_at")
+        if wg.get("partial_errors"):
+            partial_errors.extend(wg["partial_errors"][:5])
+    except Exception as e:
+        partial_errors.append(f"WG 汇总失败: {type(e).__name__}")
+
+    return {
+        "generated_at": generated_at,
+        "freshness": freshness,
+        "partial_errors": partial_errors,
+        "hosts_summary": hosts_summary,
+        "containers_summary": containers_summary,
+        "databases_summary": databases_summary,
+        "services_summary": services_summary,
+        "logs_summary": logs_summary,
+        "wireguard_summary": wireguard_summary,
+        "alerts_summary": alerts_summary,
+        "elapsed_ms": int((time.time() - started) * 1000),
+        "servers": server_list,
+        "services": service_list,
+        "active_alerts": alert_list,
+        "trends": trends,
+    }
 
 
 @router.get("/services/health")

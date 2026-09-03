@@ -1,21 +1,144 @@
 <template>
   <div class="view terminal-page">
-    <div class="view-head"><div><h1 class="view-title">终端</h1><div class="view-sub">{{ currentHost?.name || '未选择主机' }} · {{ currentHost?.agent_type==='local'?'本机安全终端':'SSH 会话' }}</div></div><button v-if="sessionId" class="btn" @click="createTerminal">重新建立会话</button></div>
-    <div v-if="error" class="card connect"><p>{{ error }}</p><button class="btn btn-primary" @click="createTerminal">重试连接</button></div>
-    <div v-else-if="loading" class="card loading"><span class="spinner"></span>正在建立 SSH 会话…</div>
-    <TerminalPanel v-else-if="sessionId" :key="sessionId" embedded :session-id="sessionId" :title="currentHost?.name" :allow-files="currentHost?.agent_type!=='local'" />
-    <div v-else class="card connect"><p>选择主机后建立安全终端会话。</p><button class="btn btn-primary" :disabled="!selectedHostId" @click="createTerminal">连接终端</button></div>
+    <div class="view-head"><div><h1 class="view-title">终端</h1><div class="view-sub">{{ currentHost?.name || '未选择主机' }} · 新建会话使用顶栏当前主机，可同时打开多个标签</div></div></div>
+    <div class="term-tabs">
+      <div v-for="s in sessions" :key="s.sessionId" class="term-tab" :class="{active:s.sessionId===activeSessionId}" @click="activate(s.sessionId)">
+        <span class="tab-dot" :class="tabDotClass(s.status)"></span>
+        <input v-if="editingTitle===s.sessionId" v-model="renameText" class="tab-title-input" @keydown.enter="commitRename(s)" @blur="commitRename(s)" @click.stop />
+        <span v-else class="tab-title" :title="`${s.serverName} · ${s.sessionId}`" @dblclick="beginRename(s)">{{ s.title }}</span>
+        <button class="tab-close" :disabled="deletingSession===s.sessionId" @click.stop="closeTab(s)">{{ deletingSession===s.sessionId?'…':'×' }}</button>
+      </div>
+      <button class="btn btn-sm btn-primary new-tab" :disabled="!selectedHostId||creating" @click="createTerminal">{{ creating?'创建中…':'＋ 新建终端' }}</button>
+    </div>
+    <div v-if="pageError" class="card error-bar"><p>{{ pageError }}</p></div>
+    <div v-show="sessions.length && activeSessionId" class="term-panels">
+      <TerminalPanel v-for="s in sessions" v-show="s.sessionId===activeSessionId" :key="s.sessionId" embedded :session-id="s.sessionId" :title="s.title" :allow-files="s.allowFiles" :active="s.sessionId===activeSessionId" @state="onPanelState(s.sessionId,$event)" />
+    </div>
+    <div v-if="!sessions.length" class="card connect"><p>选择主机后建立安全终端会话，可同时打开多个标签；断线 5 分钟内可重连。</p><button class="btn btn-primary" :disabled="!selectedHostId" @click="createTerminal">连接终端</button></div>
   </div>
 </template>
+
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, ref } from 'vue'
 import { api } from '../api'
 import TerminalPanel from '../components/TerminalPanel.vue'
 import { useHostContext } from '../hostContext'
-const {selectedHostId,currentHost,refreshHosts}=useHostContext()
-const sessionId=ref(''),loading=ref(false),error=ref('')
-async function createTerminal(){if(!selectedHostId.value)return;loading.value=true;error.value='';sessionId.value='';try{const data=await api.post('/terminal/sessions',{server_id:selectedHostId.value});sessionId.value=data.session_id}catch(e){error.value=e.message}finally{loading.value=false}}
-watch(selectedHostId,()=>{sessionId.value='';error.value='';createTerminal()})
-onMounted(async()=>{await refreshHosts();createTerminal()})
+
+const { selectedHostId, currentHost, refreshHosts } = useHostContext()
+const sessions = ref([])
+const activeSessionId = ref('')
+const creating = ref(false)
+const pageError = ref('')
+const deletingSession = ref('')
+const editingTitle = ref('')
+const renameText = ref('')
+const STORAGE_KEY = 'ops-terminal-tabs'
+let seq = 0
+
+function nextTitle(serverName) { seq += 1; return `${serverName} · 终端 ${seq}` }
+
+function persistTabs() {
+  // 只持久化会话 ID 与标签元数据；不保存 WebSocket 内容、密码或 Token
+  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(sessions.value.map((s) => ({ ...s })))) } catch { /* sessionStorage 不可用时忽略 */ }
+}
+
+async function createTerminal() {
+  if (!selectedHostId.value || creating.value) return
+  creating.value = true
+  pageError.value = ''
+  try {
+    const data = await api.post('/terminal/sessions', { server_id: selectedHostId.value })
+    const serverName = data.server_name || currentHost.value?.name || '主机'
+    const tab = {
+      sessionId: data.session_id,
+      serverId: selectedHostId.value,
+      serverName,
+      title: nextTitle(serverName),
+      status: 'connected',
+      allowFiles: data.transport !== 'local-pty',
+      createdAt: String(Date.now()),
+    }
+    sessions.value.push(tab)
+    activeSessionId.value = tab.sessionId
+    persistTabs()
+  } catch (e) {
+    pageError.value = e.message
+  } finally {
+    creating.value = false
+  }
+}
+
+function activate(id) { activeSessionId.value = id }
+
+function tabDotClass(s) {
+  return ({ connecting: 'conn', connected: 'ok', disconnected: 'warn', closed: 'off', error: 'err' })[s.status] || 'off'
+}
+
+function onPanelState(sid, st) {
+  const t = sessions.value.find((s) => s.sessionId === sid)
+  if (!t) return
+  t.status = st === 'connected' ? 'connected' : (st === 'connecting' ? 'connecting' : 'disconnected')
+}
+
+async function closeTab(s) {
+  if (deletingSession.value) return
+  deletingSession.value = s.sessionId
+  try {
+    // 显式销毁服务端会话；失败时本地标签也关闭（服务端宽限期后会自行清理）
+    await api.del(`/terminal/sessions/${s.sessionId}`)
+  } catch { /* 忽略：服务端可能已过期 */ }
+  sessions.value = sessions.value.filter((x) => x.sessionId !== s.sessionId)
+  if (activeSessionId.value === s.sessionId) activeSessionId.value = sessions.value[0]?.sessionId || ''
+  persistTabs()
+  deletingSession.value = ''
+}
+
+function beginRename(s) { editingTitle.value = s.sessionId; renameText.value = s.title }
+function commitRename(s) {
+  if (editingTitle.value !== s.sessionId) return
+  const v = renameText.value.trim()
+  if (v && v !== s.title) { s.title = v; persistTabs() }
+  editingTitle.value = ''
+}
+
+async function restore() {
+  let stored = []
+  try { stored = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]') } catch { stored = [] }
+  seq = stored.length
+  for (const t of stored) {
+    if (!t || !t.sessionId) continue
+    try {
+      const st = await api.get(`/terminal/sessions/${t.sessionId}/status`)
+      if (st && st.reconnectable) {
+        sessions.value.push({ ...t, status: st.state === 'reconnecting' ? 'disconnected' : 'connected' })
+        if (!activeSessionId.value) activeSessionId.value = t.sessionId
+      }
+      // 否则：会话已过期或被服务端清理，直接丢弃标签
+    } catch { /* 查询失败时保守丢弃，避免出现无法连接的僵尸标签 */ }
+  }
+  persistTabs()
+}
+
+onMounted(async () => { await refreshHosts(); await restore() })
 </script>
-<style scoped>.terminal-page{height:calc(100vh - 56px);display:flex;flex-direction:column}.terminal-page>.view-head{flex:none}.terminal-page>:last-child{flex:1;min-height:420px}.connect{text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center}.connect p{color:var(--muted)}</style>
+
+<style scoped>
+.terminal-page{height:calc(100vh - 56px);display:flex;flex-direction:column}
+.terminal-page>.view-head{flex:none}
+.term-tabs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 0;flex:none}
+.term-tab{display:flex;align-items:center;gap:7px;padding:6px 6px 6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card);cursor:pointer;max-width:230px}
+.term-tab.active{border-color:var(--primary);background:rgba(37,99,235,.08)}
+.tab-dot{width:8px;height:8px;border-radius:50%;flex:none}
+.tab-dot.ok{background:var(--ok)}.tab-dot.conn{background:var(--warn)}.tab-dot.warn{background:var(--warn)}.tab-dot.off{background:#94a3b8}.tab-dot.err{background:var(--err)}
+.tab-title{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.tab-title-input{border:1px solid var(--primary);border-radius:4px;font-size:13px;padding:2px 4px;width:130px;background:var(--bg);color:var(--text)}
+.tab-close{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:2px 5px;border-radius:4px}
+.tab-close:hover{background:rgba(239,68,68,.12);color:var(--err)}
+.new-tab{flex:none}
+.error-bar{flex:none;margin:0 0 8px}
+.error-bar p{margin:0;color:var(--err);font-size:13px}
+.term-panels{flex:1;min-height:380px;display:flex}
+.term-panels>*{flex:1;min-width:0}
+.connect{text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:420px}
+.connect p{color:var(--muted)}
+</style>

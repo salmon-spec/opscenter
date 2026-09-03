@@ -10,13 +10,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey
+from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey, DatabaseInstance
 from app.credential_crypto import encrypt_secret
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host
-from app.ssh_terminal import create_session, get_session, remove_session, get_active_count
+from app.ssh_terminal import create_session, get_session, remove_session, get_active_count, RECONNECT_GRACE
 from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
 from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_rule
@@ -1478,39 +1478,56 @@ def update_server(server_id: str, data: ServerUpdate):
 
 @app.delete("/api/v2/servers/{server_id}")
 def delete_server(server_id: str):
+    try:
+        parsed_id = uuid.UUID(server_id)
+    except (ValueError, AttributeError, TypeError):
+        raise HTTPException(422, "非法主机 ID")
     with get_db() as db:
-        srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        srv = db.query(Server).filter(Server.id == parsed_id).first()
         if not srv:
             raise HTTPException(404, "Server not found")
         if srv.agent_type == "local" or srv.is_local:
             raise HTTPException(400, "本地主机不允许删除")
-        # Uninstall Agent if running (both local and remote)
-        agent_info = ""
-        if srv.agent_status in ("running", "error"):
-            try:
-                from app.agent_manager import uninstall_agent
-                result = uninstall_agent(srv)
-                agent_info = f" Agent已卸载" if result.get("success") else f" Agent卸载失败: {result.get('message','')}"
-            except Exception as e:
-                agent_info = f" Agent卸载异常: {e}"
+        # P0 (v4.8): 资产删除不再隐式执行远端 Agent 卸载。
+        # 卸载必须由独立接口 DELETE /api/v2/servers/{id}/agent 显式触发，
+        # 避免 SSH 卸载阻塞删除请求（原实现生产实测耗时 ~5.6s，用户感知为"无反馈"）。
         server_name = srv.name
+        try:
+            service_count = db.query(Service).filter(Service.server_id == srv.id).count()
+            dbm_count = db.query(DatabaseInstance).filter(DatabaseInstance.server_id == srv.id).count()
+        except Exception:
+            service_count = 0
+            dbm_count = 0
+        # 短事务删除：services / database_instances / 指标历史等依赖表均 ondelete=CASCADE
         db.delete(srv)
         db.commit()
-        # Clean up groups.json - remove deleted server's services
+        # 清理 groups.json 中该主机的主机组映射（非关键步骤，失败只记录 warnings）
         try:
+            import json as _json
             groups_path = os.getenv("GROUPS_JSON_PATH", "/opt/opscenter/frontend/groups.json")
-            import json
             with open(groups_path, 'r') as gf:
-                groups_data = json.load(gf)
-            # E1 fix: check inside servers dict, not top-level
+                groups_data = _json.load(gf)
             if server_id in groups_data.get("servers", {}):
                 del groups_data["servers"][server_id]
                 with open(groups_path, 'w') as gf:
-                    json.dump(groups_data, gf, indent=2, ensure_ascii=False)
-                agent_info += " groups.json已清理"
+                    _json.dump(groups_data, gf, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"[WARN] groups.json cleanup failed: {e}")
-        return {"ok": True, "message": f"服务器'{server_name}'已删除{agent_info}"}
+            return {
+                "ok": True,
+                "message": f"主机'{server_name}'已从资产中删除；远端 Agent 未卸载",
+                "deleted": {"servers": 1, "services": service_count, "databases": dbm_count},
+                "agent_uninstalled": False,
+                "warnings": [f"groups.json 清理失败: {e}"],
+            }
+        return {
+            "ok": True,
+            "message": f"主机'{server_name}'已从资产中删除；远端 Agent 未卸载",
+            "deleted": {"servers": 1, "services": service_count, "databases": dbm_count},
+            "agent_uninstalled": False,
+            "warnings": [],
+        }
+
 
 @app.post("/api/v2/servers/{server_id}/scan")
 def scan_server(server_id: str, password: Optional[str] = None):
@@ -3590,6 +3607,12 @@ def _collect_agent_metrics():
                     **rates,
                     **raw_values,
                 }
+                # v4.8: 大屏容器汇总复用最近 Agent 采集摘要（不为此触发容器列表/SSH）
+                try:
+                    from app.topology import record_agent_snapshot
+                    record_agent_snapshot(target.id, data)
+                except Exception:
+                    pass
                 for metric_name, value in metrics_to_store.items():
                     db.add(MetricHistory(
                         server_id=target.id, timestamp=now, metric=metric_name,
@@ -4225,6 +4248,9 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
                         session.resize(obj.get("cols", 80), obj.get("rows", 24))
                     elif obj.get("type") == "input":
                         session.send(obj.get("data", ""))
+                    elif obj.get("type") == "ping":
+                        # v4.8: 应用层 ping 只更新活动时间，绝不写入 shell
+                        session.touch()
                 except json.JSONDecodeError:
                     # Plain text - send directly
                     session.send(msg)
@@ -4340,19 +4366,32 @@ async def api_sftp_delete(session_id: str, req: SftpDeleteRequest):
 
 @app.get("/api/v2/terminal/sessions/{session_id}/status")
 async def api_terminal_session_status(session_id: str):
-    """Check if a terminal session can be reconnected"""
+    """v4.8: 返回会话状态与重连宽限截止时间，不返回任何凭证。"""
     session = get_session(session_id)
     if not session:
-        return {"alive": False, "reconnectable": False}
+        return {"alive": False, "reconnectable": False, "state": "missing"}
     if session.pending_reconnect:
-        return {"alive": True, "reconnectable": True, "server_name": session.server_name,
-                "server_host": session.host, "user": session.user, "server_id": session.server_id}
+        return {"alive": True, "reconnectable": True, "state": "reconnecting",
+                "server_id": session.server_id,
+                "created_at": session.created_at, "last_activity": session.last_activity,
+                "reconnect_deadline": session.reconnect_started_at + RECONNECT_GRACE}
     if session.is_alive:
-        return {"alive": True, "reconnectable": True, "server_name": session.server_name,
-                "server_host": session.host, "user": session.user, "server_id": session.server_id}
-    return {"alive": False, "reconnectable": False}
-
-
+        return {"alive": True, "reconnectable": True, "state": "connected",
+                "server_id": session.server_id,
+                "created_at": session.created_at, "last_activity": session.last_activity,
+                "reconnect_deadline": None}
+    return {"alive": False, "reconnectable": False, "state": "expired",
+            "server_id": session.server_id,
+            "created_at": session.created_at, "last_activity": session.last_activity,
+            "reconnect_deadline": None}
+@app.delete("/api/v2/terminal/sessions/{session_id}")
+async def api_delete_terminal_session(session_id: str):
+    """v4.8: 幂等销毁终端会话。不存在或已关闭时也返回可理解结果，不报错。"""
+    session = get_session(session_id)
+    if not session:
+        return {"ok": True, "deleted": False, "message": "会话不存在或已关闭，无需清理"}
+    remove_session(session_id)
+    return {"ok": True, "deleted": True, "message": "终端会话已销毁"}
 @app.get("/api/v2/terminal/stats")
 async def api_terminal_stats():
     """Get active terminal session stats"""
