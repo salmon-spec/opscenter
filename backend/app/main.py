@@ -1368,7 +1368,7 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_status = "running"
                 row.agent_port = result.get("agent_port", 19100)
                 row.agent_token = result.get("agent_token", "")
-                row.agent_version = result.get("agent_version", "2.6.0")
+                row.agent_version = result.get("agent_version", "2.6.1")
             else:
                 row.agent_status = "error"
                 row.last_error = result.get("message", "Agent 部署失败")[-1000:]

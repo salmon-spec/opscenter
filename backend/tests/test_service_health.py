@@ -25,6 +25,21 @@ def test_http_auth_responses_are_reachable(monkeypatch):
         assert result[3] >= 0
 
 
+def test_private_https_skips_certificate_verification(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        service_health.requests,
+        "get",
+        lambda *_args, **kwargs: calls.append(kwargs) or SimpleNamespace(status_code=200),
+    )
+
+    service_health._check_service(_service("https://10.66.66.3:8006/"))
+    service_health._check_service(_service("https://example.com/"))
+
+    assert calls[0]["verify"] is False
+    assert calls[1]["verify"] is True
+
+
 def test_unsupported_or_placeholder_url_is_skipped():
     assert service_health._check_service(_service("#systemd:sshd"))[0] is None
     assert service_health._check_service(_service("postgresql://192.168.1.10:5432"))[0] is None

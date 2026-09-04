@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.6.0 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.6.1 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -16,7 +16,7 @@ import base64
 import hashlib
 from datetime import datetime
 
-AGENT_VERSION = "2.6.0"
+AGENT_VERSION = "2.6.1"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -252,8 +252,8 @@ def _collect_wireguard():
     - 公钥只返回不可逆 SHA-256 短指纹，不返回完整公钥。
     - 未安装 wg / 权限不足 / 超时 / 无接口时返回 supported:false 与结构化原因，不抛 500。
 
-    接口 dump 行：interface <ifname> <private_key> <listen_port> <fwmark>
-    Peer dump 行：peer <pubkey> <preshared_key> <endpoint> <allowed_ips> <latest_handshake> <rx> <tx> <keepalive>
+    `wg show all dump` 接口行：<ifname> <private_key> <public_key> <listen_port> <fwmark>
+    Peer 行：<ifname> <pubkey> <preshared_key> <endpoint> <allowed_ips> <latest_handshake> <rx> <tx> <keepalive>
     """
     result = {"supported": False, "generated_at": None, "interfaces": [], "reason": None}
     try:
@@ -297,18 +297,18 @@ def _parse_wg_dump(dump_text):
     单独抽离便于单元测试：输入可包含私钥与 PSK，输出与日志中不得出现原值。
     """
     interfaces = []
-    current = None
+    by_name = {}
     now = time.time()
     for raw_line in dump_text.splitlines():
         line = raw_line.strip()
         if not line:
             continue
         parts = line.split("\t")
-        if parts[0] == "interface":
-            if len(parts) < 4:
-                continue
-            ifname = parts[1]
-            # parts[2] 是接口私钥 → 立即丢弃，绝不进入响应/日志
+        # WireGuard 的标准 dump 不含 "interface"/"peer" 字面前缀；
+        # 5 列为接口，9 列为 Peer，首列均为接口名。
+        if len(parts) == 5:
+            ifname = parts[0]
+            # parts[1] 是接口私钥 → 立即丢弃，绝不进入响应/日志
             try:
                 listen_port = int(parts[3])
             except (ValueError, IndexError):
@@ -316,8 +316,10 @@ def _parse_wg_dump(dump_text):
             current = {"name": ifname, "addresses": [], "listen_port": listen_port,
                        "public_key_fingerprint": None, "peers": []}
             interfaces.append(current)
-        elif parts[0] == "peer" and current is not None:
-            if len(parts) < 9:
+            by_name[ifname] = current
+        elif len(parts) >= 9:
+            current = by_name.get(parts[0])
+            if current is None:
                 continue
             pub_key = parts[1]
             # parts[2] 是预共享密钥 → 立即丢弃，绝不进入响应/日志

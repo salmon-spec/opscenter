@@ -12,7 +12,9 @@
     </div>
     <div v-if="pageError" class="card error-bar"><p>{{ pageError }}</p></div>
     <div v-show="sessions.length && activeSessionId" class="term-stage">
-      <TerminalPanel v-for="s in sessions" v-show="s.sessionId===activeSessionId" :key="s.sessionId" embedded :session-id="s.sessionId" :title="s.title" :allow-files="s.allowFiles" :active="s.sessionId===activeSessionId" @state="onPanelState(s.sessionId,$event)" />
+      <div v-for="s in sessions" v-show="s.sessionId===activeSessionId" :key="s.sessionId" class="term-pane">
+        <TerminalPanel embedded :session-id="s.sessionId" :title="s.title" :allow-files="s.allowFiles" :active="s.sessionId===activeSessionId" @state="onPanelState(s.sessionId,$event)" />
+      </div>
     </div>
     <div v-if="!sessions.length" class="card connect"><p>选择主机后建立安全终端会话，可同时打开多个标签；断线 5 分钟内可重连。</p><button class="btn btn-primary" :disabled="!selectedHostId" @click="createTerminal">连接终端</button></div>
   </div>
@@ -139,7 +141,7 @@ onMounted(async () => { await refreshHosts(); await restore() })
 .error-bar{flex:none;margin:0 0 8px}
 .error-bar p{margin:0;color:var(--err);font-size:13px}
 .term-stage{flex:1;min-height:380px;position:relative;overflow:hidden}
-.term-stage>*{position:absolute;inset:0}
+.term-pane{position:absolute;inset:0}
 .connect{text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:420px}
 .connect p{color:var(--muted)}
 </style>

@@ -10,7 +10,7 @@ from app.config import CONTAINERIZED, LOCAL_AGENT_HOST, LOCAL_AGENT_TOKEN
 
 
 # 动态读取Agent版本号
-_AGENT_VERSION = "2.6.0"
+_AGENT_VERSION = "2.6.1"
 _AGENT_SOURCE_DIR = Path(__file__).resolve().parents[2] / "agent"
 try:
     with (_AGENT_SOURCE_DIR / "opsagent.py").open(encoding="utf-8") as f:

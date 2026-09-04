@@ -30,11 +30,12 @@ PRIVATE_KEY = "J9GpYQr6fBcwcIacqxm23oqLm4WEd86mAKQs4GfZo1A="
 PSK = "kA3aLkU1jIy3W9VQ2iQ5yV4Fz3nZ2jYg"
 
 DUMP_SAMPLE = (
-    "interface\twg0\t{priv}\t51820\toff\n"
-    "peer\t{R1}\t{psk}\t182.92.223.237:51820\t10.66.66.3/32\t1750000000\t123456\t654321\toff\n"
-    "peer\t{R2}\t\t203.0.113.9:51820\t10.66.66.99/32\t0\t0\t0\toff\n"
+    "wg0\t{priv}\t{pub}\t51820\toff\n"
+    "wg0\t{R1}\t{psk}\t182.92.223.237:51820\t10.66.66.3/32\t1750000000\t123456\t654321\toff\n"
+    "wg0\t{R2}\t(none)\t203.0.113.9:51820\t10.66.66.99/32\t0\t0\t0\toff\n"
 ).format(
     priv=PRIVATE_KEY,
+    pub="aW50ZXJmYWNlcHVibGlja2V5MTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OTA=",
     psk=PSK,
     R1="ZGF0YWJhc2U2NGtleTEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYw",
     R2="c2Vjb25ka2V5YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXoxMjM0NTY3",

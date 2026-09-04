@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 import threading
@@ -10,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 import requests
 
@@ -56,11 +58,18 @@ def _check_service(svc) -> Tuple[Optional[bool], str, Optional[int], Optional[fl
     if not url:
         return None, "无 HTTP 探测地址", None, None
     started = time.monotonic()
+    verify_tls = True
+    try:
+        address = ipaddress.ip_address(urlsplit(url).hostname or "")
+        verify_tls = not (address.is_private or address.is_loopback or address.is_link_local)
+    except ValueError:
+        pass
     try:
         response = requests.get(
             url,
             timeout=SERVICE_HEALTH_TIMEOUT_SEC,
             allow_redirects=True,
+            verify=verify_tls,
             headers={"User-Agent": "OpsCenter-HealthCheck/3.30"},
         )
         if response.status_code < 400 or response.status_code in (401, 403):

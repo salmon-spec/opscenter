@@ -1,6 +1,6 @@
 # OpsCenter 运维工作台
 
-> **当前版本：v4.8.0** · 更新于 2026-09-04
+> **当前版本：v4.8.1** · 更新于 2026-09-04
 > 访问：https://ops.salmon.xin/ · 状态页：https://ops.salmon.xin/status/ · Vite 灰度页：https://ops.salmon.xin/v3/
 
 面向 DevOps/SRE 的自托管**统一运维工作台**：管理服务器、服务、监控、告警、证书、日志、备份、镜像与巡检日报，中文界面，免登录访问，支持 SSH 终端直连与远程 Agent 采集。
@@ -26,8 +26,8 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 |---|---|
 | 后端测试 | **pytest 158/158 全绿**（0 失败 0 错误，含 AI 只读契约、敏感信息隔离与 API 密钥写节流） |
 | API | 增加 6 个 `/api/v2/ai/*` 只读上下文接口；现有管理与监控接口保持兼容 |
-| Agent | v2.6.0 |
-| 版本里程碑 | **v4.8.0**（多终端、WireGuard 拓扑、统一健康大屏与导航重构） |
+| Agent | v2.6.1 |
+| 版本里程碑 | **v4.8.1**（终端标签切换与 WireGuard 实际 dump 解析修复） |
 | 系统文件管理 | **v4.3 已交付**（本机/SFTP 浏览、编辑、上传下载、改名、可恢复删除） |
 | 系统防火墙 / SSH | **v4.3 已交付**（UFW/Firewalld、防失联保护、SSH 配置/会话/登录日志） |
 | 监控历史 | **v4.4 已交付**（按主机和时间段查询，5 分钟/1 小时分层汇总，CSV 导出，所有主机批量概览与快速切换） |
@@ -42,7 +42,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | 后端 | Python 3 + FastAPI 0.115.6 + SQLAlchemy 2.0 + Pydantic 2 + PyJWT |
 | 数据库 | PostgreSQL 16（`opscenter` 库） |
 | 前端 | Vue 3 SPA（单文件 index.html）+ ECharts + Tailwind CSS；**Vite 5 工程化改造中**（frontend-vite → /v3/ 灰度路径） |
-| Agent | Python 轻量采集器（v2.6.0，轻量系统摘要 / 指标 / 服务发现 / WireGuard / PVE 来宾 Web 服务发现 / 进程管理） |
+| Agent | Python 轻量采集器（v2.6.1，轻量系统摘要 / 指标 / 服务发现 / WireGuard / PVE 来宾 Web 服务发现 / 进程管理） |
 | 部署 | systemd（`opscenter-backend` :9091）+ Caddy 反代（:80）+ venv |
 | CI/CD | Jenkins（Jenkinsfile）+ GitLab CI（.gitlab-ci.yml） |
 
@@ -161,7 +161,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 
 ### 5.9 Agent 管理
 
-- 一键部署 / 升级 / 卸载远程监控 Agent（v2.6.0）
+- 一键部署 / 升级 / 卸载远程监控 Agent（v2.6.1）
 - Agent 状态监控（运行 / 离线 / 未部署），自动采集远程主机指标
 - 新端点：`/api/v1/registry-proxy`（Docker Hub digest 代理，TLS1.2 + IPv4 强制；MFA 安全组放开后生效）
 
@@ -211,11 +211,11 @@ OpsCenter/
 │   │   ├── ssh_terminal.py       # WebSocket 终端 + 文件管理
 │   │   ├── discovery.py          # 服务自动发现
 │   │   ├── models.py             # SQLAlchemy 模型（15 表）
-│   │   └── version.py            # 版本号（4.8.0，单一来源）
+│   │   └── version.py            # 版本号（4.8.1，单一来源）
 │   ├── tests/                    # pytest（158 用例）
 │   └── requirements.txt
 ├── agent/
-│   ├── opsagent.py               # 远程采集 Agent（v2.6.0）
+│   ├── opsagent.py               # 远程采集 Agent（v2.6.1）
 │   └── scanner.py                # 主机扫描器
 ├── frontend/                     # Vue 3 SPA（index.html 单文件）
 │   ├── index.html                # 主工作台
@@ -318,6 +318,7 @@ cd backend && pytest    # 158/158 全绿
 | **v4.6.6** | **修复浏览器版本与 OpenAPI 文档入口；补齐通配/具体 IP 绑定端口发现；Agent v2.5.1 增加 PVE QEMU/LXC 来宾 Web 服务扫描并消除启动阻塞；服务结果每 5 分钟自动同步** | ✅ 已完成 |
 | **v4.7.0** | **服务广场支持持久化自定义排序；每个服务支持多组加密登录凭证、独立显示审计；详情页凭证移动到服务说明上方** | ✅ 已完成 |
 | **v4.8.0** | **主机删除反馈、多标签终端、WireGuard 内网拓扑、统一健康大屏、容器/数据库导航重组与拓扑手动编排** | ✅ 已完成 |
+| **v4.8.1** | **修复多终端标签覆盖导致的切换失效；按 WireGuard 官方 dump 格式恢复接口、Peer、握手与流量拓扑** | ✅ 已完成 |
 
 ## 十一、已知限制与遗留事项
 

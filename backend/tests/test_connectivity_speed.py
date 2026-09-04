@@ -58,20 +58,20 @@ def test_outdated_agent_detection_and_async_upgrade(monkeypatch):
     server_id = add_server(version="2.3.0")
     current = client.get("/api/v2/agents/version")
     assert current.status_code == 200
-    assert current.json()["current_version"] == "2.6.0"
+    assert current.json()["current_version"] == "2.6.1"
     assert server_id in current.json()["outdated_server_ids"]
 
     upgraded = []
     monkeypatch.setattr(main, "_deploy_agent_background", lambda value, password=None: upgraded.append(value))
     response = client.post(f"/api/v2/servers/{server_id}/upgrade-agent")
     assert response.status_code == 202, response.text
-    assert response.json()["target_version"] == "2.6.0"
+    assert response.json()["target_version"] == "2.6.1"
     assert upgraded == [server_id]
 
 
 def test_startup_upgrade_only_targets_stale_agents_with_credentials(monkeypatch):
     old_id = add_server(version="2.2.0")
-    add_server(version="2.6.0")
+    add_server(version="2.6.1")
     add_server(version="2.1.0", credentials=False)
     upgraded = []
     monkeypatch.setattr(main, "_deploy_agent_background", lambda value, password=None: upgraded.append(value))
