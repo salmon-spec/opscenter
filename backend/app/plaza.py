@@ -414,8 +414,7 @@ def _classify_probe_exception(exc: Exception) -> tuple[str, str]:
         return "dns_error", "域名解析失败"
     if isinstance(reason, ConnectionRefusedError) or getattr(reason, "errno", None) in {111, 61, 10061}:
         return "connection_refused", "目标拒绝连接"
-    detail = str(reason).replace("\r", " ").replace("\n", " ").strip()[:180]
-    return "network_error", f"网络连接失败：{detail}" if detail else "网络连接失败"
+    return "network_error", "网络连接失败"
 
 
 def _probe(item: dict) -> dict:

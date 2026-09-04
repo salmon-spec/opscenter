@@ -315,7 +315,9 @@ class TopologyLayoutIn(BaseModel):
 
 
 class TopologyRelationIn(BaseModel):
-    scenario: str = Field(..., pattern="^(cicd|monitoring|gateway)$")
+    # Path validation must run first so read-only/unknown scenarios consistently
+    # return the endpoint's documented 400 response instead of a schema-level 422.
+    scenario: str
     source_service_id: str
     target_service_id: str
     relation_type: str = Field(..., min_length=1, max_length=30)
@@ -518,6 +520,7 @@ def _build_wireguard_topology() -> dict:
     nodes = []
     edges = []
     partial_errors = []
+    unsupported_hosts = set()
     managed_found: dict = {}   # host_ip -> server dict
     wg_interfaces: dict = {}   # server_id -> agent wireguard payload
 
@@ -546,6 +549,7 @@ def _build_wireguard_topology() -> dict:
                 continue
             if data.get("supported") is False:
                 partial_errors.append(f"{h['name']}: {data.get('reason') or '未检测到 WireGuard'}")
+                unsupported_hosts.add(h["id"])
                 continue
             if data.get("error"):
                 partial_errors.append(f"{h['name']}: {data['error']}")
@@ -649,6 +653,8 @@ def _build_wireguard_topology() -> dict:
     # 4) 其他纳管主机（不在 Hub 的 AllowedIPs 中）：显示为 managed_host，状态取 Agent 数据
     for h in hosts:
         if any(n["id"] == h["id"] for n in nodes):
+            continue
+        if h["id"] in unsupported_hosts:
             continue
         data = wg_interfaces.get(h["id"])
         health = "unknown"
@@ -782,7 +788,9 @@ def get_screen_summary(
         try:
             from app.plaza import _load_plaza_items
             catalog, plaza_servers = _load_plaza_items()
-            enabled = [item for item in catalog if item.get("enabled")]
+            # With no managed hosts, keep the legacy empty-screen contract. Static
+            # catalog entries are not deployed services until a host exists.
+            enabled = [item for item in catalog if item.get("enabled")] if servers else []
             keys = [item["key"] for item in enabled]
             state_by_key = {
                 state.plaza_key: state for state in db.query(PlazaHealthState).filter(
