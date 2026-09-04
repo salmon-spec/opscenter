@@ -21,7 +21,7 @@
 
     <!-- 资源总览卡 -->
     <div class="res-grid">
-      <router-link to="/" class="res-card">
+      <router-link to="/system/monitor" class="res-card">
         <div class="res-head"><span class="res-label">主机</span><b class="res-num">{{ fmtHosts() }}</b></div>
         <p class="res-meta">在线 {{ hostsSummary.online || 0 }} / {{ hostsSummary.total || 0 }}<template v-if="hostsSummary.stale"> · 数据陈旧 {{ hostsSummary.stale }}</template></p>
         <div class="res-risk">{{ riskTop('cpu', 'CPU') }}</div>
@@ -39,8 +39,8 @@
         <p class="res-meta">在线/总数 · 离线 {{ servicesSummary.down ?? '--' }}<template v-if="servicesSummary.incidents"> · 事件 {{ servicesSummary.incidents }}</template></p>
       </router-link>
       <router-link to="/logs" class="res-card">
-        <div class="res-head"><span class="res-label">日志</span><b class="res-num">{{ logsSummary.fresh ?? '--' }}/{{ logsSummary.total ?? '--' }}</b></div>
-        <p class="res-meta">采集正常/总数 · 陈旧 {{ logsSummary.stale ?? '--' }} · 异常 {{ logsSummary.abnormal ?? '--' }}</p>
+        <div class="res-head"><span class="res-label">日志</span><b class="res-num">{{ logsSummary.running ?? '--' }}/{{ logsSummary.total ?? '--' }}</b></div>
+        <p class="res-meta">采集器运行/总数 · 摄入状态在日志中心按需检查 · 异常 {{ logsSummary.abnormal ?? '--' }}</p>
       </router-link>
       <router-link :to="{ path: '/topology', query: { scenario: 'wireguard' } }" class="res-card">
         <div class="res-head"><span class="res-label">WireGuard</span><b class="res-num">{{ wgSummary.managed ?? '--' }}</b></div>
@@ -140,8 +140,6 @@ const pageHidden = ref(false)
 
 const summary = ref(null)
 const partialErrors = ref([])
-const drawerVisible = ref(false)
-const selected = ref(null)
 const trendHost = ref('__top3__')
 const trendMetric = ref('cpu')
 const trendRange = ref('6')
@@ -151,8 +149,6 @@ let coreTimer = null
 let trendTimer = null
 let controller = null
 let requestInFlight = false
-let lastCoreAt = 0
-let refreshAfterHidden = false
 
 const hostsSummary = computed(() => summary.value?.hosts_summary || {})
 const containersSummary = computed(() => summary.value?.containers_summary || {})
@@ -194,16 +190,19 @@ function levelColor(v) {
   return '#22c55e'
 }
 function riskTop(metricKey, label) {
-  const top = sortedServers.value.slice(0, 3).filter((h) => h[metricKey] != null)
+  const top = [...servers.value]
+    .filter((h) => h[metricKey] != null)
+    .sort((a, b) => Number(b[metricKey]) - Number(a[metricKey]))
+    .slice(0, 3)
   if (!top.length) return ''
-  return `<span class="risk">${label} 前三：${top.map((h) => `${h.name} ${fmtPct(h[metricKey])}`).join('，')}</span>`
+  return `${label} 前三：${top.map((h) => `${h.name} ${fmtPct(h[metricKey])}`).join('，')}`
 }
 function go(path) { router.push(path) }
 
 // ---------------- 核心聚合 ----------------
 async function loadSummary() {
   if (requestInFlight) return
-  if (document.visibilityState !== 'visible') { refreshAfterHidden = true; return }
+  if (document.visibilityState !== 'visible') return
   requestInFlight = true
   if (controller) controller.abort()
   controller = new AbortController()
@@ -212,7 +211,6 @@ async function loadSummary() {
     summary.value = data
     partialErrors.value = data.partial_errors || []
     lastRefresh.value = fmtTime(new Date().toISOString())
-    lastCoreAt = Date.now()
   } catch (err) {
     if (err.name !== 'AbortError') {
       // 保留上一份可用数据；只更新时间戳

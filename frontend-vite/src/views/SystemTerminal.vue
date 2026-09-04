@@ -11,7 +11,7 @@
       <button class="btn btn-sm btn-primary new-tab" :disabled="!selectedHostId||creating" @click="createTerminal">{{ creating?'创建中…':'＋ 新建终端' }}</button>
     </div>
     <div v-if="pageError" class="card error-bar"><p>{{ pageError }}</p></div>
-    <div v-show="sessions.length && activeSessionId" class="term-panels">
+    <div v-show="sessions.length && activeSessionId" class="term-stage">
       <TerminalPanel v-for="s in sessions" v-show="s.sessionId===activeSessionId" :key="s.sessionId" embedded :session-id="s.sessionId" :title="s.title" :allow-files="s.allowFiles" :active="s.sessionId===activeSessionId" @state="onPanelState(s.sessionId,$event)" />
     </div>
     <div v-if="!sessions.length" class="card connect"><p>选择主机后建立安全终端会话，可同时打开多个标签；断线 5 分钟内可重连。</p><button class="btn btn-primary" :disabled="!selectedHostId" @click="createTerminal">连接终端</button></div>
@@ -125,9 +125,10 @@ onMounted(async () => { await refreshHosts(); await restore() })
 <style scoped>
 .terminal-page{height:calc(100vh - 56px);display:flex;flex-direction:column}
 .terminal-page>.view-head{flex:none}
-.term-tabs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 0;flex:none}
-.term-tab{display:flex;align-items:center;gap:7px;padding:6px 6px 6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card);cursor:pointer;max-width:230px}
-.term-tab.active{border-color:var(--primary);background:rgba(37,99,235,.08)}
+.term-tabs{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;overflow-x:auto;padding:6px 0;flex:none;scrollbar-width:thin}
+.term-tab{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card);cursor:pointer;max-width:220px;flex:none;white-space:nowrap;transition:border-color .12s, background .12s}
+.term-tab.active{border-color:var(--primary);background:rgba(37,99,235,.1)}
+.term-tab:hover:not(.active){border-color:#94a3b8}
 .tab-dot{width:8px;height:8px;border-radius:50%;flex:none}
 .tab-dot.ok{background:var(--ok)}.tab-dot.conn{background:var(--warn)}.tab-dot.warn{background:var(--warn)}.tab-dot.off{background:#94a3b8}.tab-dot.err{background:var(--err)}
 .tab-title{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
@@ -137,8 +138,8 @@ onMounted(async () => { await refreshHosts(); await restore() })
 .new-tab{flex:none}
 .error-bar{flex:none;margin:0 0 8px}
 .error-bar p{margin:0;color:var(--err);font-size:13px}
-.term-panels{flex:1;min-height:380px;display:flex}
-.term-panels>*{flex:1;min-width:0}
+.term-stage{flex:1;min-height:380px;position:relative;overflow:hidden}
+.term-stage>*{position:absolute;inset:0}
 .connect{text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:420px}
 .connect p{color:var(--muted)}
 </style>

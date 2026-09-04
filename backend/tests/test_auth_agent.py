@@ -44,9 +44,9 @@ class _StubHandler:
         return False
 
 
-def test_agent_version_is_2_5_1():
-    # 2.5.1 keeps health endpoints available while PVE discovery runs in background.
-    assert opsagent.AGENT_VERSION == "2.5.1"
+def test_agent_version_is_2_6_0():
+    # 2.6.0 adds read-only WireGuard health while PVE discovery remains background work.
+    assert opsagent.AGENT_VERSION == "2.6.0"
 
 
 def test_check_auth_rejects_empty_token():

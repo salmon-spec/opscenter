@@ -59,6 +59,8 @@ def test_summary_uses_agent_snapshot_for_containers_and_marks_missing_metrics_nu
     assert data["containers_summary"]["stopped"] == 1
     # 缺失指标必须为 null，不得伪造为 0
     assert data["servers"][0]["cpu"] is None
+    assert data["servers"][0]["stale"] is True
+    assert data["hosts_summary"]["stale"] == 1
     # 单主机在线但没有 Agent 支持 WG 时，WG 汇总不阻塞整体响应
     assert "wireguard_summary" in data
 

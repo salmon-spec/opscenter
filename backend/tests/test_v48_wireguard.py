@@ -133,7 +133,10 @@ def test_wireguard_topology_maps_ip_health_and_caches(monkeypatch):
     }
     pve_payload = {"supported": True, "generated_at": "2026-09-03T07:30:00Z",
                    "interfaces": [{"name": "wg0", "addresses": ["10.66.66.3/24"], "listen_port": 51820,
-                                   "public_key_fingerprint": "sha256:pve", "peers": []}]}
+                                   "public_key_fingerprint": "sha256:pve", "peers": [
+                                       {"public_key_fingerprint": "sha256:l1", "allowed_ips": ["10.66.66.1/32"],
+                                        "latest_handshake_age_seconds": 60, "rx_bytes": 999, "tx_bytes": 999},
+                                   ]}]}
     calls = []
     monkeypatch.setattr("app.topology.fetch_agent_wireguard",
                         _fake_agent({"10.66.66.1": l1_payload, "10.66.66.3": pve_payload}, calls))
@@ -188,6 +191,17 @@ def test_wireguard_old_agent_marks_unknown_and_errors(monkeypatch):
     assert data["nodes"] == [] or all(n["health"] in ("unknown", "offline") for n in data["nodes"])
     assert len(data["partial_errors"]) >= 2  # 每台不支持的主机各一条提示
     assert data["summary"]["unknown"] >= 0
+
+
+def test_wireguard_supported_false_is_reported_not_used(monkeypatch):
+    add_host("L1", "10.66.66.1")
+    monkeypatch.setattr(
+        "app.topology.fetch_agent_wireguard",
+        _fake_agent({"10.66.66.1": {"supported": False, "reason": "wg 命令未安装", "interfaces": []}}, []),
+    )
+    data = client.get("/api/v2/topology?scenario=wireguard").json()
+    assert data["nodes"] == []
+    assert any("wg 命令未安装" in message for message in data["partial_errors"])
 
 
 def test_wireguard_non_32_allowed_ips_not_claimed(monkeypatch):

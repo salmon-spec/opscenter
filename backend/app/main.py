@@ -4168,6 +4168,8 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
                 srv_password = srv.ssh_key[len("__password__"):]
             else:
                 srv_key = srv.ssh_key
+    if not srv_is_local and not srv_password and not srv_key:
+        raise HTTPException(400, f"服务器 {srv_name} 未配置SSH密码或密钥，请先在资源管理中添加")
     sid, err = create_session(
         server_id=srv_id, server_name=srv_name,
         host=srv_host, port=srv_port,
@@ -4177,8 +4179,6 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         initial_command=initial_command,
         local=srv_is_local,
     )
-    if not srv_is_local and not srv_password and not srv_key:
-        raise HTTPException(400, f"服务器 {srv_name} 未配置SSH密码或密钥，请先在资源管理中添加")
     if err:
         raise HTTPException(400, err)
     session = get_session(sid)

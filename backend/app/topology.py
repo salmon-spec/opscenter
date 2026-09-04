@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 import uuid
@@ -27,7 +29,8 @@ from app.agent_manager import (
 from app.api_keys import require_api_key
 from app.config import CONTAINERIZED, LOCAL_AGENT_HOST
 from app.database import get_db
-from app.models import AlertEvent, ApiKey, DatabaseInstance, MetricHistory, Server, Service, ServiceRelation
+from app.models import AlertEvent, AlertRule, ApiKey, DatabaseInstance, MetricHistory, PlazaHealthState, Server, Service, ServiceRelation
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/v2", tags=["topology"])
 
@@ -296,10 +299,152 @@ def get_topology(
                 "target": str(r.target_service_id),
                 "relation_type": r.relation_type,
                 "label": r.label,
+                "relation_id": str(r.id),
             }
             for r in rels
         ]
         return {"scenario": scenario, "nodes": nodes, "edges": edges}
+
+
+# ============ 拓扑手动编辑（v4.8）：布局保存 + 关系增删 ============
+# 仅服务拓扑场景（cicd / monitoring / gateway）可编辑；wireguard 保持只读。
+
+class TopologyLayoutIn(BaseModel):
+    scenario: str = Field(..., pattern="^(cicd|monitoring|gateway)$")
+    positions: dict = Field(default_factory=dict)  # node_id -> {"x": float, "y": float}
+
+
+class TopologyRelationIn(BaseModel):
+    scenario: str = Field(..., pattern="^(cicd|monitoring|gateway)$")
+    source_service_id: str
+    target_service_id: str
+    relation_type: str = Field(..., min_length=1, max_length=30)
+    label: str = Field("", max_length=50)
+
+
+def _topology_layout_path() -> str:
+    default_dir = os.path.dirname(os.getenv("GROUPS_JSON_PATH", "/opt/opscenter/frontend/groups.json"))
+    return os.getenv("TOPOLOGY_LAYOUT_PATH", os.path.join(default_dir, "topology_layout.json"))
+
+
+def _read_layouts() -> dict:
+    try:
+        with open(_topology_layout_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+@router.get("/topology/layout")
+def get_topology_layout(
+    scenario: str = Query("cicd"),
+    _: Optional[ApiKey] = Depends(require_api_key("read")),
+):
+    """读取服务拓扑手动布局（节点坐标）。"""
+    if scenario not in ("cicd", "monitoring", "gateway"):
+        raise HTTPException(status_code=400, detail="layout 仅支持服务拓扑场景")
+    layouts = _read_layouts()
+    entry = layouts.get(scenario, {})
+    return {"scenario": scenario, "positions": entry.get("positions", {}), "saved_at": entry.get("saved_at")}
+
+
+@router.post("/topology/layout")
+def save_topology_layout(
+    req: TopologyLayoutIn,
+    _: Optional[ApiKey] = Depends(require_api_key("write")),
+):
+    """保存服务拓扑手动布局（节点坐标）。"""
+    if len(req.positions) > 500:
+        raise HTTPException(status_code=400, detail="布局节点数超限")
+    layouts = _read_layouts()
+    saved_at = datetime.utcnow().isoformat() + "Z"
+    layouts[req.scenario] = {"positions": req.positions, "saved_at": saved_at}
+    path = _topology_layout_path()
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(layouts, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"布局保存失败: {e}")
+    return {"ok": True, "scenario": req.scenario, "saved_at": saved_at}
+
+
+@router.post("/topology/{scenario}/relations")
+def create_topology_relation(
+    scenario: str,
+    req: TopologyRelationIn,
+    _: Optional[ApiKey] = Depends(require_api_key("write")),
+):
+    """新增（或更新）一条服务拓扑关系连线。"""
+    if scenario not in ("cicd", "monitoring", "gateway"):
+        raise HTTPException(status_code=400, detail="scenario 仅支持 cicd / monitoring / gateway")
+    if req.scenario != scenario:
+        raise HTTPException(status_code=400, detail="path 与 body 的 scenario 不一致")
+    try:
+        src_id = uuid.UUID(req.source_service_id)
+        tgt_id = uuid.UUID(req.target_service_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="非法服务 ID")
+    if src_id == tgt_id:
+        raise HTTPException(status_code=400, detail="不能连接自身")
+    with get_db() as db:
+        src = db.query(Service).filter(Service.id == src_id).first()
+        tgt = db.query(Service).filter(Service.id == tgt_id).first()
+        if not src or not tgt:
+            raise HTTPException(status_code=404, detail="服务不存在")
+        exists = (
+            db.query(ServiceRelation)
+            .filter(
+                ServiceRelation.source_service_id == src_id,
+                ServiceRelation.target_service_id == tgt_id,
+                ServiceRelation.scenario == scenario,
+            )
+            .first()
+        )
+        if exists:
+            exists.relation_type = req.relation_type
+            exists.label = req.label
+            rel = exists
+        else:
+            rel = ServiceRelation(
+                source_service_id=src_id, target_service_id=tgt_id,
+                relation_type=req.relation_type, label=req.label or None,
+                scenario=scenario,
+            )
+            db.add(rel)
+        db.commit()
+        return {
+            "ok": True,
+            "relation": {
+                "id": str(rel.id),
+                "source_service_id": str(src_id),
+                "target_service_id": str(tgt_id),
+                "relation_type": rel.relation_type,
+                "label": rel.label,
+                "scenario": scenario,
+            },
+        }
+
+
+@router.delete("/topology/relations/{relation_id}")
+def delete_topology_relation(
+    relation_id: str,
+    _: Optional[ApiKey] = Depends(require_api_key("write")),
+):
+    """删除一条服务拓扑关系连线（幂等）。"""
+    try:
+        rid = uuid.UUID(relation_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="非法关系 ID")
+    with get_db() as db:
+        rel = db.query(ServiceRelation).filter(ServiceRelation.id == rid).first()
+        if not rel:
+            return {"ok": True, "deleted": False, "message": "关系不存在"}
+        scenario = rel.scenario
+        db.delete(rel)
+        db.commit()
+        return {"ok": True, "deleted": True, "scenario": scenario}
 
 
 def _wg_fetch_cached(server_id: str, host: str, port: int, token: str) -> Optional[dict]:
@@ -375,8 +520,6 @@ def _build_wireguard_topology() -> dict:
     partial_errors = []
     managed_found: dict = {}   # host_ip -> server dict
     wg_interfaces: dict = {}   # server_id -> agent wireguard payload
-    total_rx = 0
-    total_tx = 0
 
     # 1) 并发拉取各主机 Agent WireGuard 状态
     def _pull(h):
@@ -390,8 +533,9 @@ def _build_wireguard_topology() -> dict:
         return LOCAL_AGENT_HOST if (h["is_local"] and CONTAINERIZED) else h["host"]
 
     with ThreadPoolExecutor(max_workers=_WG_MAX_WORKERS) as pool:
-        futures = [pool.submit(_pull, h) for h in hosts]
+        futures = {pool.submit(_pull, h): h for h in hosts}
         for fut in as_completed(futures, timeout=_WG_AGENT_TIMEOUT * 2):
+            h = futures[fut]
             try:
                 h, data = fut.result()
             except Exception as e:
@@ -400,14 +544,13 @@ def _build_wireguard_topology() -> dict:
             if not data:
                 partial_errors.append(f"{h['name']}: Agent 不支持或不可达（需升级到 v2.6+）")
                 continue
+            if data.get("supported") is False:
+                partial_errors.append(f"{h['name']}: {data.get('reason') or '未检测到 WireGuard'}")
+                continue
             if data.get("error"):
                 partial_errors.append(f"{h['name']}: {data['error']}")
                 continue
             wg_interfaces[h["id"]] = data
-            for iface in data.get("interfaces") or []:
-                for peer in iface.get("peers") or []:
-                    total_rx += peer.get("rx_bytes") or 0
-                    total_tx += peer.get("tx_bytes") or 0
 
     # 2) 识别 Hub：拥有最多 Peer 的主机（通常是中心节点 L1）
     hub_candidates = []
@@ -441,6 +584,9 @@ def _build_wireguard_topology() -> dict:
     if hub:
         for iface in hub_data.get("interfaces") or []:
             hub_peers.extend(iface.get("peers") or [])
+    # Hub 的 Peer 计数是本拓扑的权威视角；不要再叠加客户端的反向计数。
+    total_rx = sum(peer.get("rx_bytes") or 0 for peer in hub_peers)
+    total_tx = sum(peer.get("tx_bytes") or 0 for peer in hub_peers)
 
     host_by_ip = {h["host"]: h for h in hosts}
     seen_unmanaged: dict = {}  # fingerprint -> node
@@ -593,7 +739,7 @@ def get_screen_summary(
             rec = latest.get(str(srv.id), {})
             online = srv.status == "online"
             metric_ts = (rec.get("cpu") or {}).get("ts")
-            stale = bool(online and metric_ts and (now - metric_ts).total_seconds() > 30)
+            stale = bool(online and (not metric_ts or (now - metric_ts).total_seconds() > 30))
             if online:
                 hosts_summary["online"] += 1
             elif srv.status == "offline":
@@ -632,27 +778,41 @@ def get_screen_summary(
             else:
                 databases_summary["pending"] += 1
 
-        # --- 服务：复用服务广场稳定健康快照，不主动执行探活 ---
+        # --- 服务：复用服务广场持久化健康状态，不主动执行探活 ---
         try:
-            from app.service_health import get_health_snapshot
-            snapshot = get_health_snapshot()
-            services_tmp = db.query(Service).filter(Service.hidden != True).all()  # noqa: E712
-            snap_map = {r["service_id"]: r for r in snapshot}
+            from app.plaza import _load_plaza_items
+            catalog, plaza_servers = _load_plaza_items()
+            enabled = [item for item in catalog if item.get("enabled")]
+            keys = [item["key"] for item in enabled]
+            state_by_key = {
+                state.plaza_key: state for state in db.query(PlazaHealthState).filter(
+                    PlazaHealthState.plaza_key.in_(keys)
+                ).all()
+            } if keys else {}
             service_list = []
-            up = down = 0
-            for s in services_tmp:
-                st = snap_map.get(str(s.id), {})
-                status = st.get("status") or (s.status if s.status in ("up", "down") else "unknown")
-                if status == "up":
-                    up += 1
-                elif status == "down":
-                    down += 1
+            status_counts = {"up": 0, "down": 0}
+            incidents = 0
+            for item in enabled:
+                state = state_by_key.get(item["key"])
+                status = "disabled" if item.get("probe_enabled") is False else (
+                    state.stable_status if state else "unknown"
+                )
+                if status in status_counts:
+                    status_counts[status] += 1
+                incidents += bool(state and state.active_incident_id)
+                server = plaza_servers.get(item.get("server_host"))
                 service_list.append({
-                    "id": str(s.id), "name": s.name, "category": s.category,
-                    "status": status, "server_name": "",
-                    "last_checked": st.get("last_ok") or st.get("last_fail"),
+                    "id": f"plaza:{item['key']}", "name": item["name"],
+                    "category": item.get("category"), "status": status,
+                    "server_name": server.name if server else item.get("server_host", ""),
+                    "last_checked": state.last_checked_at.isoformat() if state and state.last_checked_at else None,
                 })
-            services_summary = {"total": len(service_list), "up": up, "down": down, "incidents": down}
+            services_summary = {
+                "total": len(service_list), "up": status_counts["up"],
+                "down": status_counts["down"], "incidents": incidents,
+            }
+            checked_times = [item["last_checked"] for item in service_list if item.get("last_checked")]
+            freshness["services_at"] = max(checked_times) if checked_times else None
         except Exception as e:
             services_summary = {"total": 0, "up": 0, "down": 0, "incidents": 0}
             service_list = []
@@ -688,10 +848,23 @@ def get_screen_summary(
             .limit(10)
             .all()
         )
+        alert_rule_map = {
+            row.id: row.name for row in db.query(AlertRule).filter(
+                AlertRule.id.in_({a.rule_id for a in active_alerts})
+            ).all()
+        } if active_alerts else {}
+        alert_server_map = {
+            row.id: row.name for row in db.query(Server).filter(
+                Server.id.in_({a.server_id for a in active_alerts})
+            ).all()
+        } if active_alerts else {}
         alert_list = [
             {
                 "id": str(a.id), "status": a.status,
+                "rule_name": alert_rule_map.get(a.rule_id),
+                "server_name": alert_server_map.get(a.server_id),
                 "current_value": a.current_value,
+                "fired_at": a.fired_at.isoformat() if a.fired_at else None,
                 "created_at": a.created_at.isoformat() if a.created_at else None,
             }
             for a in active_alerts

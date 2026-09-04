@@ -11,6 +11,8 @@
           class="btn" :class="scenario === sc.id ? 'btn-primary' : ''"
           @click="switchScenario(sc.id)"
         >{{ sc.label }}</button>
+        <button v-if="scenario !== 'wireguard'" class="btn" :class="editMode ? 'btn-primary' : ''" @click="toggleEdit">{{ editMode ? '完成编辑' : '手动编辑' }}</button>
+        <button v-if="editMode && scenario !== 'wireguard'" class="btn" :disabled="savingLayout" @click="saveLayout">{{ savingLayout ? '保存中…' : '💾 保存布局' }}</button>
       </div>
     </div>
 
@@ -28,6 +30,25 @@
     <div v-if="scenario === 'wireguard'" class="wg-filters">
       <button v-for="f in wgFilterOptions" :key="f.id" class="btn btn-sm" :class="wgFilter === f.id ? 'btn-primary' : ''" @click="wgFilter = f.id">{{ f.label }}</button>
       <span class="muted wg-hint">累计值在接口重启后可能归零；握手时间来自 Hub 采集快照（30 秒缓存）</span>
+    </div>
+
+    <div v-if="editMode && scenario !== 'wireguard'" class="edit-panel card">
+      <div class="edit-panel-head"><b>关系编辑</b><span class="muted">拖动节点后点击「💾 保存布局」保存位置；WireGuard 视图为只读</span></div>
+      <div class="rel-form">
+        <select v-model="relForm.source" class="rel-select"><option value="">源服务</option><option v-for="s in allServices" :key="s.id" :value="s.id">{{ s.name }}</option></select>
+        <select v-model="relForm.target" class="rel-select"><option value="">目标服务</option><option v-for="s in allServices" :key="s.id" :value="s.id">{{ s.name }}</option></select>
+        <input v-model.trim="relForm.type" class="rel-input" placeholder="关系类型（如 data_flow）" />
+        <input v-model.trim="relForm.label" class="rel-input" placeholder="连线标签（可空）" />
+        <button class="btn btn-primary btn-sm" :disabled="!relForm.source || !relForm.target || !relForm.type" @click="addRelation">添加连线</button>
+      </div>
+      <div class="rel-list">
+        <div v-for="e in graphData.edges" :key="e._relId || `${e.source}-${e.target}`" class="rel-item">
+          <span>{{ nodeName(e.source) }} → {{ nodeName(e.target) }}</span>
+          <span class="muted">{{ e.relation_type }}<template v-if="e.label"> · {{ e.label }}</template></span>
+          <button class="rel-del" :disabled="edgeBusy===e._relId" @click="removeRelation(e)">删除</button>
+        </div>
+        <p v-if="!graphData.edges.length" class="muted" style="font-size:12px">暂无关系连线</p>
+      </div>
     </div>
 
     <div class="card topo-card">
@@ -63,7 +84,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import * as echarts from 'echarts'
-import { api } from '../api'
+import { api, toast } from '../api'
 import EmptyState from '../components/EmptyState.vue'
 import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'
 
@@ -92,6 +113,12 @@ const chartEl = ref(null)
 const drawerVisible = ref(false)
 const selected = ref(null)
 const wgFilter = ref('all')
+const editMode = ref(false)
+const savingLayout = ref(false)
+const edgeBusy = ref('')
+const savedPositions = ref({})
+const allServices = ref([])
+const relForm = ref({ source: '', target: '', type: '', label: '' })
 let chart = null
 
 const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#64748b']
@@ -148,6 +175,16 @@ async function load() {
   legacyAgentHint.value = ''
   try {
     graphData.value = await api.get('/topology', { scenario: scenario.value })
+    // 为前端关系列表提供稳定键；读取保存的手动布局
+    if (Array.isArray(graphData.value.edges)) {
+      graphData.value.edges = graphData.value.edges.map((e, i) => ({ ...e, _relId: e._relId || e.relation_id || `e${i}` }))
+    }
+    if (scenario.value !== 'wireguard') {
+      const lay = await api.get('/topology/layout', { scenario: scenario.value }).catch(() => null)
+      savedPositions.value = lay?.positions || {}
+    } else {
+      savedPositions.value = {}
+    }
     if (scenario.value === 'wireguard') {
       if (!graphData.value.nodes?.length) notice.value = '暂无 WireGuard 数据'
       if (graphData.value.partial_errors?.length) {
@@ -177,8 +214,67 @@ async function load() {
 function switchScenario(id) {
   scenario.value = id
   wgFilter.value = 'all'
+  editMode.value = false
+  relForm.value = { source: '', target: '', type: '', label: '' }
   router.replace({ query: id === 'wireguard' ? { scenario: id } : {} })
   load()
+}
+
+// ---------- 手动编辑：布局保存 + 关系增删 ----------
+async function loadServices() {
+  try {
+    const list = await api.get('/services-with-status').catch(() => [])
+    allServices.value = (list || []).map((s) => ({ id: s.id, name: s.name }))
+  } catch { allServices.value = [] }
+}
+async function toggleEdit() {
+  editMode.value = !editMode.value
+  if (editMode.value && !allServices.value.length) await loadServices()
+}
+function nodeName(id) { return graphData.value?.nodes?.find((n) => n.id === id)?.name || id }
+function currentPositions() {
+  if (!chart) return {}
+  const opt = chart.getOption()
+  const data = (opt?.series?.[0]?.data) || []
+  const pos = {}
+  for (const n of data) {
+    if (n && n.id != null && n.x != null && n.y != null) pos[n.id] = { x: Math.round(n.x), y: Math.round(n.y) }
+  }
+  return pos
+}
+async function saveLayout() {
+  savingLayout.value = true
+  try {
+    const pos = currentPositions()
+    if (!Object.keys(pos).length) { toast('没有可保存的节点位置（可先拖动节点）', 'warn'); return }
+    await api.post('/topology/layout', { scenario: scenario.value, positions: pos })
+    savedPositions.value = pos
+    toast(`布局已保存（${Object.keys(pos).length} 个节点）`, 'ok')
+  } catch (e) { toast(`保存失败：${e.message}`, 'err') }
+  finally { savingLayout.value = false }
+}
+async function addRelation() {
+  const { source, target, type, label } = relForm.value
+  if (!source || !target || !type) return
+  try {
+    await api.post(`/topology/${scenario.value}/relations`, {
+      scenario: scenario.value, source_service_id: source, target_service_id: target,
+      relation_type: type, label,
+    })
+    relForm.value = { source: '', target: '', type: '', label: '' }
+    toast('连线已添加', 'ok')
+    await load()
+  } catch (e) { toast(`添加失败：${e.message}`, 'err') }
+}
+async function removeRelation(e) {
+  if (!e.relation_id) { toast('该连线由自动播种生成，请在服务配置中管理', 'warn'); return }
+  edgeBusy.value = e.relation_id
+  try {
+    await api.del(`/topology/relations/${e.relation_id}`)
+    toast('连线已删除', 'ok')
+    await load()
+  } catch (err) { toast(`删除失败：${err.message}`, 'err') }
+  finally { edgeBusy.value = '' }
 }
 
 watch(wgFilter, () => { if (scenario.value === 'wireguard') render() })
@@ -217,10 +313,11 @@ function layout(nodes, edges) {
     const idx = layerIndex[l] = (layerIndex[l] || 0)
     layerIndex[l]++
     if (!(n.category in catColor)) catColor[n.category] = PALETTE[colorIdx++ % PALETTE.length]
+    const saved = savedPositions.value?.[n.id]
     return {
       ...n,
-      x: 90 + l * 300,
-      y: 60 + idx * 100,
+      x: saved ? Number(saved.x) : 90 + l * 300,
+      y: saved ? Number(saved.y) : 60 + idx * 100,
       symbolSize: 46,
       itemStyle: { color: catColor[n.category] },
     }
@@ -332,6 +429,17 @@ onBeforeUnmount(() => {
 .topo-chart { height: 640px; }
 .topo-notice { padding: 8px 12px; font-size: 12px; }
 .topo-notice.warn { color: #b45309; background: #fffbeb; border-radius: 8px; margin-top: 6px; }
+.edit-panel { padding: 12px 14px; margin-bottom: 10px; }
+.edit-panel-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.edit-panel-head b { font-size: 13px; }
+.edit-panel-head .muted { font-size: 12px; }
+.rel-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.rel-select, .rel-input { border: 1px solid var(--border); background: var(--bg); color: var(--text); padding: 6px 8px; border-radius: 6px; font-size: 13px; max-width: 180px; }
+.rel-list { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; }
+.rel-item { display: flex; align-items: center; gap: 10px; font-size: 13px; border-bottom: 1px dashed var(--border); padding: 4px 0; }
+.rel-item span:first-child { font-weight: 500; }
+.rel-del { margin-left: auto; border: 0; background: none; color: var(--err); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+.rel-del:hover { background: rgba(239,68,68,.1); }
 .wg-summary { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 12px 16px; margin-bottom: 10px; }
 .wg-stat { display: flex; flex-direction: column; min-width: 52px; }
 .wg-stat b { font-size: 20px; }
