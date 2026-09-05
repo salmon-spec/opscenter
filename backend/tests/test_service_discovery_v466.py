@@ -20,7 +20,7 @@ def test_proxied_openapi_documentation():
     client = TestClient(main.app)
     schema = client.get('/api/v2/openapi.json')
     assert schema.status_code == 200
-    assert schema.json()['info']['version'] == '4.8.2'
+    assert schema.json()['info']['version'] == '4.8.3'
     docs = client.get('/api/v2/docs')
     assert docs.status_code == 200
     assert '/api/v2/openapi.json' in docs.text

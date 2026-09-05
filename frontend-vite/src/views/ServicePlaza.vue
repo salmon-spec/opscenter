@@ -54,13 +54,12 @@
           >进入服务</a>
           <button class="btn btn-sm btn-ghost" title="查看详情" @click.stop="openDetail(s)">详情</button>
           <button class="btn btn-sm btn-ghost" title="从服务广场隐藏" @click.stop="hideService(s)">隐藏</button>
-          <button v-if="s.manual" class="btn btn-sm btn-danger" title="永久删除手动服务" @click.stop="deleteManualService(s)">删除</button>
         </div>
       </div>
     </div>
 
     <!-- 详情抽屉 -->
-    <ServiceDetailDrawer :visible="drawerVisible" :service="selected" @close="drawerVisible = false" @updated="handleServiceUpdated" />
+    <ServiceDetailDrawer :visible="drawerVisible" :service="selected" @close="drawerVisible = false" @updated="handleServiceUpdated" @deleted="handleServiceDeleted" />
 
     <Modal :visible="addVisible" title="手动添加服务" width="620px" @close="addVisible = false">
       <div class="form-grid">
@@ -219,6 +218,12 @@ function shortTime(value){const date=new Date(value);return Number.isNaN(date.ge
 
 async function handleServiceUpdated(updated) {
   if (updated) selected.value = { ...selected.value, ...updated }
+  await reload(true)
+}
+
+async function handleServiceDeleted() {
+  drawerVisible.value = false
+  selected.value = null
   await reload(true)
 }
 
