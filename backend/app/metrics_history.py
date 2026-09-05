@@ -8,10 +8,10 @@ from datetime import datetime, timedelta, timezone
 import uuid
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, text
 
 from app.config import RETENTION_ROLLUP_1H_DAYS, RETENTION_ROLLUP_5M_DAYS
-from app.database import get_db
+from app.database import engine, get_db
 from app.models import MetricHistory, MetricRollup, Server
 
 
@@ -20,12 +20,32 @@ ALLOWED_METRICS = {"cpu", "memory", "disk", "swap", "load1", "load5", "load15", 
 _RESOLUTION_SECONDS = {"5m": 300, "1h": 3600}
 
 
+def ensure_performance_indexes() -> None:
+    """Create large-table indexes online for upgraded PostgreSQL installations."""
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        connection.execute(text(
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_metric_history_latest "
+            "ON metric_history (server_id, metric, timestamp DESC)"
+        ))
+
+
+async def performance_index_task() -> None:
+    await asyncio.sleep(1)  # Keep API startup independent from a large online index build.
+    try:
+        await asyncio.to_thread(ensure_performance_indexes)
+    except Exception as exc:
+        print(f"Performance index migration error: {exc}", flush=True)
+
+
 def _floor(value: datetime, seconds: int) -> datetime:
     stamp = calendar.timegm(value.utctimetuple())
     return datetime.fromtimestamp(stamp - stamp % seconds, timezone.utc).replace(tzinfo=None)
 
 
-def _upsert_buckets(db, rows: list, resolution: str, bucket_seconds: int, now: datetime) -> int:
+def _python_upsert_buckets(db, rows: list, resolution: str, bucket_seconds: int, now: datetime) -> int:
+    """Portable fallback used by SQLite and other non-PostgreSQL test databases."""
     complete_before = _floor(now, bucket_seconds)
     groups = defaultdict(list)
     for row in rows:
@@ -55,17 +75,90 @@ def _upsert_buckets(db, rows: list, resolution: str, bucket_seconds: int, now: d
     return changed
 
 
+def _postgres_upsert_buckets(
+    db, *, source: str, timestamp_column: str, resolution: str,
+    bucket_seconds: int, start: datetime, complete_before: datetime,
+) -> int:
+    """Aggregate and upsert a window in PostgreSQL without materialising rows in Python."""
+    if source == "metric_history":
+        values = "AVG(value), MIN(value), MAX(value), COUNT(*)"
+        source_filter = "metric NOT LIKE '%\\_raw' ESCAPE '\\'"
+    elif source == "metric_rollups":
+        values = (
+            "SUM(value_avg * sample_count) / NULLIF(SUM(sample_count), 0), "
+            "MIN(value_min), MAX(value_max), SUM(sample_count)"
+        )
+        source_filter = "resolution = '5m'"
+    else:  # Values are internal constants; keep accidental SQL identifiers impossible.
+        raise ValueError("unsupported rollup source")
+    grouped = f"""
+        SELECT server_id, metric,
+               date_bin(CAST(:bucket_interval AS interval), {timestamp_column}, TIMESTAMP '1970-01-01') AS bucket_at,
+               {values}
+        FROM {source}
+        WHERE {timestamp_column} >= :start AND {timestamp_column} < :complete_before
+          AND {source_filter}
+        GROUP BY 1, 2, 3
+    """
+    params = {
+        "bucket_interval": f"{bucket_seconds} seconds",
+        "start": start,
+        "complete_before": complete_before,
+        "resolution": resolution,
+    }
+    changed = int(db.execute(text(f"SELECT COUNT(*) FROM ({grouped}) AS buckets"), params).scalar() or 0)
+    db.execute(text(f"""
+        INSERT INTO metric_rollups
+            (id, server_id, metric, resolution, bucket_at, value_avg, value_min, value_max, sample_count)
+        SELECT gen_random_uuid(), server_id, metric, :resolution, bucket_at,
+               avg_value, min_value, max_value, sample_count
+        FROM ({grouped}) AS buckets(server_id, metric, bucket_at, avg_value, min_value, max_value, sample_count)
+        ON CONFLICT ON CONSTRAINT uq_metric_rollup_bucket DO UPDATE SET
+            value_avg = EXCLUDED.value_avg,
+            value_min = EXCLUDED.value_min,
+            value_max = EXCLUDED.value_max,
+            sample_count = EXCLUDED.sample_count
+    """), params)
+    return changed
+
+
+def _incremental_start(db, resolution: str, now: datetime, fallback_hours: int, overlap_hours: int) -> datetime:
+    """Resume after downtime while bounding each pass and rechecking recent late samples."""
+    latest = db.query(func.max(MetricRollup.bucket_at)).filter(
+        MetricRollup.resolution == resolution,
+    ).scalar()
+    fallback = now - timedelta(hours=fallback_hours)
+    recent = now - timedelta(hours=overlap_hours)
+    return max(fallback, min(latest, recent)) if latest else fallback
+
+
 def build_metric_rollups(now: datetime | None = None, raw_lookback_hours: int = 24) -> dict:
     """Build recent complete buckets idempotently, covering ordinary downtime."""
     now = now or datetime.utcnow()
     with get_db() as db:
-        raw_rows = db.query(MetricHistory).filter(MetricHistory.timestamp >= now - timedelta(hours=raw_lookback_hours)).all()
-        five_minute = _upsert_buckets(db, raw_rows, "5m", 300, now)
-        db.flush()
-        rollup_rows = db.query(MetricRollup).filter(
-            MetricRollup.resolution == "5m", MetricRollup.bucket_at >= now - timedelta(hours=max(48, raw_lookback_hours)),
-        ).all()
-        hourly = _upsert_buckets(db, rollup_rows, "1h", 3600, now)
+        if db.bind.dialect.name == "postgresql":
+            raw_start = _incremental_start(db, "5m", now, raw_lookback_hours, 2)
+            five_minute = _postgres_upsert_buckets(
+                db, source="metric_history", timestamp_column="timestamp", resolution="5m",
+                bucket_seconds=300, start=raw_start, complete_before=_floor(now, 300),
+            )
+            db.flush()
+            hourly_start = _incremental_start(db, "1h", now, max(48, raw_lookback_hours), 4)
+            hourly = _postgres_upsert_buckets(
+                db, source="metric_rollups", timestamp_column="bucket_at", resolution="1h",
+                bucket_seconds=3600, start=hourly_start, complete_before=_floor(now, 3600),
+            )
+        else:
+            raw_rows = db.query(MetricHistory).filter(
+                MetricHistory.timestamp >= now - timedelta(hours=raw_lookback_hours),
+            ).all()
+            five_minute = _python_upsert_buckets(db, raw_rows, "5m", 300, now)
+            db.flush()
+            rollup_rows = db.query(MetricRollup).filter(
+                MetricRollup.resolution == "5m",
+                MetricRollup.bucket_at >= now - timedelta(hours=max(48, raw_lookback_hours)),
+            ).all()
+            hourly = _python_upsert_buckets(db, rollup_rows, "1h", 3600, now)
         if RETENTION_ROLLUP_5M_DAYS > 0:
             db.query(MetricRollup).filter(
                 MetricRollup.resolution == "5m", MetricRollup.bucket_at < now - timedelta(days=RETENTION_ROLLUP_5M_DAYS),

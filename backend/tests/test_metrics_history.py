@@ -83,6 +83,33 @@ def test_rollups_are_accurate_and_idempotent():
         db.close()
 
 
+def test_hourly_rollup_combines_multiple_five_minute_buckets():
+    db = SessionLocal()
+    try:
+        server = Server(name="dense-host", host="10.66.66.98", ssh_key="__password__x")
+        db.add(server)
+        db.flush()
+        db.add_all([
+            MetricHistory(server_id=server.id, timestamp=datetime(2026, 8, 30, 11, 1), metric="cpu", value=10),
+            MetricHistory(server_id=server.id, timestamp=datetime(2026, 8, 30, 11, 6), metric="cpu", value=30),
+        ])
+        db.commit()
+        server_id = server.id
+    finally:
+        db.close()
+
+    build_metric_rollups(now=datetime(2026, 8, 30, 12, 17))
+    with SessionLocal() as db:
+        rows = db.query(MetricRollup).filter(
+            MetricRollup.server_id == server_id,
+            MetricRollup.metric == "cpu",
+            MetricRollup.resolution == "1h",
+        ).all()
+        assert len(rows) == 1
+        assert rows[0].value_avg == pytest.approx(20)
+        assert rows[0].sample_count == 2
+
+
 def test_timeseries_supports_raw_rollup_and_validation():
     server_id = _seed_metrics()
     build_metric_rollups(now=datetime(2026, 8, 30, 12, 17))

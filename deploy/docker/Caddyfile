@@ -11,6 +11,8 @@
     handle @apiDocs {
         reverse_proxy backend:9091
     }
+    @versionedAssets path /v3/assets/*
+    header @versionedAssets Cache-Control "public, max-age=31536000, immutable"
     handle /v3/* {
         root * /srv
         file_server

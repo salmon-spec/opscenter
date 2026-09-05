@@ -107,17 +107,18 @@ async function restore() {
   let stored = []
   try { stored = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '[]') } catch { stored = [] }
   seq = stored.length
-  for (const t of stored) {
-    if (!t || !t.sessionId) continue
+  const restored = await Promise.all(stored.filter((t) => t?.sessionId).map(async (t) => {
     try {
       const st = await api.get(`/terminal/sessions/${t.sessionId}/status`)
       if (st && st.reconnectable) {
-        sessions.value.push({ ...t, status: st.state === 'reconnecting' ? 'disconnected' : 'connected' })
-        if (!activeSessionId.value) activeSessionId.value = t.sessionId
+        return { ...t, status: st.state === 'reconnecting' ? 'disconnected' : 'connected' }
       }
       // 否则：会话已过期或被服务端清理，直接丢弃标签
     } catch { /* 查询失败时保守丢弃，避免出现无法连接的僵尸标签 */ }
-  }
+    return null
+  }))
+  sessions.value.push(...restored.filter(Boolean))
+  activeSessionId.value = sessions.value[0]?.sessionId || ''
   persistTabs()
 }
 

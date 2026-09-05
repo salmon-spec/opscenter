@@ -716,7 +716,7 @@ def get_screen_summary(
     now = datetime.utcnow()
     freshness = {"metrics_at": None, "services_at": None, "wireguard_at": None}
 
-    # --- 主机：单条 DISTINCT ON 分组查询最新 CPU/MEM/DISK（不在循环内逐指标 SQL） ---
+    # --- 主机：每台主机/指标走组合索引取最新值，避免扫描三天的全部历史数据 ---
     server_list = []
     hosts_summary = {"total": 0, "online": 0, "offline": 0, "stale": 0}
     with get_db() as db:
@@ -725,9 +725,15 @@ def get_screen_summary(
         try:
             rows = db.execute(
                 text(
-                    "SELECT DISTINCT ON (server_id, metric) server_id, metric, value, timestamp "
-                    "FROM metric_history WHERE timestamp >= :cutoff "
-                    "ORDER BY server_id, metric, timestamp DESC"
+                    "SELECT s.id AS server_id, wanted.metric, latest.value, latest.timestamp "
+                    "FROM servers AS s "
+                    "CROSS JOIN (VALUES ('cpu'), ('memory'), ('disk')) AS wanted(metric) "
+                    "LEFT JOIN LATERAL ("
+                    "  SELECT value, timestamp FROM metric_history "
+                    "  WHERE server_id = s.id AND metric = wanted.metric AND timestamp >= :cutoff "
+                    "  ORDER BY timestamp DESC LIMIT 1"
+                    ") AS latest ON TRUE "
+                    "WHERE latest.timestamp IS NOT NULL"
                 ),
                 {"cutoff": now - timedelta(days=3)},
             ).fetchall()

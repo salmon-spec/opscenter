@@ -1,12 +1,12 @@
 /* OpsCenter v3.29 路由：hash 模式，视图内切换不刷新页面 */
 import { createRouter, createWebHashHistory } from 'vue-router'
 import ServicePlaza from './views/ServicePlaza.vue'
-import Screen from './views/Screen.vue'
-import Topology from './views/Topology.vue'
-import Alerts from './views/Alerts.vue'
-import ApiKeys from './views/ApiKeys.vue'
 
 const Assets = () => import('./views/Assets.vue')
+const Screen = () => import('./views/Screen.vue')
+const Topology = () => import('./views/Topology.vue')
+const Alerts = () => import('./views/Alerts.vue')
+const ApiKeys = () => import('./views/ApiKeys.vue')
 const Database = () => import('./views/Database.vue')
 const SystemMonitor = () => import('./views/SystemMonitor.vue')
 const SystemFiles = () => import('./views/SystemFiles.vue')

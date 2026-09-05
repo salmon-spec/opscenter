@@ -329,6 +329,14 @@ class MetricHistory(Base):
     value = Column(Float, nullable=False)
 
 
+Index(
+    "ix_metric_history_latest",
+    MetricHistory.server_id,
+    MetricHistory.metric,
+    MetricHistory.timestamp.desc(),
+)
+
+
 class MetricRollup(Base):
     """Long-term metric buckets generated from high-frequency samples."""
     __tablename__ = "metric_rollups"

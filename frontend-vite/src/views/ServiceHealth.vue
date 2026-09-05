@@ -32,19 +32,21 @@ import { api, fmtTime, toast } from '../api'
 
 const tab=ref('incidents'),status=ref(''),loading=ref(false),incidents=ref([]),silences=ref([]),services=ref([]),overview=ref({}),generatedAt=ref(null)
 const silenceForm=reactive({plaza_key:'',ends_at:'',reason:''})
-let timer=null,controller=null
+let timer=null,controller=null,summaryController=null
 const serviceName=(key)=>services.value.find(item=>item.key===key)?.name||key
 const incidentServiceName=(row)=>row.service_name||serviceName(row.plaza_key)
 const statusText=(value)=>({open:'待确认',acknowledged:'已确认',resolved:'已恢复'}[value]||value)
 const errorTypeText=(value)=>({http_status:'HTTP 状态',timeout:'连接超时',dns_error:'DNS 解析',tls_certificate:'TLS 证书',tls_error:'TLS 连接',connection_refused:'拒绝连接',network_error:'网络异常'}[value]||'网络异常')
-async function reload(){if(loading.value)return;controller?.abort();controller=new AbortController();loading.value=true;try{const [summary,eventData,silenceData,serviceData]=await Promise.all([api.get('/services/plaza/health-overview',{hours:24},{signal:controller.signal}),api.get('/services/plaza/incidents',{status:status.value||undefined,hours:24*30,limit:200},{signal:controller.signal}),api.get('/services/plaza/silences',{}, {signal:controller.signal}),api.get('/services/plaza',{}, {signal:controller.signal})]);overview.value=summary.summary||{};generatedAt.value=summary.generated_at;incidents.value=eventData.items||[];silences.value=silenceData||[];services.value=serviceData||[]}catch(error){if(error.name!=='AbortError')toast(`服务健康加载失败：${error.message}`,'error')}finally{loading.value=false}}
+function applySummary(summary){overview.value=summary.summary||{};generatedAt.value=summary.generated_at}
+async function loadSummary(){summaryController?.abort();summaryController=new AbortController();try{applySummary(await api.get('/services/plaza/health-overview',{hours:24},{signal:summaryController.signal}))}catch(error){if(error.name!=='AbortError')console.warn('服务健康摘要刷新失败',error)}}
+async function reload(){if(loading.value)return;controller?.abort();summaryController?.abort();controller=new AbortController();loading.value=true;try{const [summary,eventData,silenceData,serviceData]=await Promise.all([api.get('/services/plaza/health-overview',{hours:24},{signal:controller.signal}),api.get('/services/plaza/incidents',{status:status.value||undefined,hours:24*30,limit:200},{signal:controller.signal}),api.get('/services/plaza/silences',{}, {signal:controller.signal}),api.get('/services/plaza',{}, {signal:controller.signal})]);applySummary(summary);incidents.value=eventData.items||[];silences.value=silenceData||[];services.value=serviceData||[]}catch(error){if(error.name!=='AbortError')toast(`服务健康加载失败：${error.message}`,'error')}finally{loading.value=false}}
 async function loadIncidents(){try{const data=await api.get('/services/plaza/incidents',{status:status.value||undefined,hours:24*30,limit:200});incidents.value=data.items||[]}catch(error){toast(error.message,'error')}}
 async function ack(row){try{const data=await api.post(`/services/plaza/incidents/${row.id}/acknowledge`);Object.assign(row,data);toast('事件已确认','success')}catch(error){toast(error.message,'error')}}
 async function createSilence(){if(!silenceForm.plaza_key||!silenceForm.ends_at||!silenceForm.reason){toast('请选择服务并填写结束时间和原因','error');return}try{await api.post('/services/plaza/silences',{plaza_key:silenceForm.plaza_key,ends_at:new Date(silenceForm.ends_at).toISOString(),reason:silenceForm.reason});Object.assign(silenceForm,{plaza_key:'',ends_at:'',reason:''});await reload();toast('维护静默已创建','success')}catch(error){toast(error.message,'error')}}
 async function endSilence(row){if(!confirm('确认提前结束该静默？'))return;try{await api.del(`/services/plaza/silences/${row.id}`);await reload();toast('静默已结束','success')}catch(error){toast(error.message,'error')}}
-function schedule(){clearInterval(timer);timer=setInterval(()=>{if(document.visibilityState==='visible'&&!loading.value)reload()},15000)}
+function schedule(){clearInterval(timer);timer=setInterval(()=>{if(document.visibilityState==='visible'&&!loading.value)loadSummary()},15000)}
 onMounted(()=>{reload();schedule()})
-onBeforeUnmount(()=>{clearInterval(timer);controller?.abort()})
+onBeforeUnmount(()=>{clearInterval(timer);controller?.abort();summaryController?.abort()})
 </script>
 
 <style scoped>

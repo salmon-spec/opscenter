@@ -39,7 +39,9 @@ class SSHTerminalSession:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             kwargs = {"hostname": self.host, "port": self.port,
-                      "username": self.user, "timeout": 10}
+                      "username": self.user, "timeout": 10,
+                      "banner_timeout": 10, "auth_timeout": 10,
+                      "allow_agent": False, "look_for_keys": False}
             if self.key_content:
                 import io
                 # Ensure key ends with newline (required by paramiko parser)

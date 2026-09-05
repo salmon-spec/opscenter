@@ -19,6 +19,7 @@ from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import and_, case, func
 
 from app.credential_crypto import decrypt_secret, encrypt_secret
 from app.auth import get_current_user
@@ -929,19 +930,34 @@ def get_plaza_health_overview(hours: int = 24):
     silenced_keys = set()
     if keys:
         with get_db() as db:
-            rows = db.query(PlazaProbeResult).filter(
+            cutoff = datetime.utcnow() - timedelta(hours=hours)
+            aggregates = db.query(
+                PlazaProbeResult.plaza_key,
+                func.count(PlazaProbeResult.id).label("checks"),
+                func.sum(case((PlazaProbeResult.status == "up", 1), else_=0)).label("up"),
+                func.avg(PlazaProbeResult.latency_ms).label("avg_latency"),
+            ).filter(
                 PlazaProbeResult.plaza_key.in_(keys),
-                PlazaProbeResult.checked_at >= datetime.utcnow() - timedelta(hours=hours),
-            ).order_by(PlazaProbeResult.checked_at.desc()).all()
-            for row in rows:
+                PlazaProbeResult.checked_at >= cutoff,
+            ).group_by(PlazaProbeResult.plaza_key).all()
+            for row in aggregates:
                 stats = by_key[row.plaza_key]
-                stats["checks"] += 1
-                stats["up"] += row.status == "up"
-                if row.latency_ms is not None:
-                    stats["latency_total"] += row.latency_ms
-                    stats["latency_count"] += 1
-                if stats["latest"] is None:
-                    stats["latest"] = row
+                stats["checks"] = int(row.checks or 0)
+                stats["up"] = int(row.up or 0)
+                stats["avg_latency"] = float(row.avg_latency) if row.avg_latency is not None else None
+            latest_times = db.query(
+                PlazaProbeResult.plaza_key.label("plaza_key"),
+                func.max(PlazaProbeResult.checked_at).label("checked_at"),
+            ).filter(
+                PlazaProbeResult.plaza_key.in_(keys),
+                PlazaProbeResult.checked_at >= cutoff,
+            ).group_by(PlazaProbeResult.plaza_key).subquery()
+            latest_rows = db.query(PlazaProbeResult).join(latest_times, and_(
+                PlazaProbeResult.plaza_key == latest_times.c.plaza_key,
+                PlazaProbeResult.checked_at == latest_times.c.checked_at,
+            )).all()
+            for row in latest_rows:
+                by_key[row.plaza_key]["latest"] = row
             states = {row.plaza_key: row for row in db.query(PlazaHealthState).filter(
                 PlazaHealthState.plaza_key.in_(keys),
             ).all()}
@@ -979,8 +995,8 @@ def get_plaza_health_overview(hours: int = 24):
         items.append({
             "key": item["key"], "status": status,
             "checks": stats["checks"], "uptime_percent": uptime,
-            "avg_latency_ms": round(stats["latency_total"] / stats["latency_count"], 1)
-            if stats["latency_count"] else None,
+            "avg_latency_ms": round(stats.get("avg_latency"), 1)
+            if stats.get("avg_latency") is not None else None,
             "last_checked_at": latest.checked_at.isoformat() if latest else cached.get("checked_at"),
             "consecutive_failures": stable.consecutive_failures if stable else 0,
             "active_incident_id": str(stable.active_incident_id) if stable and stable.active_incident_id else None,

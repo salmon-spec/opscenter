@@ -27,7 +27,7 @@ from app.performance import PerformanceMiddleware
 from app.file_control import router as file_control_router
 from app.firewall_control import router as firewall_control_router
 from app.ssh_control import router as ssh_control_router
-from app.metrics_history import router as metrics_history_router, metric_rollup_loop
+from app.metrics_history import router as metrics_history_router, metric_rollup_loop, performance_index_task
 from app.log_center import router as log_center_router
 from app.alloy_manager import router as alloy_manager_router
 from app.alerting import (
@@ -1288,6 +1288,7 @@ async def startup():
     asyncio.create_task(daily_network_aggregation())  # v3.25.1 每日流量归集
     # Start background agent metrics collector
     asyncio.create_task(background_agent_collector())
+    asyncio.create_task(performance_index_task())
     asyncio.create_task(metric_rollup_loop())
     # v3.26: 告警引擎 + 数据保留后台任务
     asyncio.create_task(alerting_loop())    # 每 60s 一轮评估（ALERTING_ENABLED=false 关闭）
