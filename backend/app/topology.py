@@ -42,6 +42,12 @@ _WG_CACHE: dict = {}
 _WG_CACHE_LOCK = threading.Lock()
 _WG_MAX_WORKERS = 6
 _WG_AGENT_TIMEOUT = 5
+_WG_TOPOLOGY_TTL = 30
+_METRIC_STALE_SECONDS = 90
+_WG_TOPOLOGY_SNAPSHOT: Optional[dict] = None
+_WG_TOPOLOGY_SNAPSHOT_AT = 0.0
+_WG_TOPOLOGY_REFRESHING = False
+_WG_TOPOLOGY_LOCK = threading.Lock()
 
 # 健康规则：最近握手 <=180s 健康；181-600s 警告；>600s 或从未握手 离线
 _WG_HEALTH_NOW_TOL = 180
@@ -50,6 +56,10 @@ _WG_HEALTH_WARN_TOL = 600
 # 健康大屏：保留最近一次 Agent 采集摘要（容器计数等），避免为聚合触发容器列表/SSH 探测
 _AGENT_SNAPSHOT_LOCK = threading.Lock()
 _LAST_AGENT_SNAPSHOT: dict = {}  # server_id -> {container_running, container_stopped, ts}
+
+
+def _metric_is_stale(online: bool, metric_ts: Optional[datetime], now: datetime) -> bool:
+    return bool(online and (metric_ts is None or (now - metric_ts).total_seconds() > _METRIC_STALE_SECONDS))
 
 
 def record_agent_snapshot(server_id, data: dict) -> None:
@@ -249,7 +259,7 @@ def get_topology(
     if scenario not in _VALID_SCENARIOS:
         raise HTTPException(status_code=400, detail="scenario 仅支持 cicd / monitoring / gateway / wireguard")
     if scenario == "wireguard":
-        return _build_wireguard_topology()
+        return _refresh_wireguard_snapshot()
     with get_db() as db:
         rel_count = (
             db.query(ServiceRelation)
@@ -701,6 +711,31 @@ def _build_wireguard_topology() -> dict:
     }
 
 
+def _refresh_wireguard_snapshot() -> dict:
+    global _WG_TOPOLOGY_SNAPSHOT, _WG_TOPOLOGY_SNAPSHOT_AT, _WG_TOPOLOGY_REFRESHING
+    try:
+        result = _build_wireguard_topology()
+        with _WG_TOPOLOGY_LOCK:
+            _WG_TOPOLOGY_SNAPSHOT = result
+            _WG_TOPOLOGY_SNAPSHOT_AT = time.time()
+        return result
+    finally:
+        with _WG_TOPOLOGY_LOCK:
+            _WG_TOPOLOGY_REFRESHING = False
+
+
+def _cached_wireguard_snapshot() -> Optional[dict]:
+    """Return immediately and refresh stale topology outside the screen request."""
+    global _WG_TOPOLOGY_REFRESHING
+    with _WG_TOPOLOGY_LOCK:
+        snapshot = _WG_TOPOLOGY_SNAPSHOT
+        stale = time.time() - _WG_TOPOLOGY_SNAPSHOT_AT >= _WG_TOPOLOGY_TTL
+        if stale and not _WG_TOPOLOGY_REFRESHING:
+            _WG_TOPOLOGY_REFRESHING = True
+            threading.Thread(target=_refresh_wireguard_snapshot, daemon=True, name="wireguard-refresh").start()
+        return snapshot
+
+
 @router.get("/screen/summary")
 def get_screen_summary(
     _: Optional[ApiKey] = Depends(require_api_key("read")),
@@ -744,14 +779,14 @@ def get_screen_summary(
                 }
             fts = [row[3] for row in rows if row[3]]
             if fts:
-                freshness["metrics_at"] = max(fts).isoformat() + "Z"
+                freshness["metrics_at"] = min(fts).isoformat() + "Z"
         except Exception as e:
             partial_errors.append(f"主机指标聚合失败: {type(e).__name__}")
         for srv in servers:
             rec = latest.get(str(srv.id), {})
             online = srv.status == "online"
             metric_ts = (rec.get("cpu") or {}).get("ts")
-            stale = bool(online and (not metric_ts or (now - metric_ts).total_seconds() > 30))
+            stale = _metric_is_stale(online, metric_ts, now)
             if online:
                 hosts_summary["online"] += 1
             elif srv.status == "offline":
@@ -764,6 +799,7 @@ def get_screen_summary(
                 "cpu": (rec.get("cpu") or {}).get("value"),
                 "memory": (rec.get("memory") or {}).get("value"),
                 "disk": (rec.get("disk") or {}).get("value"),
+                "metrics_at": metric_ts.isoformat() + "Z" if metric_ts else None,
                 "stale": stale,
             })
         hosts_summary["total"] = len(servers)
@@ -838,8 +874,8 @@ def get_screen_summary(
             logs = alloy_overview(probe=False)
             logs_summary = {
                 "total": logs.get("total", 0),
-                "fresh": logs.get("fresh", 0),
-                "stale": max(0, logs.get("total", 0) - logs.get("fresh", 0) - logs.get("abnormal", 0)),
+                "fresh": None,
+                "stale": None,
                 "abnormal": logs.get("abnormal", 0),
                 "running": logs.get("running", 0),
             }
@@ -905,11 +941,12 @@ def get_screen_summary(
     # --- WireGuard：复用 30 秒拓扑缓存，不重复访问 Agent ---
     wireguard_summary = {"managed": 0, "healthy": 0, "warning": 0, "offline": 0, "unmanaged": 0}
     try:
-        wg = _build_wireguard_topology()
-        wireguard_summary = wg.get("summary", wireguard_summary)
-        freshness["wireguard_at"] = wg.get("generated_at")
-        if wg.get("partial_errors"):
-            partial_errors.extend(wg["partial_errors"][:5])
+        wg = _cached_wireguard_snapshot()
+        if wg:
+            wireguard_summary = wg.get("summary", wireguard_summary)
+            freshness["wireguard_at"] = wg.get("generated_at")
+            if wg.get("partial_errors"):
+                partial_errors.extend(wg["partial_errors"][:5])
     except Exception as e:
         partial_errors.append(f"WG 汇总失败: {type(e).__name__}")
 

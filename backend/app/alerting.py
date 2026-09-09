@@ -342,32 +342,29 @@ def _delete_batched(db, model, cutoff_dt: datetime, cutoff_date=None, time_col="
 
 def retention_cleanup(db=None) -> None:
     """清理过期监控数据（分批）。db 为空时自建会话。"""
-    own = db is None
-    if own:
-        db = next(get_db())
-    try:
-        now = datetime.utcnow()
-        for name, model, days, time_col, is_date in _RETENTION:
-            if days <= 0:
-                continue
-            cutoff_dt = now - timedelta(days=days)
-            cutoff_date = (now - timedelta(days=days)).date()
-            deleted = _delete_batched(db, model, cutoff_dt, cutoff_date, time_col=time_col)
-            logger.info("retention: %s removed %d rows (keep %d days)", name, deleted, days)
-        # Never remove an active incident, even when it has remained open for a year.
-        incident_cutoff = now - timedelta(days=365)
-        old_incidents = db.query(PlazaHealthIncident).filter(
-            PlazaHealthIncident.status == "resolved",
-            PlazaHealthIncident.resolved_at < incident_cutoff,
-        ).limit(5000).all()
-        for incident in old_incidents:
-            db.delete(incident)
-        if old_incidents:
-            db.commit()
-        logger.info("retention: plaza_health_incidents removed %d rows (keep 365 days)", len(old_incidents))
-    finally:
-        if own:
-            db.close()
+    if db is None:
+        with get_db() as managed_db:
+            retention_cleanup(managed_db)
+        return
+    now = datetime.utcnow()
+    for name, model, days, time_col, is_date in _RETENTION:
+        if days <= 0:
+            continue
+        cutoff_dt = now - timedelta(days=days)
+        cutoff_date = (now - timedelta(days=days)).date()
+        deleted = _delete_batched(db, model, cutoff_dt, cutoff_date, time_col=time_col)
+        logger.info("retention: %s removed %d rows (keep %d days)", name, deleted, days)
+    # Never remove an active incident, even when it has remained open for a year.
+    incident_cutoff = now - timedelta(days=365)
+    old_incidents = db.query(PlazaHealthIncident).filter(
+        PlazaHealthIncident.status == "resolved",
+        PlazaHealthIncident.resolved_at < incident_cutoff,
+    ).limit(5000).all()
+    for incident in old_incidents:
+        db.delete(incident)
+    if old_incidents:
+        db.commit()
+    logger.info("retention: plaza_health_incidents removed %d rows (keep 365 days)", len(old_incidents))
 
 
 # === 后台异步循环 ===

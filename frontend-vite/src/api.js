@@ -2,7 +2,7 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
-async function request(path, { method = 'GET', body, query, signal } = {}) {
+async function request(path, { method = 'GET', body, query, signal, timeoutMs } = {}) {
   let url = API_BASE + '/api/v2' + path
   if (query) {
     const p = new URLSearchParams()
@@ -12,29 +12,46 @@ async function request(path, { method = 'GET', body, query, signal } = {}) {
     const qs = p.toString()
     if (qs) url += '?' + qs
   }
-  const opts = { method, headers: {}, signal }
+  const timeoutController = timeoutMs ? new AbortController() : null
+  const abort = () => timeoutController?.abort()
+  if (signal?.aborted) abort()
+  else if (signal) signal.addEventListener('abort', abort, { once: true })
+  const timer = timeoutController ? setTimeout(abort, timeoutMs) : null
+  const opts = { method, headers: {}, signal: timeoutController?.signal || signal }
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
   }
-  const res = await fetch(url, opts)
-  let data = null
-  try { data = await res.json() } catch { /* 非 JSON 响应忽略 */ }
-  if (!res.ok) {
-    const err = new Error((data && (data.detail || data.msg)) || `HTTP ${res.status}`)
-    err.status = res.status
-    err.data = data
+  try {
+    const res = await fetch(url, opts)
+    let data = null
+    try { data = await res.json() } catch { /* 非 JSON 响应忽略 */ }
+    if (!res.ok) {
+      const err = new Error((data && (data.detail || data.msg)) || `HTTP ${res.status}`)
+      err.status = res.status
+      err.data = data
+      throw err
+    }
+    return data
+  } catch (err) {
+    if (timeoutController?.signal.aborted && !signal?.aborted) {
+      const timeoutError = new Error(`请求超时（${timeoutMs}ms）`)
+      timeoutError.name = 'TimeoutError'
+      throw timeoutError
+    }
     throw err
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', abort)
   }
-  return data
 }
 
 export const api = {
-  get: (path, query, options = {}) => request(path, { query, signal: options.signal }),
-  post: (path, body, options = {}) => request(path, { method: 'POST', body, query: options.query, signal: options.signal }),
-  put: (path, body, options = {}) => request(path, { method: 'PUT', body, query: options.query, signal: options.signal }),
-  patch: (path, body, options = {}) => request(path, { method: 'PATCH', body, query: options.query, signal: options.signal }),
-  del: (path, options = {}) => request(path, { method: 'DELETE', query: options.query, signal: options.signal }),
+  get: (path, query, options = {}) => request(path, { query, signal: options.signal, timeoutMs: options.timeoutMs }),
+  post: (path, body, options = {}) => request(path, { method: 'POST', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
+  put: (path, body, options = {}) => request(path, { method: 'PUT', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
+  patch: (path, body, options = {}) => request(path, { method: 'PATCH', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
+  del: (path, options = {}) => request(path, { method: 'DELETE', query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
 }
 
 /* WebSocket 地址：与页面同源（开发期由 Vite 代理 /ws） */

@@ -9,6 +9,7 @@ def test_agent_network_fetch_runs_without_open_db_session(monkeypatch):
     server = SimpleNamespace(
         id="server-1", host="192.168.1.152", agent_type="remote",
         agent_port=19100, agent_token="token", agent_status="running",
+        agent_version="2.6.2",
     )
     state = {"db_open": False, "context_number": 0, "commits": 0}
 
@@ -52,9 +53,9 @@ def test_agent_network_fetch_runs_without_open_db_session(monkeypatch):
         return None
 
     monkeypatch.setattr(main, "get_db", fake_db)
-    monkeypatch.setattr(main, "fetch_agent_metrics", fake_fetch)
+    monkeypatch.setattr(main, "_fetch_monitoring_sample", fake_fetch)
 
     main._collect_agent_metrics()
 
-    assert server.agent_status == "stopped"
-    assert state["commits"] == 2
+    assert server.agent_status == "running"
+    assert state["commits"] == 0

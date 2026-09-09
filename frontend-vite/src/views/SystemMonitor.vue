@@ -54,7 +54,7 @@ const infoRows=computed(()=>[['主机名',summary.value?.hostname||currentHost.v
 async function loadSummary(refresh=false){
   if(!selectedHostId.value||loading.value)return
   controller?.abort();controller=new AbortController();loading.value=true;error.value=''
-  try{summary.value=await api.get(`/servers/${selectedHostId.value}/system/summary`,{refresh},{signal:controller.signal})}
+  try{summary.value=await api.get(`/servers/${selectedHostId.value}/system/summary`,{refresh},{signal:controller.signal,timeoutMs:8000})}
   catch(e){if(e.name!=='AbortError')error.value=e.message}finally{loading.value=false}
 }
 function activeRange(){const end=rangeKey.value==='custom'&&customEnd.value?new Date(customEnd.value):new Date();const selected=ranges.find(item=>item.key===rangeKey.value);const start=rangeKey.value==='custom'&&customStart.value?new Date(customStart.value):new Date(end.getTime()-(selected?.hours||1)*3600000);if(start>=end)throw new Error('开始时间必须早于结束时间');return{start,end}}

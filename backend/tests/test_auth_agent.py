@@ -7,6 +7,7 @@ F1 要求 Agent 强制 token 鉴权：空 token 不再放行，错误/缺失 Bea
 import os
 import sys
 import io
+from types import SimpleNamespace
 
 # 让 agent/ 目录可直接 import opsagent（其内部 import scanner 同源）
 AGENT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "agent")
@@ -44,9 +45,26 @@ class _StubHandler:
         return False
 
 
-def test_agent_version_is_2_6_1():
-    # 2.6.1 parses the real `wg show all dump` format.
-    assert opsagent.AGENT_VERSION == "2.6.1"
+def test_agent_version_is_2_6_2():
+    # 2.6.2 keeps lightweight collection free of docker stats.
+    assert opsagent.AGENT_VERSION == "2.6.2"
+
+
+def test_lightweight_metrics_counts_containers_without_docker_stats(monkeypatch):
+    calls = []
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="web|nginx:alpine|Up 1 hour|80/tcp\nold|nginx:alpine|Exited (0)|")
+
+    monkeypatch.setattr(opsagent.subprocess, "run", fake_run)
+    monkeypatch.setattr(opsagent, "_collect_container_stats", lambda: (_ for _ in ()).throw(AssertionError("docker stats called")))
+    data = opsagent.collect_metrics(lightweight=True)
+
+    assert data["container_running"] == 1
+    assert data["container_stopped"] == 1
+    assert data["container_stats"] == []
+    assert calls == [["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"]]
 
 
 def test_check_auth_rejects_empty_token():

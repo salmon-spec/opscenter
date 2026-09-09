@@ -1,11 +1,14 @@
 """v4.8 P1: unified health screen summary - aggregates, no N+1 semantics, honest missing data."""
 import uuid
+import time
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import Base, SessionLocal, app, engine
-from app.models import AlertEvent, DatabaseInstance, Server
+from app.models import AlertEvent, DatabaseInstance, MetricHistory, Server
+from app import topology
 from app.topology import _LAST_AGENT_SNAPSHOT, record_agent_snapshot
 
 client = TestClient(app)
@@ -16,6 +19,9 @@ def clean_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     _LAST_AGENT_SNAPSHOT.clear()
+    topology._WG_TOPOLOGY_SNAPSHOT = {"summary": {}, "generated_at": None, "partial_errors": []}
+    topology._WG_TOPOLOGY_SNAPSHOT_AT = time.time()
+    topology._WG_TOPOLOGY_REFRESHING = False
     yield
     _LAST_AGENT_SNAPSHOT.clear()
 
@@ -88,3 +94,12 @@ def test_summary_database_and_alert_summaries():
 
     # 无告警时 firing=0 而非报错
     assert data["alerts_summary"]["firing"] == 0
+
+
+def test_ninety_second_metric_stale_threshold():
+    from app.topology import _metric_is_stale
+
+    now = datetime.utcnow()
+    assert _metric_is_stale(True, now - timedelta(seconds=45), now) is False
+    assert _metric_is_stale(True, now - timedelta(seconds=91), now) is True
+    assert _metric_is_stale(False, now, now) is False

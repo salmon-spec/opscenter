@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal as signal_module
 import subprocess
 import time
@@ -26,6 +27,11 @@ _VALID_SIGNALS = {
     "STOP": getattr(signal_module, "SIGSTOP", 19),
     "CONT": getattr(signal_module, "SIGCONT", 18),
 }
+
+
+def _version_parts(value: str | None) -> tuple[int, ...]:
+    parts = re.findall(r"\d+", value or "")
+    return tuple(int(part) for part in parts[:3]) if parts else (0,)
 
 
 class ProcessSignalRequest(BaseModel):
@@ -118,12 +124,13 @@ def system_summary(server_id: str, refresh: bool = Query(False)):
     host = resolve_agent_host(server)
     data = None
     source = "agent"
+    modern_agent = _version_parts(server.agent_version) >= (2, 4, 0)
     if server.agent_status == "running":
         data = fetch_agent_system_summary(host, server.agent_port or 19100, server.agent_token or "")
-        if data is None:
+        if data is None and not modern_agent:
             data = fetch_agent_metrics(host, server.agent_port or 19100, server.agent_token or "")
             source = "agent-legacy"
-    if data is None and server.agent_type != "local":
+    if data is None and server.agent_type != "local" and not modern_agent:
         client = get_ssh_client(server)
         if client:
             try:

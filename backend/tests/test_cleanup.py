@@ -8,6 +8,7 @@ import pytest
 
 import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 
 os.environ.setdefault(
@@ -103,3 +104,19 @@ def test_delete_batched_future_cutoff_deletes_nothing():
         assert db.query(MetricHistory).count() == 2  # 1 天 + 5 天前保留
     finally:
         db.close()
+
+
+def test_retention_cleanup_owns_context_managed_session(monkeypatch):
+    from app import alerting
+
+    opened = []
+
+    @contextmanager
+    def managed_db():
+        with SessionLocal() as db:
+            opened.append(db)
+            yield db
+
+    monkeypatch.setattr(alerting, "get_db", managed_db)
+    retention_cleanup()
+    assert len(opened) == 1

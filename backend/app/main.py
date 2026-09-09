@@ -15,7 +15,7 @@ from app.credential_crypto import encrypt_secret
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
-from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host
+from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, fetch_agent_system_summary, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count, RECONNECT_GRACE
 from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
@@ -34,7 +34,7 @@ from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
 )
-from app.config import CONTAINERIZED, LOCAL_AGENT_TOKEN, LOCAL_SERVER_NAME, PREVIEW_MODE, RETENTION_METRIC_DAYS
+from app.config import CONTAINERIZED, LOCAL_AGENT_TOKEN, LOCAL_SERVER_NAME, PREVIEW_MODE
 
 # === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康） ===
 from app.api_keys import router as api_keys_router
@@ -344,9 +344,7 @@ def _run_agent_health_check():
         local_srv = db.query(Server).filter(Server.agent_type == "local").first()
         if local_srv:
             try:
-                local_data = fetch_agent_metrics(
-                    resolve_agent_host(local_srv), local_srv.agent_port or 19100, local_srv.agent_token or ""
-                )
+                local_data = _fetch_monitoring_sample(local_srv)
                 if local_data:
                     local_srv.agent_status = "running"
                     local_srv.agent_version = local_data.get("agent_version", local_srv.agent_version or "")
@@ -374,9 +372,7 @@ def _run_agent_health_check():
                     if result.get("agent_version"):
                         srv.agent_version = result["agent_version"]
 
-                    probe = fetch_agent_metrics(
-                        srv.host, srv.agent_port or 19100, srv.agent_token or ""
-                    )
+                    probe = _fetch_monitoring_sample(srv, host=srv.host)
                     if probe:
                         srv.agent_status = "running"
                         srv.last_seen = datetime.utcnow()
@@ -1246,7 +1242,7 @@ async def startup():
                 if _st.get("agent_token"):
                     local.agent_token = _st["agent_token"]
                     db.commit()
-            local_agent = fetch_agent_metrics(resolve_agent_host(local), local.agent_port or 19100, local.agent_token or "")
+            local_agent = _fetch_monitoring_sample(local)
             if local_agent:
                 local.agent_status = "running"
                 local.agent_version = local_agent.get("agent_version", "2.2.0")
@@ -1369,7 +1365,7 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_status = "running"
                 row.agent_port = result.get("agent_port", 19100)
                 row.agent_token = result.get("agent_token", "")
-                row.agent_version = result.get("agent_version", "2.6.1")
+                row.agent_version = result.get("agent_version", "2.6.2")
             else:
                 row.agent_status = "error"
                 row.last_error = result.get("message", "Agent 部署失败")[-1000:]
@@ -1386,6 +1382,15 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
 def _version_parts(value: Optional[str]) -> tuple[int, ...]:
     parts = re.findall(r"\d+", value or "")
     return tuple(int(part) for part in parts[:4]) if parts else (0,)
+
+
+def _fetch_monitoring_sample(server, host=None):
+    """Prefer lightweight system metrics; old Agents fall back to /metrics."""
+    target = host or resolve_agent_host(server)
+    data = fetch_agent_system_summary(target, server.agent_port or 19100, server.agent_token or "")
+    if data is None and _version_parts(getattr(server, "agent_version", None)) < (2, 4, 0):
+        data = fetch_agent_metrics(target, server.agent_port or 19100, server.agent_token or "")
+    return data
 
 
 def _upgrade_outdated_agents_once() -> list[str]:
@@ -3541,8 +3546,12 @@ def _collect_agent_metrics():
                 SimpleNamespace(
                     id=srv.id, host=srv.host, agent_type=srv.agent_type,
                     agent_port=srv.agent_port or 19100, agent_token=srv.agent_token or "",
+                    agent_version=srv.agent_version,
                 )
-                for srv in db.query(Server).filter(Server.agent_status == "running").all()
+                for srv in db.query(Server).all()
+                if srv.agent_type == "local" or (
+                    srv.agent_status != "not_deployed" and bool(srv.agent_token)
+                )
             ]
 
         # Agent HTTP calls run concurrently after the read session has closed.
@@ -3551,10 +3560,8 @@ def _collect_agent_metrics():
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="agent-metrics") as executor:
             future_map = {
                 executor.submit(
-                    fetch_agent_metrics,
-                    resolve_agent_host(target),
-                    target.agent_port,
-                    target.agent_token,
+                    _fetch_monitoring_sample,
+                    target,
                 ): target
                 for target in targets
             }
@@ -3569,13 +3576,12 @@ def _collect_agent_metrics():
         # One short transaction per host avoids holding multiple server row locks.
         for target in sorted(targets, key=lambda item: str(item.id)):
             data = samples.get(target.id)
+            if not data:
+                print(f"Agent metrics collection skipped for {target.host}: no lightweight sample", flush=True)
+                continue
             with get_db() as db:
                 srv = db.query(Server).filter(Server.id == target.id).first()
                 if not srv:
-                    continue
-                if not data:
-                    srv.agent_status = "stopped"
-                    db.commit()
                     continue
 
                 now = datetime.utcnow()
@@ -3624,25 +3630,17 @@ def _collect_agent_metrics():
                 srv.agent_status = "running"
                 db.commit()
 
-        # Retention cleanup is isolated from metric ingestion transactions.
-        with get_db() as db:
-            cutoff = datetime.utcnow() - timedelta(days=RETENTION_METRIC_DAYS)
-            db.query(MetricHistory).filter(MetricHistory.timestamp < cutoff).delete()
-            raw_cutoff = datetime.utcnow() - timedelta(hours=1)
-            db.query(MetricHistory).filter(
-                MetricHistory.metric.in_(["net_rx_raw", "net_tx_raw", "disk_read_raw", "disk_write_raw"]),
-                MetricHistory.timestamp < raw_cutoff,
-            ).delete(synchronize_session=False)
-            db.commit()
     except Exception as exc:
         print(f"Agent metrics collection error: {exc}")
 
 
 async def background_agent_collector():
-    """Periodically collect metrics from all running agents."""
+    """Collect every 30 seconds, including work time, without cadence drift."""
     while True:
+        started = asyncio.get_running_loop().time()
         await asyncio.to_thread(_collect_agent_metrics)
-        await asyncio.sleep(30)
+        elapsed = asyncio.get_running_loop().time() - started
+        await asyncio.sleep(max(1, 30 - elapsed))
 
 
 @app.get("/api/v2/servers/{server_id}/agent-metrics")

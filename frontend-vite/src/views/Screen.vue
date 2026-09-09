@@ -3,7 +3,7 @@
     <header class="screen-head">
       <div>
         <h1 class="screen-title">OpsCenter 健康大屏</h1>
-        <div class="screen-sub">核心数据每 10 秒刷新 · 最后刷新 {{ lastRefresh }}<span v-if="pageHidden"> · 页面已隐藏，暂停轮询</span></div>
+        <div class="screen-sub">核心数据每 10 秒刷新 · 页面更新 {{ lastRefresh }} · 最旧主机数据 {{ lastDataAt }}<span v-if="pageHidden"> · 页面已隐藏，暂停轮询</span></div>
       </div>
       <div class="screen-tools">
         <router-link v-if="standalone" to="/" class="btn btn-ghost screen-btn">← 返回工作台</router-link>
@@ -136,6 +136,7 @@ const screenRoot = ref(null)
 const trendChartEl = ref(null)
 const isFullscreen = ref(false)
 const lastRefresh = ref('-')
+const lastDataAt = ref('-')
 const pageHidden = ref(false)
 
 const summary = ref(null)
@@ -207,10 +208,11 @@ async function loadSummary() {
   if (controller) controller.abort()
   controller = new AbortController()
   try {
-    const data = await api.get('/screen/summary', null, { signal: controller.signal })
+    const data = await api.get('/screen/summary', null, { signal: controller.signal, timeoutMs: 8000 })
     summary.value = data
     partialErrors.value = data.partial_errors || []
     lastRefresh.value = fmtTime(new Date().toISOString())
+    lastDataAt.value = fmtTime(data.freshness?.metrics_at)
   } catch (err) {
     if (err.name !== 'AbortError') {
       // 保留上一份可用数据；只更新时间戳

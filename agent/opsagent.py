@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.6.1 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.6.2 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -16,7 +16,7 @@ import base64
 import hashlib
 from datetime import datetime
 
-AGENT_VERSION = "2.6.1"
+AGENT_VERSION = "2.6.2"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -472,13 +472,11 @@ def collect_metrics(lightweight=False):
     except Exception:
         m['uptime'] = 0
 
-    # --- Containers (Docker) - lightweight count from metrics ---
+    # --- Containers: docker ps is cheap; docker stats stays on full /metrics only. ---
     m['container_running'] = 0
     m['container_stopped'] = 0
     m['containers'] = []
     try:
-        if lightweight:
-            raise RuntimeError('skip docker in lightweight profile')
         result = subprocess.run(
             ['docker', 'ps', '-a', '--format', '{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}'],
             capture_output=True, text=True, timeout=5
