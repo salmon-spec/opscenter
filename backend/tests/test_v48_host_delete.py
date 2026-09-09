@@ -5,6 +5,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app import system_control
 from app.main import Base, SessionLocal, app, engine
 from app.models import Server, Service
 
@@ -15,6 +16,7 @@ client = TestClient(app)
 def clean_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    system_control._SUMMARY_CACHE.clear()
     yield
 
 
@@ -41,6 +43,7 @@ def test_delete_remote_host_is_fast_inventory_remove_without_agent_uninstall(tmp
         srv.agent_status = "running"  # 模拟旧逻辑会触发远程卸载的状态
         db.add(Service(server_id=srv.id, name="svc-a", url="tcp://10.66.66.21:8080", port=8080, proto="tcp"))
         db.commit()
+    system_control.record_system_summary(server_id, {"hostname": "node-b"})
 
     resp = client.delete(f"/api/v2/servers/{server_id}")
     assert resp.status_code == 200, resp.text
@@ -50,6 +53,7 @@ def test_delete_remote_host_is_fast_inventory_remove_without_agent_uninstall(tmp
     assert data["deleted"] == {"servers": 1, "services": 1, "databases": 0}
     assert data["warnings"] == []
     assert called == []  # 卸载函数不得执行
+    assert server_id not in system_control._SUMMARY_CACHE
 
     with SessionLocal() as db:
         assert db.query(Server).filter(Server.id == uuid.UUID(server_id)).first() is None

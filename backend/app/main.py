@@ -42,7 +42,7 @@ from app.topology import router as topology_router
 from app.control import router as control_router
 from app.service_health import run_service_health_cycle, service_health_loop
 from app.plaza import router as plaza_router, plaza_health_loop
-from app.system_control import router as system_control_router
+from app.system_control import forget_system_summary, record_system_summary, router as system_control_router
 from app.databases import router as databases_router
 from app.ai_context import router as ai_context_router
 from app.database import engine, SessionLocal, get_db
@@ -1480,6 +1480,7 @@ def update_server(server_id: str, data: ServerUpdate):
             srv.ssh_key = ssh_key
             srv.auth_type = "key"
         db.commit()
+        forget_system_summary(server_id)
         return {"ok": True}
 
 @app.delete("/api/v2/servers/{server_id}")
@@ -1507,6 +1508,7 @@ def delete_server(server_id: str):
         # 短事务删除：services / database_instances / 指标历史等依赖表均 ondelete=CASCADE
         db.delete(srv)
         db.commit()
+        forget_system_summary(server_id)
         # 清理 groups.json 中该主机的主机组映射（非关键步骤，失败只记录 warnings）
         try:
             import json as _json
@@ -3530,6 +3532,7 @@ def uninstall_agent_api(server_id: str):
             s.agent_token = None
             s.agent_version = None
             db.commit()
+        forget_system_summary(server_id)
     return result
 
 
@@ -3618,6 +3621,7 @@ def _collect_agent_metrics():
                 try:
                     from app.topology import record_agent_snapshot
                     record_agent_snapshot(target.id, data)
+                    record_system_summary(target.id, data)
                 except Exception:
                     pass
                 for metric_name, value in metrics_to_store.items():

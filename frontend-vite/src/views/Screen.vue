@@ -102,17 +102,17 @@
       <!-- 资源趋势 -->
       <section class="panel panel-wide">
         <div class="panel-title">资源趋势
-          <select v-model="trendHost" class="screen-select" @change="queueTrend()">
+          <select v-model="trendHost" class="screen-select" @change="queueTrend(true)">
             <option value="__top3__">风险 Top 3 主机</option>
             <option v-for="h in servers" :key="h.id" :value="h.id">{{ h.name }}</option>
           </select>
-          <select v-model="trendMetric" class="screen-select" @change="queueTrend()">
+          <select v-model="trendMetric" class="screen-select" @change="queueTrend(true)">
             <option value="cpu">CPU</option>
             <option value="memory">内存</option>
             <option value="disk">磁盘</option>
             <option value="net">网络</option>
           </select>
-          <select v-model="trendRange" class="screen-select" @change="queueTrend()">
+          <select v-model="trendRange" class="screen-select" @change="queueTrend(true)">
             <option value="1">近 1 小时</option>
             <option value="6">近 6 小时</option>
             <option value="24">近 24 小时</option>
@@ -149,6 +149,7 @@ let trendChart = null
 let coreTimer = null
 let trendTimer = null
 let controller = null
+let trendController = null
 let requestInFlight = false
 
 const hostsSummary = computed(() => summary.value?.hosts_summary || {})
@@ -208,11 +209,13 @@ async function loadSummary() {
   if (controller) controller.abort()
   controller = new AbortController()
   try {
+    const firstLoad = !summary.value
     const data = await api.get('/screen/summary', null, { signal: controller.signal, timeoutMs: 8000 })
     summary.value = data
     partialErrors.value = data.partial_errors || []
     lastRefresh.value = fmtTime(new Date().toISOString())
     lastDataAt.value = fmtTime(data.freshness?.metrics_at)
+    if (firstLoad) queueTrend(true)
   } catch (err) {
     if (err.name !== 'AbortError') {
       // 保留上一份可用数据；只更新时间戳
@@ -223,11 +226,11 @@ async function loadSummary() {
   }
 }
 
-async function queueTrend() {
+async function queueTrend(force = false) {
   if (document.visibilityState === 'hidden') return
   // 趋势独立于核心刷新，60 秒节流
   const now = Date.now()
-  if (now - (lastTrendAt || 0) < 15000) return
+  if (!force && now - (lastTrendAt || 0) < 15000) return
   lastTrendAt = now
   await loadTrend()
 }
@@ -235,6 +238,9 @@ let lastTrendAt = 0
 
 async function loadTrend() {
   if (!trendChartEl.value) return
+  trendController?.abort()
+  trendController = new AbortController()
+  const activeController = trendController
   const hours = Number(trendRange.value)
   const end = new Date()
   const start = new Date(end.getTime() - hours * 3600 * 1000)
@@ -249,12 +255,12 @@ async function loadTrend() {
   const series = []
   const color = { cpu: '#3b82f6', memory: '#10b981', disk: '#f59e0b', net_rx: '#38bdf8', net_tx: '#fb7185' }
   const unit = isNet ? 'KB/s' : '%'
-  await Promise.allSettled(ids.map(async (id) => {
+  const results = await Promise.allSettled(ids.map(async (id) => {
     const h = servers.value.find((x) => x.id === id)
     if (!h) return
     const d = await api.get(`/servers/${id}/metrics/timeseries`, {
       metrics, start: start.toISOString(), end: end.toISOString(), resolution: 'auto',
-    }).catch(() => null)
+    }, { signal: activeController.signal, timeoutMs: 12000 })
     if (!d?.series) return
     for (const [name, points] of Object.entries(d.series)) {
       if (points?.length) {
@@ -269,6 +275,10 @@ async function loadTrend() {
       }
     }
   }))
+  if (trendController !== activeController) return
+  if (results.some((result) => result.status === 'rejected' && result.reason?.name !== 'AbortError')) {
+    partialErrors.value = [...partialErrors.value, '部分主机趋势加载失败'].slice(-6)
+  }
   if (trendChart) {
     trendChart.setOption({
       series,
@@ -313,7 +323,6 @@ function onVisibility() {
 onMounted(() => {
   initChart()
   loadSummary()
-  queueTrend()
   coreTimer = setInterval(loadSummary, 10000)
   trendTimer = setInterval(queueTrend, 60000)
   document.addEventListener('visibilitychange', onVisibility)
@@ -327,6 +336,7 @@ onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFsChange)
   window.removeEventListener('resize', resizeChart)
   if (controller) controller.abort()
+  if (trendController) trendController.abort()
   if (trendChart) trendChart.dispose()
 })
 

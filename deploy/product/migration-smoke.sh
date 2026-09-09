@@ -72,7 +72,7 @@ p50=$(sort -n "$work/times" | awk 'NR==50 {print $1}')
 p95=$(sort -n "$work/times" | awk 'NR==95 {print $1}')
 curl -fsS "http://127.0.0.1:${WEB_PORT}/" >/dev/null
 
-[ "$version" = 4.8.4 ]
+[ "$version" = 4.8.5 ]
 [ "$tables" -gt 0 ]
 [ "$servers" -gt 0 ]
 [ "$plaza" -gt 0 ]

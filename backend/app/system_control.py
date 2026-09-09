@@ -21,6 +21,8 @@ from app.ssh_manager import collect_remote_metrics, get_ssh_client, ssh_exec
 
 router = APIRouter(prefix="/api/v2", tags=["system"])
 _SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
+_SUMMARY_CACHE_TTL = 5
+_SUMMARY_STALE_TTL = 120
 _VALID_SIGNALS = {
     "TERM": getattr(signal_module, "SIGTERM", 15),
     "KILL": getattr(signal_module, "SIGKILL", 9),
@@ -94,17 +96,37 @@ def _normalize(data: Dict[str, Any], server_id: str, source: str) -> Dict[str, A
     }
 
 
+def record_system_summary(server_id, data: Dict[str, Any], source: str = "collector") -> None:
+    """Share successful collector samples with the interactive monitor endpoint."""
+    key = str(server_id)
+    _SUMMARY_CACHE[key] = {"time": time.time(), "data": _normalize(data, key, source)}
+
+
+def forget_system_summary(server_id) -> None:
+    _SUMMARY_CACHE.pop(str(server_id), None)
+
+
+def _cached_summary(server_id: str, started: float, *, stale: bool = False) -> Dict[str, Any] | None:
+    cached = _SUMMARY_CACHE.get(server_id)
+    if not cached:
+        return None
+    age = time.time() - cached["time"]
+    if age >= (_SUMMARY_STALE_TTL if stale else _SUMMARY_CACHE_TTL):
+        return None
+    return {
+        **cached["data"], "cached": True, "stale": stale,
+        "cache_age_seconds": round(age, 2), "cache_ttl_seconds": _SUMMARY_CACHE_TTL,
+        "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+    }
+
+
 @router.get("/servers/{server_id}/system/summary", dependencies=[Depends(get_current_user)])
 def system_summary(server_id: str, refresh: bool = Query(False)):
     started = time.perf_counter()
-    cached = _SUMMARY_CACHE.get(server_id)
-    if cached and not refresh and time.time() - cached["time"] < 2:
-        return {
-            **cached["data"], "cached": True,
-            "cache_age_seconds": round(time.time() - cached["time"], 2),
-            "cache_ttl_seconds": 2,
-            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
-        }
+    if not refresh:
+        cached = _cached_summary(server_id, started)
+        if cached:
+            return cached
     server = _server(server_id)
     if PREVIEW_MODE:
         now = time.time()
@@ -118,7 +140,7 @@ def system_summary(server_id: str, refresh: bool = Query(False)):
             "network_interfaces": [{"interface": "eth0", "address": server.host, "rx_rate_mbps": 1.26, "tx_rate_mbps": 0.48, "rx_bytes": 8_193_928_112, "tx_bytes": 3_482_118_990}],
             "disks": [{"mountpoint": "/", "device": "/dev/sda1", "fstype": "ext4", "total": 256 * 1024**3, "used": int(94.2 * 1024**3), "percent": 36.8}],
         }, server_id, "preview") | {
-            "cached": False, "cache_age_seconds": 0, "cache_ttl_seconds": 2,
+            "cached": False, "stale": False, "cache_age_seconds": 0, "cache_ttl_seconds": _SUMMARY_CACHE_TTL,
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
         }
     host = resolve_agent_host(server)
@@ -139,12 +161,15 @@ def system_summary(server_id: str, refresh: bool = Query(False)):
             finally:
                 client.close()
     if data is None:
+        cached = _cached_summary(server_id, started, stale=True)
+        if cached:
+            return cached
         raise HTTPException(status_code=502, detail="无法读取主机系统信息")
-    response = _normalize(data, server_id, source)
-    _SUMMARY_CACHE[server_id] = {"time": time.time(), "data": response}
+    record_system_summary(server_id, data, source)
+    response = _SUMMARY_CACHE[server_id]["data"]
     return {
-        **response, "cached": False, "cache_age_seconds": 0,
-        "cache_ttl_seconds": 2,
+        **response, "cached": False, "stale": False, "cache_age_seconds": 0,
+        "cache_ttl_seconds": _SUMMARY_CACHE_TTL,
         "duration_ms": round((time.perf_counter() - started) * 1000, 2),
     }
 

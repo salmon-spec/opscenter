@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from app.agent_manager import (
     AGENT_DEFAULT_PORT,
@@ -884,13 +884,16 @@ def get_screen_summary(
             partial_errors.append(f"日志汇总失败: {type(e).__name__}")
 
         # --- 告警 ---
-        alert_rows = db.query(AlertEvent).filter(AlertEvent.status.in_(["pending", "firing", "acked"])).all()
-        alerts_summary = {"firing": 0, "acknowledged": 0}
-        for a in alert_rows:
-            if a.status == "acked":
-                alerts_summary["acknowledged"] += 1
-            else:
-                alerts_summary["firing"] += 1
+        alert_counts = dict(
+            db.query(AlertEvent.status, func.count(AlertEvent.id))
+            .filter(AlertEvent.status.in_(["pending", "firing", "acked"]))
+            .group_by(AlertEvent.status)
+            .all()
+        )
+        alerts_summary = {
+            "firing": alert_counts.get("pending", 0) + alert_counts.get("firing", 0),
+            "acknowledged": alert_counts.get("acked", 0),
+        }
         active_alerts = (
             db.query(AlertEvent)
             .filter(AlertEvent.status.in_(["pending", "firing"]))

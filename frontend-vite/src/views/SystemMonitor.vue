@@ -5,6 +5,7 @@
       <div class="actions"><span class="muted">更新于 {{ updatedAt }}</span><button class="btn" :disabled="loading" @click="loadSummary(true)">刷新</button></div>
     </div>
     <div v-if="error" class="notice error">{{ error }}</div>
+    <div v-if="summary?.stale" class="notice stale">Agent 暂时无响应，正在显示 {{ Number(summary.cache_age_seconds || 0).toFixed(0) }} 秒前的最近数据。</div>
     <section class="card history-controls">
       <div class="range-row"><b>历史时段</b><button v-for="item in ranges" :key="item.key" class="range-btn" :class="{active:rangeKey===item.key}" @click="selectRange(item.key)">{{ item.label }}</button></div>
       <div v-if="rangeKey==='custom'" class="custom-range"><input v-model="customStart" type="datetime-local" /><span>至</span><input v-model="customEnd" type="datetime-local" /><button class="btn btn-sm" @click="loadHistory">查询</button></div>
@@ -52,24 +53,24 @@ const updatedAt=computed(()=>summary.value?new Date((summary.value.timestamp||0)
 const infoRows=computed(()=>[['主机名',summary.value?.hostname||currentHost.value?.name||'-'],['平台',summary.value?.platform||'-'],['内核',summary.value?.kernel||'-'],['CPU 核心',m.value.cpu_count||'-'],['运行时间',fmtDuration(m.value.uptime)],['数据来源',summary.value?.source||'-'],['接口耗时',summary.value?.duration_ms!==undefined?`${Number(summary.value.duration_ms).toFixed(0)} ms${summary.value.cached?`（缓存 ${Number(summary.value.cache_age_seconds||0).toFixed(1)}s）`:''}`:'-'],['Agent',summary.value?.agent_version||currentHost.value?.agent_version||'-']])
 
 async function loadSummary(refresh=false){
-  if(!selectedHostId.value||loading.value)return
-  controller?.abort();controller=new AbortController();loading.value=true;error.value=''
-  try{summary.value=await api.get(`/servers/${selectedHostId.value}/system/summary`,{refresh},{signal:controller.signal,timeoutMs:8000})}
-  catch(e){if(e.name!=='AbortError')error.value=e.message}finally{loading.value=false}
+  const hostId=selectedHostId.value;if(!hostId||loading.value&&!refresh)return
+  controller?.abort();controller=new AbortController();const activeController=controller;loading.value=true;error.value=''
+  try{const data=await api.get(`/servers/${hostId}/system/summary`,{refresh},{signal:activeController.signal,timeoutMs:8000});if(hostId===selectedHostId.value)summary.value=data}
+  catch(e){if(e.name!=='AbortError'&&hostId===selectedHostId.value)error.value=e.message}finally{if(controller===activeController)loading.value=false}
 }
 function activeRange(){const end=rangeKey.value==='custom'&&customEnd.value?new Date(customEnd.value):new Date();const selected=ranges.find(item=>item.key===rangeKey.value);const start=rangeKey.value==='custom'&&customStart.value?new Date(customStart.value):new Date(end.getTime()-(selected?.hours||1)*3600000);if(start>=end)throw new Error('开始时间必须早于结束时间');return{start,end}}
 async function loadHistory(){
-  if(!selectedHostId.value)return
+  const hostId=selectedHostId.value;if(!hostId)return
   historyController?.abort();historyController=new AbortController();const activeController=historyController
   historyLoading.value=true;overviewLoading.value=true;error.value=''
   try{
     const {start,end}=activeRange();const query={start:start.toISOString(),end:end.toISOString(),resolution:'auto'}
     const [data,overview]=await Promise.all([
-      api.get(`/servers/${selectedHostId.value}/metrics/timeseries`,{...query,metrics:selectedMetrics.value.join(',')},{signal:activeController.signal}),
-      api.get('/metrics/hosts/overview',{...query,metrics:'cpu,memory,disk'},{signal:activeController.signal}),
+      api.get(`/servers/${hostId}/metrics/timeseries`,{...query,metrics:selectedMetrics.value.join(',')},{signal:activeController.signal,timeoutMs:12000}),
+      api.get('/metrics/hosts/overview',{...query,metrics:'cpu,memory,disk'},{signal:activeController.signal,timeoutMs:12000}),
     ])
-    history.value=data.series||{};hostOverview.value=overview.hosts||[];historyResolution.value=({raw:'原始数据','5m':'5分钟聚合','1h':'1小时聚合'})[data.resolution]||data.resolution;historyPointCount.value=data.point_count||0;renderChart()
-  }catch(e){if(e.name!=='AbortError')error.value=e.message}finally{if(historyController===activeController){historyLoading.value=false;overviewLoading.value=false}}
+    if(hostId!==selectedHostId.value)return;history.value=data.series||{};hostOverview.value=overview.hosts||[];historyResolution.value=({raw:'原始数据','5m':'5分钟聚合','1h':'1小时聚合'})[data.resolution]||data.resolution;historyPointCount.value=data.point_count||0;renderChart()
+  }catch(e){if(e.name!=='AbortError'&&hostId===selectedHostId.value)error.value=e.message}finally{if(historyController===activeController){historyLoading.value=false;overviewLoading.value=false}}
 }
 function renderChart(){
   if(!chartEl.value)return;chart ||= echarts.init(chartEl.value)
@@ -91,11 +92,11 @@ function start(){stop();if(!document.hidden){loadSummary();timer=setInterval(()=
 function stop(){if(timer){clearInterval(timer);timer=null}}
 function visibility(){document.hidden?stop():start()}
 function resizeChart(){chart?.resize()}
-watch(selectedHostId,()=>{controller?.abort();historyController?.abort();summary.value=null;history.value={};loadHistory();start()})
+watch(selectedHostId,()=>{controller?.abort();historyController?.abort();loading.value=false;summary.value=null;history.value={};loadHistory();start()})
 onMounted(async()=>{await refreshHosts();await nextTick();loadHistory();start();document.addEventListener('visibilitychange',visibility);window.addEventListener('resize',resizeChart)})
 onUnmounted(()=>{stop();controller?.abort();historyController?.abort();chart?.dispose();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',resizeChart)})
 </script>
 
 <style scoped>
-.actions{display:flex;align-items:center;gap:12px}.notice{padding:10px 14px;border-radius:8px;margin-bottom:12px}.error{background:#fef2f2;color:var(--err)}.history-controls{padding:14px;margin-bottom:14px}.range-row,.metric-row,.custom-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.range-row b,.metric-row b{font-size:13px;margin-right:4px}.range-btn{border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:999px;padding:5px 11px;cursor:pointer}.range-btn.active{background:var(--brand);border-color:var(--brand);color:#fff}.custom-range{margin:10px 0}.custom-range input{border:1px solid var(--border);border-radius:6px;padding:7px;background:var(--card);color:var(--text)}.metric-row{border-top:1px solid var(--border);padding-top:11px;margin-top:11px}.metric-row label{font-size:12px;display:flex;gap:4px}.metric-row .muted{margin-left:auto}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.metric-label{color:var(--muted);font-size:13px}.metric-card strong{display:block;font-size:25px;margin:8px 0}.metric-card small{color:var(--muted)}.bar{height:5px;background:#eef2f7;border-radius:5px;margin-bottom:8px;overflow:hidden}.bar i{display:block;height:100%;background:var(--brand)}.chart-grid{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:14px}.card h3{font-size:15px;margin:0 0 14px}.chart{height:300px}.chart-loading{position:absolute;margin:120px 0 0 40%;color:var(--muted);z-index:1}.info{display:grid;grid-template-columns:100px 1fr;gap:12px;margin:0}.info dt{color:var(--muted)}.info dd{margin:0;word-break:break-all}.section{margin-top:14px;overflow:auto}.section-head{display:flex;align-items:center;justify-content:space-between}.section-head h3{margin-bottom:3px}.record-scroll{max-height:480px;overflow:auto}.metric-log .table,.host-overview .table{min-width:760px}.host-overview tbody tr{cursor:pointer}.host-overview tbody tr:hover,.host-overview tbody tr.selected{background:rgba(37,99,235,.06)}.host-link{display:block;border:0;background:none;color:var(--brand);font-weight:700;padding:0;cursor:pointer}.host-overview td small{display:block;color:var(--muted);margin-top:3px}.host-state{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px}.host-state.online{color:var(--ok);background:rgba(34,197,94,.1)}.host-state.offline{color:var(--muted);background:rgba(148,163,184,.12)}@media(max-width:900px){.metric-grid{grid-template-columns:repeat(2,1fr)}.chart-grid{grid-template-columns:1fr}.metric-row .muted{margin-left:0;width:100%}}
+.actions{display:flex;align-items:center;gap:12px}.notice{padding:10px 14px;border-radius:8px;margin-bottom:12px}.error{background:#fef2f2;color:var(--err)}.stale{background:#fff7ed;color:#c2410c}.history-controls{padding:14px;margin-bottom:14px}.range-row,.metric-row,.custom-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.range-row b,.metric-row b{font-size:13px;margin-right:4px}.range-btn{border:1px solid var(--border);background:var(--card);color:var(--muted);border-radius:999px;padding:5px 11px;cursor:pointer}.range-btn.active{background:var(--brand);border-color:var(--brand);color:#fff}.custom-range{margin:10px 0}.custom-range input{border:1px solid var(--border);border-radius:6px;padding:7px;background:var(--card);color:var(--text)}.metric-row{border-top:1px solid var(--border);padding-top:11px;margin-top:11px}.metric-row label{font-size:12px;display:flex;gap:4px}.metric-row .muted{margin-left:auto}.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.metric-label{color:var(--muted);font-size:13px}.metric-card strong{display:block;font-size:25px;margin:8px 0}.metric-card small{color:var(--muted)}.bar{height:5px;background:#eef2f7;border-radius:5px;margin-bottom:8px;overflow:hidden}.bar i{display:block;height:100%;background:var(--brand)}.chart-grid{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-top:14px}.card h3{font-size:15px;margin:0 0 14px}.chart{height:300px}.chart-loading{position:absolute;margin:120px 0 0 40%;color:var(--muted);z-index:1}.info{display:grid;grid-template-columns:100px 1fr;gap:12px;margin:0}.info dt{color:var(--muted)}.info dd{margin:0;word-break:break-all}.section{margin-top:14px;overflow:auto}.section-head{display:flex;align-items:center;justify-content:space-between}.section-head h3{margin-bottom:3px}.record-scroll{max-height:480px;overflow:auto}.metric-log .table,.host-overview .table{min-width:760px}.host-overview tbody tr{cursor:pointer}.host-overview tbody tr:hover,.host-overview tbody tr.selected{background:rgba(37,99,235,.06)}.host-link{display:block;border:0;background:none;color:var(--brand);font-weight:700;padding:0;cursor:pointer}.host-overview td small{display:block;color:var(--muted);margin-top:3px}.host-state{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px}.host-state.online{color:var(--ok);background:rgba(34,197,94,.1)}.host-state.offline{color:var(--muted);background:rgba(148,163,184,.12)}@media(max-width:900px){.metric-grid{grid-template-columns:repeat(2,1fr)}.chart-grid{grid-template-columns:1fr}.metric-row .muted{margin-left:0;width:100%}}
 </style>

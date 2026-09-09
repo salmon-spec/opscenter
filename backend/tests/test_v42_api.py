@@ -19,6 +19,7 @@ def clean_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     control._CONTAINER_CACHE.clear()
+    system_control._SUMMARY_CACHE.clear()
     yield
 
 
@@ -34,7 +35,9 @@ def test_host_duplicate_partial_update_and_credential_replacement():
     duplicate = client.post("/api/v2/servers", json={"name": "same target", "host": "10.66.66.20", "ssh_port": 22, "auto_deploy_agent": False})
     assert duplicate.status_code == 409
 
+    system_control.record_system_summary(server_id, {"hostname": "old-node"})
     assert client.put(f"/api/v2/servers/{server_id}", json={"name": "renamed"}).status_code == 200
+    assert server_id not in system_control._SUMMARY_CACHE
     with SessionLocal() as db:
         row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
         assert row.name == "renamed"
@@ -108,5 +111,28 @@ def test_system_summary_contract_and_illegal_pid(monkeypatch):
     assert response.status_code == 200
     assert response.json()["metrics"]["cpu"] == 12.5
     assert response.json()["duration_ms"] >= 0
-    assert response.json()["cache_ttl_seconds"] == 2
+    assert response.json()["cache_ttl_seconds"] == 5
+    assert response.json()["stale"] is False
     assert client.post(f"/api/v2/servers/{server_id}/processes/2/signal", json={"signal": "KILL"}).status_code == 400
+
+
+def test_system_summary_falls_back_to_recent_collector_sample(monkeypatch):
+    server_id = add_host()
+    with SessionLocal() as db:
+        row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        row.agent_status = "running"
+        row.agent_version = "2.6.2"
+        row.agent_token = "test-token"
+        db.commit()
+    system_control.record_system_summary(server_id, {
+        "timestamp": 1000, "agent_version": "2.6.2", "hostname": "node-a",
+        "cpu_percent": 12.5, "memory_percent": 31.0, "disk_percent": 44.0,
+    })
+    monkeypatch.setattr(system_control, "fetch_agent_system_summary", lambda *_args, **_kwargs: None)
+
+    response = client.get(f"/api/v2/servers/{server_id}/system/summary?refresh=true")
+
+    assert response.status_code == 200
+    assert response.json()["cached"] is True
+    assert response.json()["stale"] is True
+    assert response.json()["metrics"]["cpu"] == 12.5
