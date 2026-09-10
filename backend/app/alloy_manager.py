@@ -122,20 +122,22 @@ def deploy_alloy(server: Server) -> dict:
         return {"success": False, "message": "SSH 连接失败"}
     sudo = "" if server.ssh_user == "root" else "sudo -n "
     try:
-        arch_out, _, _ = ssh_exec(client, "dpkg --print-architecture 2>/dev/null || true")
-        arch = arch_out.strip()
-        checksum = _DEB_SHA256.get(arch)
-        if not checksum:
-            return {"success": False, "message": f"当前仅支持 Debian/Ubuntu amd64/arm64，检测到 {arch or '未知架构'}"}
-        package = f"/tmp/alloy-{ALLOY_VERSION}-{arch}.deb"
-        url = f"https://github.com/grafana/alloy/releases/download/v{ALLOY_VERSION}/alloy-{ALLOY_VERSION}-1.{arch}.deb"
-        command = (
-            f"command -v curl >/dev/null && curl -fsSL --retry 3 -o {package} {url} && "
-            f"echo '{checksum}  {package}' | sha256sum -c - && {sudo}dpkg -i {package} && rm -f {package}"
-        )
-        _, error, code = ssh_exec(client, command, timeout=180)
-        if code != 0:
-            return {"success": False, "message": f"Alloy 安装失败：{error[-500:]}"}
+        installed_out, _, _ = ssh_exec(client, "alloy --version 2>/dev/null || true")
+        if _version(installed_out) != ALLOY_VERSION:
+            arch_out, _, _ = ssh_exec(client, "dpkg --print-architecture 2>/dev/null || true")
+            arch = arch_out.strip()
+            checksum = _DEB_SHA256.get(arch)
+            if not checksum:
+                return {"success": False, "message": f"当前仅支持 Debian/Ubuntu amd64/arm64，检测到 {arch or '未知架构'}"}
+            package = f"/tmp/alloy-{ALLOY_VERSION}-{arch}.deb"
+            url = f"https://github.com/grafana/alloy/releases/download/v{ALLOY_VERSION}/alloy-{ALLOY_VERSION}-1.{arch}.deb"
+            command = (
+                f"command -v curl >/dev/null && curl -fsSL --retry 3 -o {package} {url} && "
+                f"echo '{checksum}  {package}' | sha256sum -c - && {sudo}dpkg -i {package} && rm -f {package}"
+            )
+            _, error, code = ssh_exec(client, command, timeout=180)
+            if code != 0:
+                return {"success": False, "message": f"Alloy 安装失败：{error[-500:]}"}
         ok, message = _upload(client, _CONFIG_SOURCE.read_text(encoding="utf-8"), "/etc/alloy/config.alloy", "0644", sudo)
         if not ok:
             return {"success": False, "message": f"Alloy 配置写入失败：{message[-500:]}"}
