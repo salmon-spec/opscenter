@@ -96,7 +96,7 @@ def deploy_agent(server: Server, password: str = None, port: int = AGENT_DEFAULT
         out, _, _ = _ssh_exec(client, f"systemctl is-active {AGENT_SERVICE}")
         existing_config = {}
         if out.strip() == "active":
-            out2, _, _ = _ssh_exec(client, f"cat {AGENT_DIR}/.agent_config")
+            out2, _, _ = _ssh_exec(client, f"{sudo}cat {AGENT_DIR}/.agent_config")
             try:
                 existing_config = json.loads(out2.strip())
                 old_version = existing_config.get("version", "1.0.0")
@@ -220,10 +220,11 @@ def check_agent_status(server: Server, password: str = None) -> Dict:
         return {"status": "unreachable", "message": "SSH连接失败"}
 
     try:
+        sudo = "" if server.ssh_user == "root" else "sudo -n "
         out, _, code = _ssh_exec(client, f"systemctl is-active {AGENT_SERVICE}")
         if out.strip() == "active":
             # Read config
-            config_out, _, _ = _ssh_exec(client, f"cat {AGENT_DIR}/.agent_config")
+            config_out, _, _ = _ssh_exec(client, f"{sudo}cat {AGENT_DIR}/.agent_config")
             try:
                 config = json.loads(config_out.strip())
                 return {

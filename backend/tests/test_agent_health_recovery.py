@@ -143,6 +143,28 @@ def test_containerized_local_agent_uses_gateway_without_ssh(monkeypatch):
     }
 
 
+def test_non_root_status_reads_protected_config_with_sudo(monkeypatch):
+    client = _SshClient()
+    commands = []
+
+    def fake_exec(_client, command, timeout=30):
+        commands.append(command)
+        if command == "systemctl is-active opsagent.service":
+            return "active", "", 0
+        if command == "sudo -n cat /opt/opsagent/.agent_config":
+            return json.dumps({"port": 19100, "token": "current", "version": "2.6.2"}), "", 0
+        return "", "", 0
+
+    monkeypatch.setattr(agent_manager, "_get_ssh_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(agent_manager, "_ssh_exec", fake_exec)
+
+    result = agent_manager.check_agent_status(SimpleNamespace(ssh_user="ubuntu", agent_type="remote"))
+
+    assert "sudo -n cat /opt/opsagent/.agent_config" in commands
+    assert result["status"] == "running"
+    assert result["agent_token"] == "current"
+
+
 class _RemoteFile(io.StringIO):
     def __init__(self, path, files):
         super().__init__()
