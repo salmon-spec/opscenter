@@ -35,7 +35,7 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/backend.Dockerfile
-    image: opscenter/backend:5.0.0-test
+    image: opscenter/backend:5.0.1-test
     environment:
       DATABASE_URL: postgresql+psycopg://opscenter:${OPS_TEST_POSTGRES_PASSWORD:?set OPS_TEST_POSTGRES_PASSWORD}@db:5432/opscenter
       CONTAINERIZED: "true"
@@ -70,7 +70,7 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/frontend.Dockerfile
-    image: opscenter/frontend:5.0.0-test
+    image: opscenter/frontend:5.0.1-test
     depends_on:
       - backend
     ports:

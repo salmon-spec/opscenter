@@ -1,0 +1,1 @@
+import{D as o}from"./DataServiceKind-v4-7y0S0p3y.js";import{o as r,b as t}from"./vendor-vue-v4-qizaePFN.js";import"./index-v4-B8N3x6Pc.js";import"./dataservices-v4-CHXNQcYV.js";import"./envelope-v4-oN_8dg8Z.js";const _={__name:"DataServicesMongoDB",setup(e){return(a,c)=>(r(),t(o,{kind:"mongodb"}))}};export{_ as default};
