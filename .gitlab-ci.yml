@@ -22,12 +22,15 @@ variables:
 
 backend-test:
   stage: test
-  image: python:3.12-slim
+  # 本地预置测试镜像（python:3.12-slim + 离线 wheelhouse）：
+  # 集群 Pod 无 IPv4 出网，pip 不能连 pypi；镜像由 PVE 构建后导入 k8s-worker-01。
+  # 重建方法见 D:\salmon-codex-space\k3s-migration\ci\Dockerfile
+  image: opscenter/ci-backend:5.0.1
   interruptible: true
   services:
     - postgres:16-alpine
   before_script:
-    - pip install -r backend/requirements.txt pytest pytest-cov
+    - pip install --no-index --find-links=/wheels -r backend/requirements.txt pytest pytest-cov
   script:
     - cd backend && python -m pytest tests/ -v --cov=app --cov-report=term-missing
   cache:
