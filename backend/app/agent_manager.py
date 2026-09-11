@@ -3,8 +3,9 @@ import paramiko
 import io
 import json
 import secrets
+import time
 from pathlib import Path
-from typing import Optional, Tuple, Dict
+from typing import Callable, Optional, Tuple, Dict
 from app.models import Server
 from app.config import CONTAINERIZED, LOCAL_AGENT_HOST, LOCAL_AGENT_TOKEN
 
@@ -33,9 +34,50 @@ AGENT_SERVICE = "opsagent.service"
 AGENT_DEFAULT_PORT = 19100
 
 
+_LAST_WORKING_HOST: dict[str, tuple[str, float]] = {}
+_LAST_WORKING_TTL = 60.0
+
+
+def resolve_management_hosts(server: Server) -> tuple[str, ...]:
+    """Return deduplicated management addresses in failover order."""
+    if server.agent_type == "local":
+        return (LOCAL_AGENT_HOST,)
+    lan = (getattr(server, "lan_ip", None) or "").strip()
+    wireguard = (getattr(server, "wireguard_ip", None) or "").strip()
+    main = (getattr(server, "host", None) or "").strip()
+    override = (getattr(server, "management_address_override", None) or "").strip()
+    preferred = (getattr(server, "preferred_management_channel", None) or "auto").strip()
+    ordered = [override]
+    ordered.extend([wireguard, main, lan] if preferred == "wireguard" else [lan, wireguard, main])
+    candidates = list(dict.fromkeys(item for item in ordered if item))
+    key = str(getattr(server, "id", "") or "")
+    cached = _LAST_WORKING_HOST.get(key) if key else None
+    if cached and time.monotonic() - cached[1] < _LAST_WORKING_TTL and cached[0] in candidates:
+        candidates.remove(cached[0])
+        candidates.insert(0, cached[0])
+    return tuple(candidates)
+
+
+def remember_management_host(server: Server, host: str) -> None:
+    key = str(getattr(server, "id", "") or "")
+    if key:
+        _LAST_WORKING_HOST[key] = (host, time.monotonic())
+
+
 def resolve_agent_host(server: Server) -> str:
-    """Return the reachable Agent address for either deployment mode."""
-    return LOCAL_AGENT_HOST if server.agent_type == "local" else server.host
+    """Return the current first-choice Agent address (LAN first by default)."""
+    hosts = resolve_management_hosts(server)
+    return hosts[0] if hosts else ""
+
+
+def fetch_from_agent(server: Server, fetcher: Callable[[str], Optional[Dict]]) -> Optional[Dict]:
+    """Try LAN/WG/main addresses and remember the last working path briefly."""
+    for host in resolve_management_hosts(server):
+        result = fetcher(host)
+        if result is not None:
+            remember_management_host(server, host)
+            return result
+    return None
 
 
 def _get_ssh_client(server: Server, password: str = None) -> Optional[paramiko.SSHClient]:

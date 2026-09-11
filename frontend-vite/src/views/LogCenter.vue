@@ -23,7 +23,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import * as echarts from 'echarts'
+import echarts from '../utils/echarts'
 import { api, fmtBytes, fmtTime, toast } from '../api'
 import { useHostContext } from '../hostContext'
 

@@ -10,7 +10,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
-from app.config import LOG_SCAN_ENABLED, LOCAL_AGENT_HOST
+from app.agent_manager import fetch_from_agent
+from app.config import LOG_SCAN_ENABLED
 from app.database import get_db
 from app.models import LogMatch, LogRule, MetricHistory, Server
 
@@ -20,16 +21,21 @@ logger = logging.getLogger("opscenter.logwatch")
 def _agent_log_scan(server: Server, rule: LogRule, timeout: float = 8.0):
     """调用远端 Agent 的 log/scan 端点，返回命中行列表。"""
     import requests
-    host = LOCAL_AGENT_HOST if server.agent_type == "local" else server.host
     port = server.agent_port or 19100
     token = server.agent_token or ""
-    url = f"http://{host}:{port}/api/v1/log/scan"
     params = {"path": rule.log_path, "pattern": rule.pattern, "tail_lines": rule.tail_lines}
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    r = requests.get(url, params=params, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    data = r.json()
-    return data.get("matches") or []
+    def fetch(host):
+        try:
+            r = requests.get(f"http://{host}:{port}/api/v1/log/scan", params=params, headers=headers, timeout=timeout)
+            r.raise_for_status()
+            return r.json().get("matches") or []
+        except Exception:
+            return None
+    result = fetch_from_agent(server, fetch)
+    if result is None:
+        raise ConnectionError("Agent log endpoint unavailable on all management addresses")
+    return result
 
 
 def run_log_scan() -> None:

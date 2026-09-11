@@ -9,16 +9,17 @@ import secrets
 from urllib.parse import urlparse
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 import requests
 
+from app.auth import require_operator
 from app.config import ALLOY_VERSION, LOKI_PUBLIC_URL, LOKI_TIMEOUT_SECONDS, LOKI_URL
 from app.database import get_db
 from app.models import Server
 from app.ssh_manager import get_ssh_client, ssh_exec
 
 
-router = APIRouter(prefix="/api/v2", tags=["log-agents"])
+router = APIRouter(prefix="/api/v2", tags=["log-agents"], dependencies=[Depends(require_operator)])
 _CONFIG_SOURCE = Path(__file__).resolve().parents[2] / "deploy" / "observability" / "alloy.example.alloy"
 _DEB_SHA256 = {
     "amd64": "6ba1cfba4e9de4d3cbc94eaf8cdeb769898fcbfae12e8c2fea39b178ecd05f52",

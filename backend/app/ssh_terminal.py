@@ -4,6 +4,7 @@
 import uuid, time, logging, threading
 from typing import Optional
 import paramiko
+from app.ssh_host_keys import configure_host_keys, persist_host_keys
 
 logger = logging.getLogger("ssh_terminal")
 
@@ -15,11 +16,12 @@ RECONNECT_GRACE = 300  # v4.8: 5min reconnect grace (was 30)
 
 class SSHTerminalSession:
     def __init__(self, session_id, server_id, server_name, host, port, user,
-                 password=None, key_content=None, initial_command=None):
+                 password=None, key_content=None, initial_command=None, fallback_hosts=None):
         self.session_id = session_id
         self.server_id = server_id
         self.server_name = server_name
         self.host = host
+        self.hosts = tuple(dict.fromkeys([host, *(fallback_hosts or [])]))
         self.port = port
         self.user = user
         self.password = password
@@ -36,11 +38,8 @@ class SSHTerminalSession:
 
     def connect(self, cols=80, rows=24):
         try:
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            kwargs = {"hostname": self.host, "port": self.port,
-                      "username": self.user, "timeout": 10,
-                      "banner_timeout": 10, "auth_timeout": 10,
+            kwargs = {"port": self.port, "username": self.user, "timeout": 5,
+                      "banner_timeout": 5, "auth_timeout": 5,
                       "allow_agent": False, "look_for_keys": False}
             if self.key_content:
                 import io
@@ -61,17 +60,26 @@ class SSHTerminalSession:
                     kwargs["pkey"] = pkey
             elif self.password:
                 kwargs["password"] = self.password
-            client.connect(**kwargs)
-            self.client = client
-            ch = client.invoke_shell(term="xterm-256color", width=cols, height=rows)
-            ch.setblocking(0)
-            self.channel = ch
-            self.connected = True
-            self.last_activity = time.time()
-            if self.initial_command:
-                ch.send(self.initial_command + "\n")
-            logger.info(f"SSH session {self.session_id} connected to {self.host}:{self.port}")
-            return True
+            for host in self.hosts:
+                client = paramiko.SSHClient()
+                configure_host_keys(client)
+                try:
+                    client.connect(hostname=host, **kwargs)
+                    persist_host_keys(client)
+                    self.host = host
+                    self.client = client
+                    ch = client.invoke_shell(term="xterm-256color", width=cols, height=rows)
+                    ch.setblocking(0)
+                    self.channel = ch
+                    self.connected = True
+                    self.last_activity = time.time()
+                    if self.initial_command:
+                        ch.send(self.initial_command + "\n")
+                    logger.info("SSH session %s connected to %s:%s", self.session_id, host, self.port)
+                    return True
+                except Exception:
+                    client.close()
+            return False
         except Exception as e:
             logger.error(f"SSH connect failed for {self.host}:{self.port}: {e}")
             self.close()
@@ -378,7 +386,8 @@ class LocalTerminalSession(SSHTerminalSession):
 
 
 def create_session(server_id, server_name, host, port, user,
-                   password=None, key_content=None, initial_command=None, local=False):
+                   password=None, key_content=None, initial_command=None, local=False,
+                   fallback_hosts=None):
     _cleanup_dead()
     cnt = len([s for s in _sessions.values() if s.server_id == server_id and s.is_alive])
     if cnt >= MAX_SESSIONS_PER_SERVER:
@@ -387,7 +396,8 @@ def create_session(server_id, server_name, host, port, user,
     session_class = LocalTerminalSession if local else SSHTerminalSession
     s = session_class(session_id=session_id, server_id=server_id,
         server_name=server_name, host=host, port=port, user=user,
-        password=password, key_content=key_content, initial_command=initial_command)
+        password=password, key_content=key_content, initial_command=initial_command,
+        fallback_hosts=fallback_hosts)
     _sessions[session_id] = s
     return session_id, ""
 

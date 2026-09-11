@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import logging
 import json
+import queue
 import re
+import threading
 from urllib.parse import urlparse
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -17,8 +19,15 @@ from starlette.requests import Request
 from app.config import AUDIT_ENABLED
 from app.database import get_db
 from app.models import AuditLog
+# v5.0.0：审计事件双写 MongoDB / Kafka（未配置或不可用时静默降级）
+from app.services.doc_store import doc_store
+from app.services.event_bus import event_bus
 
 logger = logging.getLogger("opscenter.audit")
+
+_AUDIT_QUEUE: queue.Queue[dict] = queue.Queue(maxsize=1024)
+_WORKER_LOCK = threading.Lock()
+_WORKER_STARTED = False
 
 # 跳过审计的路径前缀（GET 类读操作本来就不记录，这里主要防递归/噪音写操作）
 SKIP_PREFIXES = (
@@ -73,19 +82,81 @@ def _classify(path: str, method: str):
     return action, "other"
 
 
-def _record(action: str, resource: str, resource_id=None, detail=None,
-            ip=None, status="success") -> None:
-    if not AUDIT_ENABLED:
-        return
+def _persist(event: dict) -> None:
     try:
         with get_db() as db:
             db.add(AuditLog(
-                action=action, resource=resource, resource_id=resource_id,
-                detail=(detail or "")[:500], ip=ip, status=status,
+                action=event["action"], resource=event["resource"],
+                resource_id=event.get("resource_id"),
+                detail=(event.get("detail") or "")[:500],
+                ip=event.get("ip"), status=event.get("status", "success"),
             ))
             db.commit()
     except Exception as e:
         logger.warning("audit record failed: %s", e)
+    _emit_event(**event)
+
+
+def _worker() -> None:
+    while True:
+        event = _AUDIT_QUEUE.get()
+        try:
+            _persist(event)
+        finally:
+            _AUDIT_QUEUE.task_done()
+
+
+def _ensure_worker() -> None:
+    global _WORKER_STARTED
+    if _WORKER_STARTED:
+        return
+    with _WORKER_LOCK:
+        if not _WORKER_STARTED:
+            threading.Thread(target=_worker, name="audit-worker", daemon=True).start()
+            _WORKER_STARTED = True
+
+
+def _record(action: str, resource: str, resource_id=None, detail=None,
+            ip=None, status="success") -> None:
+    """Queue audit persistence so a database outage never delays the request."""
+    if not AUDIT_ENABLED:
+        return
+    _ensure_worker()
+    event = {
+        "action": action, "resource": resource, "resource_id": resource_id,
+        "detail": detail, "ip": ip, "status": status,
+    }
+    try:
+        _AUDIT_QUEUE.put_nowait(event)
+    except queue.Full:
+        logger.error("audit queue full; dropping %s %s", action, resource)
+
+
+def _emit_event(action: str, resource: str, resource_id=None,
+                detail=None, ip=None, status="success") -> None:
+    """v5.0.0：把审计事件推到 MongoDB 文档与 Kafka 事件流（fail-open）。
+
+    在守护线程中执行：Kafka/Mongo 不可用时最多阻塞该线程（3s 级超时），
+    绝不拖慢请求主链路。
+    """
+    event = {
+        "event_type": "audit",
+        "action": action,
+        "resource": resource,
+        "resource_id": resource_id,
+        "detail": detail,
+        "ip": ip,
+        "status": status,
+    }
+
+    try:
+        doc_store.insert("audit_events", event)
+    except Exception:
+        pass
+    try:
+        event_bus.publish("audit", event)
+    except Exception:
+        pass
 
 
 class AuditMiddleware(BaseHTTPMiddleware):

@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
 from app.auth import get_current_user
+from app.agent_manager import resolve_management_hosts
 from app.credential_crypto import decrypt_secret, encrypt_secret
 from app.database import get_db
 from app.models import DatabaseInstance, Server, Service
@@ -242,7 +243,8 @@ def discover_instances(server_id: str):
             # Published wildcard ports are reachable through the managed host.
             # Loopback/container bridge targets on remote hosts require the short-lived SSH tunnel.
             if raw_host in {"", "0.0.0.0", "::"}:
-                host = server.host
+                hosts = resolve_management_hosts(server)
+                host = hosts[0] if hosts else server.host
                 mode = "direct"
             elif server.agent_type != "local" and (raw_host.startswith("127.") or raw_host.startswith("172.") or raw_host.startswith("10.") or raw_host.startswith("192.168.")) and raw_host != server.host:
                 host = raw_host

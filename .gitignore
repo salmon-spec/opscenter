@@ -21,6 +21,7 @@ __pycache__/
 __pycache__/
 
 # Tests
+.tmp/
 .pytest_cache/
 htmlcov/
 .coverage
@@ -31,3 +32,6 @@ deliverables/
 backend/preview-*.db
 backend/*-test.db
 backend/*-openapi.db
+backend/.tmp/
+backend/*.db
+nul

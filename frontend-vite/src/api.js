@@ -1,6 +1,11 @@
 /* OpsCenter v3.29 API 客户端：同源 /api/v2（开发期由 Vite 代理到后端） */
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
+const TOKEN_KEY = 'ops-access-token'
+
+export const getAccessToken = () => localStorage.getItem(TOKEN_KEY) || ''
+export const setAccessToken = (token) => localStorage.setItem(TOKEN_KEY, token || '')
+export const clearAccessToken = () => localStorage.removeItem(TOKEN_KEY)
 
 async function request(path, { method = 'GET', body, query, signal, timeoutMs } = {}) {
   let url = API_BASE + '/api/v2' + path
@@ -18,6 +23,8 @@ async function request(path, { method = 'GET', body, query, signal, timeoutMs } 
   else if (signal) signal.addEventListener('abort', abort, { once: true })
   const timer = timeoutController ? setTimeout(abort, timeoutMs) : null
   const opts = { method, headers: {}, signal: timeoutController?.signal || signal }
+  const token = getAccessToken()
+  if (token) opts.headers.Authorization = `Bearer ${token}`
   if (body !== undefined) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
@@ -27,6 +34,10 @@ async function request(path, { method = 'GET', body, query, signal, timeoutMs } 
     let data = null
     try { data = await res.json() } catch { /* 非 JSON 响应忽略 */ }
     if (!res.ok) {
+      if (res.status === 401 && path !== '/auth/login') {
+        clearAccessToken()
+        window.dispatchEvent(new CustomEvent('ops-auth-required'))
+      }
       const err = new Error((data && (data.detail || data.msg)) || `HTTP ${res.status}`)
       err.status = res.status
       err.data = data
@@ -57,7 +68,10 @@ export const api = {
 /* WebSocket 地址：与页面同源（开发期由 Vite 代理 /ws） */
 export function wsUrl(path) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${location.host}${path}`
+  const url = new URL(`${proto}://${location.host}${path}`)
+  const token = getAccessToken()
+  if (token) url.searchParams.set('token', token)
+  return url.toString()
 }
 
 /* 通用 toast（全局事件总线，App.vue 监听渲染） */

@@ -10,7 +10,8 @@ import asyncio
 import logging
 from datetime import datetime
 
-from app.config import BACKUP_CHECK_ENABLED, LOCAL_AGENT_HOST
+from app.agent_manager import fetch_from_agent
+from app.config import BACKUP_CHECK_ENABLED
 from app.database import get_db
 from app.models import BackupCheck, MetricHistory, Server
 
@@ -20,15 +21,21 @@ logger = logging.getLogger("opscenter.backup")
 def _agent_backup_check(server: Server, target: str, min_size: int = 0, timeout: float = 8.0):
     """调用远端 Agent 的 backup/check 端点。"""
     import requests
-    host = LOCAL_AGENT_HOST if server.agent_type == "local" else server.host
     port = server.agent_port or 19100
     token = server.agent_token or ""
-    url = f"http://{host}:{port}/api/v1/backup/check"
     params = {"path": target, "min_size": str(min_size)}
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    r = requests.get(url, params=params, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    return (r.json().get("check") or {})
+    def fetch(host):
+        try:
+            r = requests.get(f"http://{host}:{port}/api/v1/backup/check", params=params, headers=headers, timeout=timeout)
+            r.raise_for_status()
+            return r.json().get("check") or {}
+        except Exception:
+            return None
+    result = fetch_from_agent(server, fetch)
+    if result is None:
+        raise ConnectionError("Agent backup endpoint unavailable on all management addresses")
+    return result
 
 
 def run_backup_check() -> None:

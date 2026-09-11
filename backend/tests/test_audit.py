@@ -1,9 +1,10 @@
 """v3.28 A1/A2 操作审计单元测试"""
-import os, sys
+import os, queue, sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
+import app.audit as audit
 from app.audit import _classify, SKIP_PREFIXES
 
 
@@ -56,3 +57,15 @@ def test_skip_prefixes():
     assert any("/health" in p for p in SKIP_PREFIXES)
     assert any("/audit-logs" in p for p in SKIP_PREFIXES)
     assert any("/status-page" in p for p in SKIP_PREFIXES)
+
+
+def test_record_never_blocks_when_queue_is_full(monkeypatch):
+    bounded = queue.Queue(maxsize=1)
+    monkeypatch.setattr(audit, "_AUDIT_QUEUE", bounded)
+    monkeypatch.setattr(audit, "_ensure_worker", lambda: None)
+    monkeypatch.setattr(audit, "AUDIT_ENABLED", True)
+
+    audit._record("create", "server")
+    audit._record("update", "server")
+
+    assert bounded.qsize() == 1

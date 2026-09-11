@@ -104,12 +104,14 @@ def rebuild_local_server(db: Session = Depends(get_session)):
 @router.post("/test-ssh")
 def test_ssh(payload: SSHTestRequest):
     import paramiko
+    from app.ssh_host_keys import configure_host_keys, persist_host_keys
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    configure_host_keys(client)
     try:
         client.connect(hostname=payload.host, port=payload.port or 22,
                        username=payload.user or "root", password=payload.password,
                        timeout=5, banner_timeout=5)
+        persist_host_keys(client)
         return {"ok": True, "message": "SSH connected"}
     except Exception as e:
         return {"ok": False, "message": str(e)}
@@ -130,10 +132,12 @@ def test_server_ssh(server_id: str, payload: SSHTestRequest, db: Session = Depen
     if not password and srv.ssh_key and srv.ssh_key.startswith("__password__"):
         password = srv.ssh_key[12:]
     import paramiko
+    from app.ssh_host_keys import configure_host_keys, persist_host_keys
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    configure_host_keys(client)
     try:
         client.connect(hostname=host, port=port, username=user, password=password, timeout=5)
+        persist_host_keys(client)
         return {"ok": True, "message": f"Connected {user}@{host}:{port}"}
     except Exception as e:
         return {"ok": False, "message": str(e)}

@@ -27,8 +27,11 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { onActivated, onBeforeUnmount, onDeactivated, onMounted, reactive, ref, watch } from 'vue'
 import { api, fmtTime, toast } from '../api'
+import { useTabActive } from '../workbench/tabs'
+
+const { isActive } = useTabActive('ServiceHealth')
 
 const tab=ref('incidents'),status=ref(''),loading=ref(false),incidents=ref([]),silences=ref([]),services=ref([]),overview=ref({}),generatedAt=ref(null)
 const silenceForm=reactive({plaza_key:'',ends_at:'',reason:''})
@@ -44,9 +47,13 @@ async function loadIncidents(){try{const data=await api.get('/services/plaza/inc
 async function ack(row){try{const data=await api.post(`/services/plaza/incidents/${row.id}/acknowledge`);Object.assign(row,data);toast('事件已确认','success')}catch(error){toast(error.message,'error')}}
 async function createSilence(){if(!silenceForm.plaza_key||!silenceForm.ends_at||!silenceForm.reason){toast('请选择服务并填写结束时间和原因','error');return}try{await api.post('/services/plaza/silences',{plaza_key:silenceForm.plaza_key,ends_at:new Date(silenceForm.ends_at).toISOString(),reason:silenceForm.reason});Object.assign(silenceForm,{plaza_key:'',ends_at:'',reason:''});await reload();toast('维护静默已创建','success')}catch(error){toast(error.message,'error')}}
 async function endSilence(row){if(!confirm('确认提前结束该静默？'))return;try{await api.del(`/services/plaza/silences/${row.id}`);await reload();toast('静默已结束','success')}catch(error){toast(error.message,'error')}}
-function schedule(){clearInterval(timer);timer=setInterval(()=>{if(document.visibilityState==='visible'&&!loading.value)loadSummary()},15000)}
+function schedule(){stop();if(!isActive.value||document.hidden)return;timer=setInterval(()=>{if(isActive.value&&document.visibilityState==='visible'&&!loading.value)loadSummary()},15000)}
+function stop(){if(timer){clearInterval(timer);timer=null}}
+watch(isActive,(value)=>{value?schedule():stop()})
 onMounted(()=>{reload();schedule()})
-onBeforeUnmount(()=>{clearInterval(timer);controller?.abort();summaryController?.abort()})
+onActivated(()=>{if(isActive.value&&!document.hidden&&!loading.value)loadSummary();schedule()})
+onDeactivated(()=>stop())
+onBeforeUnmount(()=>{stop();controller?.abort();summaryController?.abort()})
 </script>
 
 <style scoped>

@@ -1,49 +1,48 @@
 """SSH connection manager for remote server discovery and monitoring."""
 import paramiko
+import io
 import json
 import re as _re
 from typing import Optional, Tuple, List, Dict
+from app.agent_manager import remember_management_host, resolve_management_hosts
 from app.config import CONTAINERIZED, LOCAL_AGENT_HOST
 from app.models import Server
+from app.ssh_host_keys import configure_host_keys, persist_host_keys
 
 
 def get_ssh_client(server: Server, password: str = None) -> Optional[paramiko.SSHClient]:
-    """Create and return an SSH client connected to the server."""
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    hostname = LOCAL_AGENT_HOST if CONTAINERIZED and server.agent_type == "local" else server.host
-    try:
-        if password:
-            client.connect(
-                hostname=hostname, port=server.ssh_port or 22,
-                username=server.ssh_user or 'root', password=password,
-                timeout=10, allow_agent=False, look_for_keys=False,
-            )
-        elif server.ssh_key:
-            import io
-            if server.ssh_key.startswith("__password__"):
-                pw = server.ssh_key[len("__password__"):]
-                client.connect(
-                    hostname=hostname, port=server.ssh_port or 22,
-                    username=server.ssh_user or 'root', password=pw,
-                    timeout=10, allow_agent=False, look_for_keys=False,
-                )
-            else:
-                key_file = io.StringIO(server.ssh_key)
-                pkey = paramiko.Ed25519Key.from_private_key(key_file)
-                client.connect(
-                    hostname=hostname, port=server.ssh_port or 22,
-                    username=server.ssh_user or 'root', pkey=pkey,
-                    timeout=10, allow_agent=False, look_for_keys=False,
-                )
-        else:
-            return None
-        return client
-    except Exception as e:
-        print(f"SSH connect error for {server.host}: {e}")
-        try: client.close()
-        except: pass
+    """Connect LAN-first, then fall back to WG/main and remember success."""
+    if not password and not server.ssh_key:
         return None
+    kwargs = {
+        "port": server.ssh_port or 22, "username": server.ssh_user or "root",
+        "timeout": 5, "banner_timeout": 5, "auth_timeout": 5,
+        "allow_agent": False, "look_for_keys": False,
+    }
+    if password:
+        kwargs["password"] = password
+    elif server.ssh_key.startswith("__password__"):
+        kwargs["password"] = server.ssh_key[len("__password__"):]
+    else:
+        key_file = io.StringIO(server.ssh_key)
+        kwargs["pkey"] = paramiko.Ed25519Key.from_private_key(key_file)
+
+    hosts = ((LOCAL_AGENT_HOST,) if CONTAINERIZED and server.agent_type == "local"
+             else ((server.host,) if server.agent_type == "local" else resolve_management_hosts(server)))
+    last_error = None
+    for hostname in hosts:
+        client = paramiko.SSHClient()
+        configure_host_keys(client)
+        try:
+            client.connect(hostname=hostname, **kwargs)
+            persist_host_keys(client)
+            remember_management_host(server, hostname)
+            return client
+        except Exception as exc:
+            last_error = exc
+            client.close()
+    print(f"SSH connect error for {server.host}: {last_error}")
+    return None
 
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int = 15) -> Tuple[str, str, int]:
@@ -215,7 +214,7 @@ def test_ssh_connection(host: str, port: int, username: str, password: str = Non
     """Test SSH connection and return (success, message)."""
     import io
     client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    configure_host_keys(client)
     try:
         if password:
             client.connect(hostname=host, port=port, username=username, password=password, timeout=10, allow_agent=False, look_for_keys=False)
@@ -228,6 +227,7 @@ def test_ssh_connection(host: str, port: int, username: str, password: str = Non
             client.connect(hostname=host, port=port, username=username, pkey=pkey, timeout=10, allow_agent=False, look_for_keys=False)
         else:
             return False, "No password or SSH key provided"
+        persist_host_keys(client)
         _, out, _ = ssh_exec(client, 'echo OK')
         client.close()
         if out.strip() == 'OK':

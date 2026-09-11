@@ -83,7 +83,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import * as echarts from 'echarts'
+import echarts from '../utils/echarts'
 import { api, toast } from '../api'
 import EmptyState from '../components/EmptyState.vue'
 import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'

@@ -14,4 +14,6 @@ os.environ.setdefault(
     "postgresql+psycopg://opscenter:opscenter123@127.0.0.1:5433/opscenter_test",
 )
 os.environ.setdefault("OPS_AUTH_ENABLED", "false")
+os.environ.setdefault("OPS_JWT_SECRET", "test-only-jwt-secret")
+os.environ.setdefault("CREDENTIAL_KEY", "test-only-credential-key")
 os.environ.setdefault("LOCAL_HOST", "127.0.0.1")

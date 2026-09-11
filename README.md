@@ -1,6 +1,6 @@
 # OpsCenter 运维工作台
 
-> **当前版本：v4.8.5** · 更新于 2026-09-10
+> **当前版本：v5.0.0** · 更新于 2026-09-10
 > 访问：https://ops.salmon.xin/ · 状态页：https://ops.salmon.xin/status/ · Vite 灰度页：https://ops.salmon.xin/v3/
 
 面向 DevOps/SRE 的自托管**统一运维工作台**：管理服务器、服务、监控、告警、证书、日志、备份、镜像与巡检日报，中文界面，免登录访问，支持 SSH 终端直连与远程 Agent 采集。
@@ -24,10 +24,10 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 
 | 项 | 状态 |
 |---|---|
-| 后端测试 | **pytest 210/210 全绿**（0 失败 0 错误，含监控快照降级、AI 只读契约与敏感信息隔离） |
+| 后端测试 | **pytest 344/344 全绿**（0 失败 0 错误，含 K3s、中间件、数据服务 API 与鉴权加固） |
 | API | 增加 6 个 `/api/v2/ai/*` 只读上下文接口；现有管理与监控接口保持兼容 |
 | Agent | v2.6.2 |
-| 版本里程碑 | **v4.8.5**（监控快照复用、切换竞态与趋势加载修复） |
+| 版本里程碑 | **v5.0.0**（K3s 中间件七件套纳管 + 数据服务页面 + Redis/MQ/Mongo/Nacos/MinIO 架构接入 + 鉴权加固） |
 | 系统文件管理 | **v4.3 已交付**（本机/SFTP 浏览、编辑、上传下载、改名、可恢复删除） |
 | 系统防火墙 / SSH | **v4.3 已交付**（UFW/Firewalld、防失联保护、SSH 配置/会话/登录日志） |
 | 监控历史 | **v4.4 已交付**（按主机和时间段查询，5 分钟/1 小时分层汇总，CSV 导出，所有主机批量概览与快速切换） |
@@ -212,7 +212,7 @@ OpsCenter/
 │   │   ├── discovery.py          # 服务自动发现
 │   │   ├── models.py             # SQLAlchemy 模型（15 表）
 │   │   └── version.py            # 版本号（4.8.5，单一来源）
-│   ├── tests/                    # pytest（158 用例）
+│   ├── tests/                    # pytest（344 用例）
 │   └── requirements.txt
 ├── agent/
 │   ├── opsagent.py               # 远程采集 Agent（v2.6.2）
@@ -268,8 +268,12 @@ cp -r frontend /opt/opscenter/frontend       # Caddy 托管
 | 变量 | 说明 |
 |---|---|
 | `DATABASE_URL` | PostgreSQL 连接串 |
+| `OPS_AUTH_ENABLED` | 管理端登录开关；新安装默认 `true` |
 | `OPS_JWT_SECRET` | JWT 密钥 |
 | `OPS_ADMIN_USER` / `OPS_ADMIN_PASSWORD` | 管理员账号 |
+| `OPERATOR_TOKEN` | 可选的 API/运维共享令牌；配置后兼容模式也会保护管理接口 |
+| `CREDENTIAL_KEY` | 数据库与服务凭据加密密钥，部署后必须稳定保存 |
+| `CORS_ORIGINS` | 可选跨域来源，逗号分隔；默认仅允许同源访问 |
 | `LOCAL_HOST` | 对外域名（ops.salmon.xin） |
 | `REPORT_ENABLED` / `REPORT_HOUR_UTC` | 巡检日报开关 / 生成时间（默认 0 = 北京 08:00） |
 | `AUDIT_ENABLED` | 操作审计开关（默认 true） |
@@ -278,7 +282,7 @@ cp -r frontend /opt/opscenter/frontend       # Caddy 托管
 ### 8.4 测试
 
 ```bash
-cd backend && pytest    # 210/210 全绿
+cd backend && pytest    # 344/344 全绿
 ```
 
 ## 九、核心能力与亮点
@@ -287,7 +291,7 @@ cd backend && pytest    # 210/210 全绿
 - **僵尸服务清理**：容器消失时标记 offline，持续离线自动删除
 - **多服务器管理**：本地 + 远程服务器，SSH 连接池管理
 - **健康检查**：60s 周期自动检测所有服务可达性
-- **免登录访问**：v3.28 起去除 Caddy 全站 basic_auth（运维工作台免密码，内网环境）
+- **内置登录与 API 令牌**：新安装默认启用 JWT 管理员登录，也可配置独立运维令牌
 - **明暗主题**：支持跟随系统 / 手动切换，8 种配色方案
 - **侧边栏折叠**：一键收起，节省屏幕空间
 
@@ -323,6 +327,7 @@ cd backend && pytest    # 210/210 全绿
 | **v4.8.3** | **统一后端、前端页签、侧栏与兼容入口版本；手动服务卡片恢复统一布局，删除操作移入详情** | ✅ 已完成 |
 | **v4.8.4** | **指标改走轻量 Agent 摘要、失败自动恢复、WireGuard 后台缓存、轮询超时与保留任务修复** | ✅ 已完成 |
 | **v4.8.5** | **采集快照复用、Agent 故障时短期降级、主机切换竞态修复、趋势首次加载与超时治理** | ✅ 已完成 |
+| **v5.0.0** | **K3s 中间件七件套纳管（Redis/RabbitMQ/Kafka/ZooKeeper/Nacos/MinIO/MongoDB）：数据服务只读浏览与探测；Redis 任务持久化与选主；RabbitMQ 异步任务队列；MongoDB 审计事件双写；Kafka 事件流；Nacos 动态配置；MinIO 报告归档；新端点鉴权加固与终端 WS Origin 校验；ECharts 按需引入（体积 -45%）** | ✅ 已完成 |
 
 ## 十一、已知限制与遗留事项
 

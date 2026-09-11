@@ -56,6 +56,17 @@ class Server(Base):
     log_agent_version = Column(String(20), nullable=True)
     log_agent_error = Column(Text, nullable=True)
     log_agent_checked_at = Column(DateTime, nullable=True)
+    # ── 双通道地址与 K3s 节点映射（需求基线 2026-09-10 §4.1/§7.3） ──
+    lan_ip = Column(String(64), nullable=True)                          # 局域网管理地址
+    wireguard_ip = Column(String(64), nullable=True)                    # WireGuard 管理地址
+    preferred_management_channel = Column(String(20), default="auto")   # auto / lan / wireguard
+    management_address_override = Column(String(128), nullable=True)    # 特殊主机手动指定地址
+    cluster_id = Column(UUID(as_uuid=True), nullable=True)              # 所属集群（轻迁移风格，无硬 FK）
+    kubernetes_node_name = Column(String(128), nullable=True)           # 对应 K8s 节点名
+    node_role = Column(String(32), nullable=True)                       # control-plane / worker / infra
+    runtime_type = Column(String(20), nullable=True)                    # containerd / docker / none
+    last_lan_probe = Column(JSONB, nullable=True)                       # {ok,latency_ms,error,checked_at}
+    last_wg_probe = Column(JSONB, nullable=True)                        # {ok,latency_ms,error,checked_at}
     services = relationship("Service", back_populates="server", cascade="all, delete-orphan")
     database_instances = relationship("DatabaseInstance", back_populates="server", cascade="all, delete-orphan")
 
@@ -539,4 +550,24 @@ class ApiKey(Base):
     enabled = Column(Boolean, default=True)
     last_used_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Cluster(Base):
+    """Kubernetes 集群（需求基线 2026-09-10 §4.1）：首期固定 k3s、in_cluster/kubeconfig 连接，
+    数据结构按多集群设计。节点与 Server 的映射通过 servers.cluster_id / kubernetes_node_name 表达。"""
+    __tablename__ = "clusters"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String(64), nullable=False, unique=True)
+    type = Column(String(20), nullable=False, default="k3s")
+    api_mode = Column(String(20), nullable=False, default="in_cluster")   # in_cluster / kubeconfig
+    api_url = Column(String(255), nullable=True)                          # kubeconfig 模式下的 API 地址（展示用）
+    version = Column(String(32), nullable=True)                           # 最近探测到的集群版本
+    status = Column(String(20), nullable=False, default="unknown")        # ok / unreachable / unknown
+    default_namespace = Column(String(64), nullable=False, default="default")
+    labels = Column(JSONB, default=dict)
+    remark = Column(Text, nullable=True)
+    last_success_at = Column(DateTime, nullable=True)                     # 最近成功采集时间
+    last_error = Column(Text, nullable=True)                              # 最近错误摘要（已脱敏）
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

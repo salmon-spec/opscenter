@@ -1217,7 +1217,7 @@ def get_plaza_service_detail(plaza_key: str):
 
 
 @router.put("/services/plaza/{plaza_key}")
-def update_plaza_service(plaza_key: str, payload: PlazaServiceUpdate):
+def update_plaza_service(plaza_key: str, payload: PlazaServiceUpdate, _current_user=Depends(get_current_user)):
     """Persist editable plaza metadata and encrypt an optional login password."""
     values = payload.model_dump(exclude_unset=True)
     provided = set(values)
@@ -1507,7 +1507,7 @@ def get_plaza_probe_history(plaza_key: str, hours: int = 24, limit: int = 200):
 
 
 @router.put("/services/plaza/{catalog_key}/visibility")
-def update_catalog_visibility(catalog_key: str, payload: PlazaVisibilityUpdate):
+def update_catalog_visibility(catalog_key: str, payload: PlazaVisibilityUpdate, _current_user=Depends(get_current_user)):
     """Hide or restore a checked-in plaza entry without modifying its catalog."""
     catalog_keys = {item["key"] for item in load_catalog()}
     if catalog_key not in catalog_keys:

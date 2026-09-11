@@ -7,15 +7,16 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, text
 
+from app.auth import require_operator
 from app.config import RETENTION_ROLLUP_1H_DAYS, RETENTION_ROLLUP_5M_DAYS
 from app.database import engine, get_db
 from app.models import MetricHistory, MetricRollup, Server
 
 
-router = APIRouter(prefix="/api/v2", tags=["metric-history"])
+router = APIRouter(prefix="/api/v2", tags=["metric-history"], dependencies=[Depends(require_operator)])
 ALLOWED_METRICS = {"cpu", "memory", "disk", "swap", "load1", "load5", "load15", "net_rx", "net_tx", "disk_read", "disk_write"}
 _RESOLUTION_SECONDS = {"5m": 300, "1h": 3600}
 

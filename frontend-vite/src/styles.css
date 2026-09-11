@@ -111,3 +111,39 @@ body {
 }
 .toast.ok { background: #065f46; }
 .toast.err { background: #991b1b; }
+
+/* ── Workbench tabs (v4.9) ── */
+.workbench-tabs {
+  flex-shrink: 0; background: var(--card); border-bottom: 1px solid var(--border);
+  display: flex; align-items: flex-end; padding: 6px 12px 0; position: relative;
+}
+.wt-scroll { display: flex; gap: 4px; overflow-x: auto; width: 100%; }
+.wt-tab {
+  display: flex; align-items: center; width: 176px; min-width: 176px; max-width: 176px; flex: 0 0 176px; gap: 6px; padding: 6px 8px 6px 10px;
+  border: 1px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0;
+  background: var(--bg); color: var(--muted); font-size: 13px; cursor: pointer;
+  white-space: nowrap; user-select: none;
+}
+.wt-tab:hover { color: var(--text); border-color: var(--brand); }
+.wt-tab.active {
+  background: var(--card); color: var(--text); font-weight: 600;
+  box-shadow: inset 0 2px 0 var(--brand);
+}
+.wt-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.wt-pin { width: 7px; height: 7px; background: var(--brand); border-radius: 1px; transform: rotate(45deg); flex: none; }
+.wt-close {
+  display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center;
+  margin-left: auto; border-radius: 4px; color: var(--muted); visibility: hidden; flex: none; font-size: 14px; line-height: 1;
+}
+.wt-tab:hover .wt-close, .wt-tab.active .wt-close { visibility: visible; }
+.wt-close:hover { background: var(--border); color: var(--err); }
+.wt-menu {
+  position: fixed; z-index: 3000; min-width: 140px; padding: 4px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(15, 27, 45, .12);
+}
+.wt-menu-item {
+  display: block; width: 100%; text-align: left; padding: 7px 10px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text); font-size: 13px; cursor: pointer;
+}
+.wt-menu-item:hover { background: var(--bg); color: var(--brand); }

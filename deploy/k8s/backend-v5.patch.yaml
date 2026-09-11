@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: opscenter
+spec:
+  # v5.0.0 startup migration/seed is still single-writer. Keep one replica until
+  # schema migrations move to a dedicated Job.
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: backend
+          envFrom:
+            - configMapRef:
+                name: opscenter-middleware-config
+            - secretRef:
+                name: opscenter-middleware-secrets

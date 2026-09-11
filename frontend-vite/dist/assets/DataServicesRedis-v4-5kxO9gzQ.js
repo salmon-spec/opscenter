@@ -1,0 +1,1 @@
+import{D as r}from"./DataServiceKind-v4-DkdXiVCx.js";import{o as e,b as t}from"./vendor-vue-v4-qizaePFN.js";import"./index-v4-VVhUzcbk.js";import"./dataservices-v4-IANy8HMt.js";import"./envelope-v4-oN_8dg8Z.js";const _={__name:"DataServicesRedis",setup(o){return(a,i)=>(e(),t(r,{kind:"redis"}))}};export{_ as default};

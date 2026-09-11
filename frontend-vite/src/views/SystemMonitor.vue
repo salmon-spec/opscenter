@@ -30,12 +30,14 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import * as echarts from 'echarts'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
+import echarts from '../utils/echarts'
 import { api, fmtBytes, fmtDuration, fmtTime } from '../api'
 import { useHostContext } from '../hostContext'
+import { useTabActive } from '../workbench/tabs'
 
 const { selectedHostId, currentHost, refreshHosts, selectHost } = useHostContext()
+const { isActive } = useTabActive('SystemMonitor')
 const summary=ref(null),loading=ref(false),error=ref(''),chartEl=ref(null),history=ref({}),historyLoading=ref(false),historyResolution=ref('-'),historyPointCount=ref(0)
 const hostOverview=ref([]),overviewLoading=ref(false)
 const ranges=[{key:'1h',label:'1小时',hours:1},{key:'6h',label:'6小时',hours:6},{key:'24h',label:'24小时',hours:24},{key:'7d',label:'7天',hours:168},{key:'30d',label:'30天',hours:720},{key:'90d',label:'90天',hours:2160},{key:'1y',label:'1年',hours:8760},{key:'custom',label:'自定义'}]
@@ -88,12 +90,15 @@ function selectRange(key){rangeKey.value=key;if(key==='custom'){const end=new Da
 function toLocalInput(value){const shifted=new Date(value.getTime()-value.getTimezoneOffset()*60000);return shifted.toISOString().slice(0,16)}
 function toggleMetric(key){const values=[...selectedMetrics.value];const index=values.indexOf(key);if(index>=0){if(values.length===1)return;values.splice(index,1)}else if(values.length<6)values.push(key);selectedMetrics.value=values;loadHistory()}
 function exportCsv(){const rows=[['时间','主机','指标','平均值','最小值','最大值','样本数'],...metricRecords.value.map(row=>[formatRecordTime(row.timestamp),currentHost.value?.name||'',metricLabel(row.metric),row.avg,row.min,row.max,row.count])];const text='\ufeff'+rows.map(row=>row.map(value=>`"${String(value??'').replaceAll('"','""')}"`).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob([text],{type:'text/csv;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download=`${currentHost.value?.name||'host'}-metrics-${rangeKey.value}.csv`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function start(){stop();if(!document.hidden){loadSummary();timer=setInterval(()=>{if(!document.hidden&&!loading.value)loadSummary()},5000)}}
+function start(){stop();if(!isActive.value||document.hidden)return;loadSummary();timer=setInterval(()=>{if(isActive.value&&!document.hidden&&!loading.value)loadSummary()},5000)}
 function stop(){if(timer){clearInterval(timer);timer=null}}
 function visibility(){document.hidden?stop():start()}
 function resizeChart(){chart?.resize()}
 watch(selectedHostId,()=>{controller?.abort();historyController?.abort();loading.value=false;summary.value=null;history.value={};loadHistory();start()})
+watch(isActive,(value)=>{value?start():stop()})
 onMounted(async()=>{await refreshHosts();await nextTick();loadHistory();start();document.addEventListener('visibilitychange',visibility);window.addEventListener('resize',resizeChart)})
+onActivated(()=>{start()})
+onDeactivated(()=>{stop()})
 onUnmounted(()=>{stop();controller?.abort();historyController?.abort();chart?.dispose();document.removeEventListener('visibilitychange',visibility);window.removeEventListener('resize',resizeChart)})
 </script>
 

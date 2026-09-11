@@ -8,15 +8,16 @@ import re
 import shutil
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 import requests
 
+from app.auth import require_operator
 from app.config import LOKI_DATA_DIR, LOKI_RETENTION_DAYS, LOKI_TIMEOUT_SECONDS, LOKI_URL
 from app.database import get_db
 from app.models import Server
 
 
-router = APIRouter(prefix="/api/v2", tags=["log-center"])
+router = APIRouter(prefix="/api/v2", tags=["log-center"], dependencies=[Depends(require_operator)])
 _SOURCE_VALUES = {"all", "journal", "docker"}
 _SAFE_LABEL = re.compile(r"^[\w.@:/ -]{1,160}$")
 _PROM_LINE = re.compile(r"^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(?P<labels>.*)\})?\s+(?P<value>[-+0-9.eE]+)$")

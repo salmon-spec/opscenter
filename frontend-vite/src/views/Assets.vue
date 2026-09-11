@@ -106,10 +106,6 @@ const optionalColumns = [{key:'image',label:'镜像'},{key:'resource',label:'资
 let savedColumns = {}
 try { savedColumns = JSON.parse(localStorage.getItem('ops-assets-container-columns') || '{}') } catch { savedColumns = {} }
 const visibleColumns = reactive({ image:true, resource:true, ip:true, ports:true, service:true, ...savedColumns })
-const containerCounts = computed(() => ({
-  running: Number(monitor.value?.metrics?.container_running ?? containers.value.filter(item=>item.state==='running').length),
-  stopped: Number(monitor.value?.metrics?.container_stopped ?? containers.value.filter(item=>!['running','paused'].includes(item.state)).length),
-}))
 const allVisibleSelected = computed(() => containers.value.length > 0 && containers.value.every(item => selectedContainers.value.has(item.id)))
 const currentResources = computed(() => dockerResources[activeTab.value] || [])
 const currentResourceMeta = computed(() => resourceMeta[activeTab.value] || {})

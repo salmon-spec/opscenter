@@ -15,7 +15,7 @@ from app.credential_crypto import encrypt_secret
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
-from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, fetch_agent_system_summary, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host
+from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, fetch_agent_system_summary, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host, resolve_management_hosts, fetch_from_agent
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count, RECONNECT_GRACE
 from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
@@ -34,7 +34,7 @@ from app.alerting import (
     alerting_loop, retention_loop, seed_default_rules,
     run_alerting_cycle, retention_cleanup,
 )
-from app.config import CONTAINERIZED, LOCAL_AGENT_TOKEN, LOCAL_SERVER_NAME, PREVIEW_MODE
+from app.config import CONTAINERIZED, CORS_ORIGINS, LOCAL_AGENT_TOKEN, LOCAL_SERVER_NAME, PREVIEW_MODE
 
 # === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康） ===
 from app.api_keys import router as api_keys_router
@@ -45,6 +45,17 @@ from app.plaza import router as plaza_router, plaza_health_loop
 from app.system_control import forget_system_summary, record_system_summary, router as system_control_router
 from app.databases import router as databases_router
 from app.ai_context import router as ai_context_router
+# === K3s 只读监控 / 主机详情侧栏（需求基线 2026-09-10） ===
+from app.k8s_monitor import router as k8s_monitor_router
+from app.server_details import router as server_details_router
+from app.agent_tasks import AGENT_TASKS
+# === v5.0.0 中间件接入（K3s middleware ns） ===
+from app.auth import MutationAuthMiddleware, get_current_user, require_operator, router as auth_router
+from app.data_services import router as data_services_router
+from app.services.mq import task_queue
+from app.services.nacos_config import nacos_config
+from app.config import MQ_ENABLED, MW_LEADER_ENABLED, NACOS_ENABLED
+from app.periodic import run_periodic_job
 from app.database import engine, SessionLocal, get_db
 
 class TerminalCreateRequest(BaseModel):
@@ -187,6 +198,14 @@ class ServerCreate(BaseModel):
     is_local: bool = False
     remark: Optional[str] = None
     auto_deploy_agent: bool = True
+    # 双通道地址与 K3s 节点映射（需求基线 §7.3）
+    lan_ip: Optional[str] = None
+    wireguard_ip: Optional[str] = None
+    preferred_management_channel: Optional[str] = Field(None, pattern="^(auto|lan|wireguard)$")
+    management_address_override: Optional[str] = None
+    kubernetes_node_name: Optional[str] = None
+    node_role: Optional[str] = None
+    runtime_type: Optional[str] = None
 
 class ServerUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=50)
@@ -197,6 +216,13 @@ class ServerUpdate(BaseModel):
     ssh_password: Optional[str] = None
     tags: Optional[List[str]] = None
     remark: Optional[str] = None
+    lan_ip: Optional[str] = None
+    wireguard_ip: Optional[str] = None
+    preferred_management_channel: Optional[str] = Field(None, pattern="^(auto|lan|wireguard)$")
+    management_address_override: Optional[str] = None
+    kubernetes_node_name: Optional[str] = None
+    node_role: Optional[str] = None
+    runtime_type: Optional[str] = None
 
 
 class SshTestRequest(BaseModel):
@@ -266,7 +292,7 @@ CATEGORY_META = {
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -275,8 +301,12 @@ app.add_middleware(
 # v3.28 A1 操作审计中间件（写操作记录；AUDIT_ENABLED=false 关闭）
 app.add_middleware(AuditMiddleware)
 app.add_middleware(PerformanceMiddleware)
+# v5.0.0: one shared boundary covers every mutating v2 route when JWT or the
+# operator token is configured, including routes added by future modules.
+app.add_middleware(MutationAuthMiddleware)
 
 # === v3.29 路由挂载（T2 密钥 / T3 详情拓扑大屏 / 主机操控） ===
+app.include_router(auth_router)
 app.include_router(api_keys_router)
 app.include_router(topology_router)
 app.include_router(control_router)
@@ -290,8 +320,26 @@ app.include_router(metrics_history_router)
 app.include_router(log_center_router)
 app.include_router(alloy_manager_router)
 app.include_router(ai_context_router)
+app.include_router(k8s_monitor_router)
+app.include_router(server_details_router)
+# v5.0.0 数据服务（Redis/MQ/Kafka/ZK/Nacos/MinIO/MongoDB 纳管 + 只读浏览）
+app.include_router(data_services_router)
 
 # === Startup ===
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _start_background(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
+def _start_periodic(name, factory) -> asyncio.Task:
+    return _start_background(run_periodic_job(
+        name, factory, leader_enabled=MW_LEADER_ENABLED,
+    ))
 
 # === Background Health Check ===
 def _run_server_health_check():
@@ -299,19 +347,23 @@ def _run_server_health_check():
     try:
         with get_db() as db:
             targets = [
-                (srv.id, srv.agent_type, srv.host, srv.ssh_port or 22, srv.agent_port or 19100)
+                (srv.id, srv.agent_type, srv.host, srv.lan_ip, srv.ssh_port or 22, srv.agent_port or 19100)
                 for srv in db.query(Server).all()
             ]
 
         results = {}
-        for server_id, agent_type, host, ssh_port, agent_port in sorted(targets, key=lambda item: str(item[0])):
-            check_host = os.getenv("LOCAL_AGENT_HOST", "127.0.0.1") if agent_type == "local" else host
+        for server_id, agent_type, host, lan_ip, ssh_port, agent_port in sorted(targets, key=lambda item: str(item[0])):
             check_port = agent_port if agent_type == "local" else ssh_port
-            try:
-                with socket.create_connection((check_host, check_port), timeout=3):
-                    results[server_id] = True
-            except OSError:
-                results[server_id] = False
+            candidates = ((os.getenv("LOCAL_AGENT_HOST", "127.0.0.1"),) if agent_type == "local"
+                          else tuple(dict.fromkeys(item for item in (lan_ip, host) if item)))
+            results[server_id] = False
+            for check_host in candidates:
+                try:
+                    with socket.create_connection((check_host, check_port), timeout=3):
+                        results[server_id] = True
+                        break
+                except OSError:
+                    continue
 
         now = datetime.utcnow()
         with get_db() as db:
@@ -372,7 +424,7 @@ def _run_agent_health_check():
                     if result.get("agent_version"):
                         srv.agent_version = result["agent_version"]
 
-                    probe = _fetch_monitoring_sample(srv, host=srv.host)
+                    probe = _fetch_monitoring_sample(srv)
                     if probe:
                         srv.agent_status = "running"
                         srv.last_seen = datetime.utcnow()
@@ -1011,6 +1063,31 @@ def generate_report_now():
     return result
 
 
+@app.post("/api/v2/reports/{report_id}/archive")
+def archive_report(report_id: str, user: object = Depends(require_operator)):
+    """v5.0.0：把日报 Markdown 归档到 MinIO，返回对象信息与临时下载链接。"""
+    from app.services.object_store import object_store
+    try:
+        report_uuid = uuid.UUID(report_id)
+    except ValueError:
+        raise HTTPException(404, "Report not found")
+    with get_db() as db:
+        r = db.query(DailyReport).filter(DailyReport.id == report_uuid).first()
+        if not r:
+            raise HTTPException(404, "Report not found")
+        rdate = r.report_date.isoformat()
+        content = r.content or ""
+    object_name = f"reports/{rdate}-{report_id}.md"
+    stored = object_store.put(object_name, content, content_type="text/markdown; charset=utf-8")
+    if not stored:
+        raise HTTPException(503, "对象存储未配置或不可用（MINIO_ENABLED/MINIO_ENDPOINT）")
+    return {
+        "archived": True,
+        "object": stored,
+        "download_url": object_store.presigned_get(object_name),
+    }
+
+
 # === Audit Logs API (v3.28, A2) ===
 
 @app.get("/api/v2/audit-logs")
@@ -1127,6 +1204,17 @@ def _ensure_new_columns():
         "ALTER TABLE plaza_health_states ADD COLUMN IF NOT EXISTS last_error_code VARCHAR(40)",
         "ALTER TABLE plaza_health_incidents ADD COLUMN IF NOT EXISTS first_error_code VARCHAR(40)",
         "ALTER TABLE plaza_health_incidents ADD COLUMN IF NOT EXISTS last_error_code VARCHAR(40)",
+        # ── K3s 监控与双通道地址（需求基线 2026-09-10 §4.1/§7.3） ──
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS lan_ip VARCHAR(64)",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS wireguard_ip VARCHAR(64)",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS preferred_management_channel VARCHAR(20) DEFAULT 'auto'",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS management_address_override VARCHAR(128)",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS cluster_id UUID",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS kubernetes_node_name VARCHAR(128)",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS node_role VARCHAR(32)",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS runtime_type VARCHAR(20)",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_lan_probe JSONB",
+        "ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_wg_probe JSONB",
     ]
     try:
         with engine.connect() as conn:
@@ -1187,10 +1275,56 @@ def _migrate_legacy_service_credentials():
         print(f"[migrate] service credential migration failed: {exc}", flush=True)
 
 
+def _mw_handle_agent_task(payload: dict):
+    """v5.0.0：RabbitMQ worker 消费 Agent 部署/升级任务。"""
+    server_id = str((payload or {}).get("server_id") or "")
+    if not server_id:
+        return
+    _deploy_agent_background(server_id)
+
+
+def _init_middleware():
+    """v5.0.0：中间件接入初始化（全部 fail-open，绝不阻塞/中断启动）。"""
+    try:
+        # 1) RabbitMQ：注册 Agent 任务处理器；MQ_ENABLED=true 时启动消费 worker
+        task_queue.register_handler("agent_deploy", _mw_handle_agent_task)
+        if MQ_ENABLED:
+            task_queue.start_worker()
+    except Exception as exc:
+        print(f"[middleware] mq init skipped: {exc}", flush=True)
+    try:
+        # 2) Nacos：发布实例信息（只含非敏感元数据），读取动态覆盖日志
+        if NACOS_ENABLED and nacos_config.available():
+            import json as _json
+            from app.version import VERSION as _ver
+            overlay = nacos_config.get_overlay()
+            nacos_config.publish_config(_json.dumps({
+                "app": "opscenter", "version": _ver, "host": LOCAL_HOST,
+                "containerized": CONTAINERIZED, "overlay_keys": sorted(overlay.keys()),
+            }, ensure_ascii=False))
+    except Exception as exc:
+        print(f"[middleware] nacos init skipped: {exc}", flush=True)
+
+
+def _dispatch_agent_deploy(background_tasks, server_id: str, password: Optional[str] = None) -> str:
+    """v5.0.0：Agent 部署任务分发——MQ 可用且无一次性密码时走 RabbitMQ，否则回退 BackgroundTasks。
+
+    返回 "mq" | "background"。密码不进入队列（持久化消息落盘有泄露风险）。
+    """
+    if MQ_ENABLED and not password:
+        try:
+            queued = task_queue.publish("agent_deploy", {"server_id": server_id}, server_id=server_id)
+            if queued:
+                return "mq"
+        except Exception:
+            pass
+    background_tasks.add_task(_deploy_agent_background, server_id, password)
+    return "background"
+
+
 @app.on_event("startup")
 async def startup():
     # Wait for DB and create tables
-    import time
     for i in range(30):
         try:
             Base.metadata.create_all(bind=engine)
@@ -1198,7 +1332,7 @@ async def startup():
             _migrate_legacy_service_credentials()
             break
         except Exception:
-            time.sleep(2)
+            await asyncio.sleep(2)
 
     # Preview uses an isolated database and intentionally runs no scanners/timers.
     if PREVIEW_MODE:
@@ -1206,11 +1340,11 @@ async def startup():
 
     # Start Agent health check background task
     import asyncio
-    asyncio.create_task(_agent_health_check_loop())
+    _start_periodic("agent-health", _agent_health_check_loop)
     # v3.29 T4: 服务健康检查后台循环（间隔/阈值走环境变量）
-    asyncio.create_task(service_health_loop())
+    _start_periodic("service-health", service_health_loop)
     # v4.5: 服务广场按每个应用的策略探活并沉淀历史数据。
-    asyncio.create_task(plaza_health_loop())
+    _start_periodic("plaza-health", plaza_health_loop)
     
     # Auto-register local server and discover services
     with get_db() as db:
@@ -1279,23 +1413,23 @@ async def startup():
         db.commit()
 
     # Start background health check
-    asyncio.create_task(background_health_check())
-    asyncio.create_task(background_service_discovery())
-    asyncio.create_task(daily_network_aggregation())  # v3.25.1 每日流量归集
+    _start_periodic("host-health", background_health_check)
+    _start_periodic("service-discovery", background_service_discovery)
+    _start_periodic("network-aggregation", daily_network_aggregation)  # v3.25.1 每日流量归集
     # Start background agent metrics collector
-    asyncio.create_task(background_agent_collector())
-    asyncio.create_task(performance_index_task())
-    asyncio.create_task(metric_rollup_loop())
+    _start_periodic("agent-metrics", background_agent_collector)
+    _start_periodic("performance-index", performance_index_task)
+    _start_periodic("metric-rollup", metric_rollup_loop)
     # v3.26: 告警引擎 + 数据保留后台任务
-    asyncio.create_task(alerting_loop())    # 每 60s 一轮评估（ALERTING_ENABLED=false 关闭）
-    asyncio.create_task(cert_scan_loop())    # v3.27 D1 证书扫描（CERT_SCAN_ENABLED=false 关闭）
-    asyncio.create_task(log_scan_loop())    # v3.27 D2 日志扫描（LOG_SCAN_ENABLED=false 关闭）
-    asyncio.create_task(backup_check_loop())    # v3.27 D3 备份验证（BACKUP_CHECK_ENABLED=false 关闭）
-    asyncio.create_task(image_check_loop())    # v3.27 D4 镜像检查（IMAGE_CHECK_ENABLED=false 关闭）
+    _start_periodic("alerting", alerting_loop)    # 每 60s 一轮评估（ALERTING_ENABLED=false 关闭）
+    _start_periodic("cert-scan", cert_scan_loop)    # v3.27 D1 证书扫描（CERT_SCAN_ENABLED=false 关闭）
+    _start_periodic("log-scan", log_scan_loop)    # v3.27 D2 日志扫描（LOG_SCAN_ENABLED=false 关闭）
+    _start_periodic("backup-check", backup_check_loop)    # v3.27 D3 备份验证（BACKUP_CHECK_ENABLED=false 关闭）
+    _start_periodic("image-check", image_check_loop)    # v3.27 D4 镜像检查（IMAGE_CHECK_ENABLED=false 关闭）
     # API first, stale Agent upgrades afterwards. This never blocks startup.
-    asyncio.create_task(asyncio.to_thread(_upgrade_outdated_agents_once))
-    asyncio.create_task(report_loop())    # v3.28 R2 日报（REPORT_ENABLED=false 关闭）
-    asyncio.create_task(retention_loop())   # 每天 01:00 清理过期数据
+    _start_periodic("agent-upgrade", lambda: asyncio.to_thread(_upgrade_outdated_agents_once))
+    _start_periodic("report", report_loop)    # v3.28 R2 日报（REPORT_ENABLED=false 关闭）
+    _start_periodic("retention", retention_loop)   # 每天 01:00 清理过期数据
     seed_default_rules()
     seed_cert_rule()
     seed_backup_rule()                    # 幂等 seed 默认规则（仅空表时写入）
@@ -1303,6 +1437,18 @@ async def startup():
     _migrate_groups_json()
     # Auto-assign groups on startup
     _auto_assign_all_groups()
+    # v5.0.0: 中间件接入初始化（MQ worker / Nacos 发布；全部 fail-open）
+    _init_middleware()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    tasks = tuple(_BACKGROUND_TASKS)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    task_queue.stop_worker()
 
 
 # === Server APIs ===
@@ -1337,15 +1483,25 @@ def list_servers():
                 "log_agent_checked_at": s.log_agent_checked_at.isoformat() if s.log_agent_checked_at else None,
                 "remark": s.remark or "",
                 "last_error": s.last_error or "",
+                "lan_ip": s.lan_ip or "",
+                "wireguard_ip": s.wireguard_ip or "",
+                "preferred_management_channel": s.preferred_management_channel or "auto",
+                "management_address_override": s.management_address_override or "",
+                "cluster_id": str(s.cluster_id) if s.cluster_id else "",
+                "kubernetes_node_name": s.kubernetes_node_name or "",
+                "node_role": s.node_role or "",
+                "runtime_type": s.runtime_type or "",
             })
         return result
 
 def _deploy_agent_background(server_id: str, password: Optional[str] = None):
     """Deploy Agent after the create response so host management stays responsive."""
+    task = AGENT_TASKS.start(server_id, kind="agent_deploy")
     try:
         with get_db() as db:
             srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
             if not srv:
+                AGENT_TASKS.finish(server_id, success=False, error="server deleted during deploy")
                 return
             db.expunge(srv)
         if srv.agent_type == "local" and not CONTAINERIZED:
@@ -1360,6 +1516,7 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
         with get_db() as db:
             row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
             if not row:
+                AGENT_TASKS.finish(server_id, success=False, error="server deleted during deploy")
                 return
             if result.get("success"):
                 row.agent_status = "running"
@@ -1370,6 +1527,11 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_status = "error"
                 row.last_error = result.get("message", "Agent 部署失败")[-1000:]
             db.commit()
+        AGENT_TASKS.finish(
+            server_id, success=bool(result.get("success")),
+            message=result.get("message") or ("Agent 已就绪" if result.get("success") else ""),
+            error=result.get("message") if not result.get("success") else "",
+        )
     except Exception as exc:
         with get_db() as db:
             row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
@@ -1377,6 +1539,7 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_status = "error"
                 row.last_error = str(exc)[-1000:]
                 db.commit()
+        AGENT_TASKS.finish(server_id, success=False, error=str(exc))
 
 
 def _version_parts(value: Optional[str]) -> tuple[int, ...]:
@@ -1386,11 +1549,12 @@ def _version_parts(value: Optional[str]) -> tuple[int, ...]:
 
 def _fetch_monitoring_sample(server, host=None):
     """Prefer lightweight system metrics; old Agents fall back to /metrics."""
-    target = host or resolve_agent_host(server)
-    data = fetch_agent_system_summary(target, server.agent_port or 19100, server.agent_token or "")
-    if data is None and _version_parts(getattr(server, "agent_version", None)) < (2, 4, 0):
-        data = fetch_agent_metrics(target, server.agent_port or 19100, server.agent_token or "")
-    return data
+    def fetch(target):
+        data = fetch_agent_system_summary(target, server.agent_port or 19100, server.agent_token or "")
+        if data is None and _version_parts(getattr(server, "agent_version", None)) < (2, 4, 0):
+            data = fetch_agent_metrics(target, server.agent_port or 19100, server.agent_token or "")
+        return data
+    return fetch(host) if host else fetch_from_agent(server, fetch)
 
 
 def _upgrade_outdated_agents_once() -> list[str]:
@@ -1427,6 +1591,11 @@ def create_server(data: ServerCreate, background_tasks: BackgroundTasks):
             tags=data.tags, is_local=data.is_local, remark=data.remark,
             agent_type="local" if data.is_local else "remote",
             agent_status="deploying" if (not data.is_local and data.auto_deploy_agent and (data.ssh_password or data.ssh_key)) else "not_deployed",
+            lan_ip=data.lan_ip, wireguard_ip=data.wireguard_ip,
+            preferred_management_channel=data.preferred_management_channel or "auto",
+            management_address_override=data.management_address_override,
+            kubernetes_node_name=data.kubernetes_node_name,
+            node_role=data.node_role, runtime_type=data.runtime_type,
         )
         db.add(srv)
         db.commit()
@@ -1434,7 +1603,8 @@ def create_server(data: ServerCreate, background_tasks: BackgroundTasks):
         server_id = str(srv.id)
         result = {"id": server_id, "name": srv.name, "host": srv.host, "agent_status": srv.agent_status}
     if result["agent_status"] == "deploying":
-        background_tasks.add_task(_deploy_agent_background, server_id, data.ssh_password)
+        # v5.0.0：MQ 可用时走 RabbitMQ 任务队列，否则回退 BackgroundTasks
+        _dispatch_agent_deploy(background_tasks, server_id, data.ssh_password)
     return result
 
 @app.get("/api/v2/servers/{server_id}")
@@ -1450,6 +1620,12 @@ def get_server(server_id: str):
             "docker_available": srv.docker_available, "is_local": srv.is_local, "agent_type": srv.agent_type,
             "last_seen": srv.last_seen.isoformat() if srv.last_seen else None,
             "remark": srv.remark or "", "has_credentials": bool(srv.ssh_key),
+            "lan_ip": srv.lan_ip or "", "wireguard_ip": srv.wireguard_ip or "",
+            "preferred_management_channel": srv.preferred_management_channel or "auto",
+            "management_address_override": srv.management_address_override or "",
+            "cluster_id": str(srv.cluster_id) if srv.cluster_id else "",
+            "kubernetes_node_name": srv.kubernetes_node_name or "",
+            "node_role": srv.node_role or "", "runtime_type": srv.runtime_type or "",
         }
 
 @app.put("/api/v2/servers/{server_id}")
@@ -1546,11 +1722,9 @@ def scan_server(server_id: str, password: Optional[str] = None):
             raise HTTPException(404, "Server not found")
         
         # Unified: All servers use Agent-first approach
-        agent_host = resolve_agent_host(srv)
-        
         # Try Agent if deployed and running
         if srv.agent_status == "running" and srv.agent_port:
-            scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+            scan_data = fetch_from_agent(srv, lambda host: trigger_agent_scan(host, srv.agent_port or 19100, srv.agent_token or ""))
             if scan_data:
                 result = _sync_agent_scan_to_db(srv, db, scan_data)
                 port_result = _sync_port_driven_scan(srv, db, scan_data)
@@ -1611,7 +1785,7 @@ def test_server(server_id: str, password: Optional[str] = None):
         if srv.agent_type == "local" and not CONTAINERIZED:
             # Local server: try Agent health check
             try:
-                agent_data = fetch_agent_metrics(resolve_agent_host(srv), srv.agent_port or 19100, srv.agent_token or "")
+                agent_data = fetch_from_agent(srv, lambda host: fetch_agent_metrics(host, srv.agent_port or 19100, srv.agent_token or ""))
                 if agent_data:
                     srv.status = ServerStatus.online.value
                     srv.last_seen = datetime.utcnow()
@@ -1639,7 +1813,7 @@ def test_server(server_id: str, password: Optional[str] = None):
 
 
 @app.post("/api/v2/test-ssh")
-def test_ssh_connection_api(data: SshTestRequest):
+def test_ssh_connection_api(data: SshTestRequest, user: object = Depends(require_operator)):
     """Test SSH connection with provided credentials (before creating server)."""
     from app.ssh_manager import test_ssh_connection
     if not data.password and not data.ssh_key:
@@ -1667,11 +1841,10 @@ def get_agent_services(server_id: str):
             raise HTTPException(400, f"Agent未运行 (status={srv.agent_status})")
     
     # Try Agent scan
-    agent_host = resolve_agent_host(srv)
-    data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+    data = fetch_from_agent(srv, lambda host: trigger_agent_scan(host, srv.agent_port or 19100, srv.agent_token or ""))
     if not data:
         # Fallback: try cached services
-        data = fetch_agent_services(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+        data = fetch_from_agent(srv, lambda host: fetch_agent_services(host, srv.agent_port or 19100, srv.agent_token or ""))
     if not data:
         raise HTTPException(502, "Agent连接失败，请检查Agent是否正常运行")
     
@@ -2418,11 +2591,9 @@ def scan_server_services(server_id: str, password: Optional[str] = None):
         if not srv:
             raise HTTPException(404, "Server not found")
         
-        agent_host = resolve_agent_host(srv)
-        
         # Unified: all servers use Agent-first approach
         if srv.agent_status == "running" and srv.agent_port:
-            scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+            scan_data = fetch_from_agent(srv, lambda host: trigger_agent_scan(host, srv.agent_port or 19100, srv.agent_token or ""))
             if scan_data:
                 result = _sync_agent_scan_to_db(srv, db, scan_data)
                 port_result = _sync_port_driven_scan(srv, db, scan_data)
@@ -2642,15 +2813,16 @@ def toggle_pin(service_id: str):
 def _agent_request(server, path, timeout=5):
     """向 Agent 发起 HTTP 请求，返回 JSON 或 None。"""
     import requests as req
-    host = resolve_agent_host(server)
     port = server.agent_port or 19100
     token = server.agent_token or ""
-    try:
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-        resp = req.get(f"http://{host}:{port}{path}", headers=headers, timeout=timeout)
-        return resp.json() if resp.status_code == 200 else None
-    except Exception:
-        return None
+    def fetch(host):
+        try:
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            resp = req.get(f"http://{host}:{port}{path}", headers=headers, timeout=timeout)
+            return resp.json() if resp.status_code == 200 else None
+        except Exception:
+            return None
+    return fetch_from_agent(server, fetch)
 
 
 @app.get("/api/v2/monitor/{server_id}/network")
@@ -2985,9 +3157,8 @@ def _scan_all_impl():
         for srv in servers:
             sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "", "added": 0, "updated": 0, "status": "ok"}
             try:
-                agent_host = resolve_agent_host(srv)
                 if srv.agent_status == "running" and srv.agent_port:
-                    scan_data = trigger_agent_scan(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+                    scan_data = fetch_from_agent(srv, lambda host: trigger_agent_scan(host, srv.agent_port or 19100, srv.agent_token or ""))
                     if scan_data:
                         result = _sync_agent_scan_to_db(srv, db, scan_data)
                         port_result = _sync_port_driven_scan(srv, db, scan_data)
@@ -3094,8 +3265,7 @@ def get_monitor(server_id: str):
     
     # All servers: try Agent first
     if srv.agent_status == "running" and srv.agent_port:
-        agent_host = resolve_agent_host(srv)
-        agent_data = fetch_agent_metrics(agent_host, srv.agent_port or 19100, srv.agent_token or "")
+        agent_data = fetch_from_agent(srv, lambda host: fetch_agent_metrics(host, srv.agent_port or 19100, srv.agent_token or ""))
         if agent_data:
             containers = agent_data.get("containers", [])
             # Calculate rate metrics from cumulative Agent values
@@ -3360,7 +3530,7 @@ def list_categories(server_id: Optional[str] = None):
 # === Agent Management APIs ===
 
 @app.post("/api/v2/servers/{server_id}/deploy-agent")
-def deploy_agent_api(server_id: str):
+def deploy_agent_api(server_id: str, user: object = Depends(require_operator)):
     """Deploy or re-deploy OpsAgent on a remote server."""
     with get_db() as db:
         srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
@@ -3434,7 +3604,8 @@ def agent_version_api():
 
 
 @app.post("/api/v2/servers/{server_id}/upgrade-agent", status_code=202)
-def upgrade_agent_async(server_id: str, background_tasks: BackgroundTasks):
+def upgrade_agent_async(server_id: str, background_tasks: BackgroundTasks,
+                        user: object = Depends(require_operator)):
     try:
         server_uuid = uuid.UUID(server_id)
     except ValueError:
@@ -3447,12 +3618,14 @@ def upgrade_agent_async(server_id: str, background_tasks: BackgroundTasks):
             raise HTTPException(400, "主机未配置 SSH 凭证，无法升级 Agent")
         server.agent_status = "deploying"
         db.commit()
-    background_tasks.add_task(_deploy_agent_background, server_id)
-    return {"accepted": True, "server_id": server_id, "target_version": get_agent_version()}
+    task = AGENT_TASKS.start(server_id, kind="upgrade")
+    _dispatch_agent_deploy(background_tasks, server_id)
+    return {"accepted": True, "server_id": server_id, "task_id": task["task_id"], "target_version": get_agent_version()}
 
 
 @app.post("/api/v2/agents/upgrade-outdated", status_code=202)
-def upgrade_outdated_agents(background_tasks: BackgroundTasks):
+def upgrade_outdated_agents(background_tasks: BackgroundTasks,
+                            user: object = Depends(require_operator)):
     current = get_agent_version()
     with get_db() as db:
         targets = [
@@ -3466,7 +3639,7 @@ def upgrade_outdated_agents(background_tasks: BackgroundTasks):
             )
             db.commit()
     for server_id in targets:
-        background_tasks.add_task(_deploy_agent_background, server_id)
+        _dispatch_agent_deploy(background_tasks, server_id)
     return {"accepted": len(targets), "server_ids": targets, "target_version": current}
 
 
@@ -3547,7 +3720,7 @@ def _collect_agent_metrics():
         with get_db() as db:
             targets = [
                 SimpleNamespace(
-                    id=srv.id, host=srv.host, agent_type=srv.agent_type,
+                    id=srv.id, host=srv.host, lan_ip=srv.lan_ip, agent_type=srv.agent_type,
                     agent_port=srv.agent_port or 19100, agent_token=srv.agent_token or "",
                     agent_version=srv.agent_version,
                 )
@@ -3662,7 +3835,7 @@ def get_agent_metrics_api(server_id: str):
     if srv.agent_status != "running":
         return {"error": "Agent未运行", "agent_status": srv.agent_status}
     
-    data = fetch_agent_metrics(resolve_agent_host(srv), srv.agent_port or 19100, srv.agent_token or "")
+    data = fetch_from_agent(srv, lambda host: fetch_agent_metrics(host, srv.agent_port or 19100, srv.agent_token or ""))
     if not data:
         # Update status
         with get_db() as db:
@@ -3808,7 +3981,8 @@ def get_stats():
 
 # === URL-based Health Check (for manual services) ===
 @app.get("/api/v2/health-check-url")
-def health_check_url(url: str = Query(..., description="URL to check")):
+def health_check_url(url: str = Query(..., description="URL to check"),
+                     user: object = Depends(require_operator)):
     """Check if a URL is reachable from server side (handles HTTPS/self-signed certs)."""
     import requests as req
     import urllib.parse
@@ -4140,7 +4314,8 @@ def list_all_services(server_id: Optional[str] = None):
 # === SSH Terminal Endpoints ===
 
 @app.post("/api/v2/terminal/sessions")
-async def api_create_terminal_session(req: TerminalCreateRequest):
+async def api_create_terminal_session(req: TerminalCreateRequest,
+                                      user: object = Depends(require_operator)):
     """Create a new SSH terminal session"""
     if req.mode not in ("host", "container"):
         raise HTTPException(400, "mode 仅支持 host / container")
@@ -4160,7 +4335,8 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         srv_name = srv.name
         # Local server: use 127.0.0.1 instead of public IP (cannot loopback via public IP on cloud)
         srv_is_local = srv.agent_type == "local" and not CONTAINERIZED
-        srv_host = "127.0.0.1" if srv_is_local else srv.host
+        management_hosts = ("127.0.0.1",) if srv_is_local else resolve_management_hosts(srv)
+        srv_host = management_hosts[0] if management_hosts else srv.host
         srv_port = srv.ssh_port or 22
         srv_user = srv.ssh_user or "root"
         # ssh_key field stores either a real key or __password__<password>
@@ -4181,6 +4357,7 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
         key_content=srv_key,
         initial_command=initial_command,
         local=srv_is_local,
+        fallback_hosts=management_hosts[1:],
     )
     if err:
         raise HTTPException(400, err)
@@ -4195,7 +4372,7 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
     return {
         "session_id": sid,
         "server_name": srv_name,
-        "server_host": srv_host,
+        "server_host": getattr(session, "host", srv_host),
         "user": srv_user,
         "mode": req.mode,
         "container_id": req.container_id if req.mode == "container" else None,
@@ -4206,6 +4383,24 @@ async def api_create_terminal_session(req: TerminalCreateRequest):
 @app.websocket("/ws/terminal/{session_id}")
 async def ws_terminal(websocket: WebSocket, session_id: str):
     """WebSocket proxy for SSH terminal, supports reconnect within grace period"""
+    # v5.0.0 安全加固：同源 Origin 校验 + OPERATOR_TOKEN（可选）校验
+    origin = websocket.headers.get("origin")
+    if origin:
+        from urllib.parse import urlparse as _urlparse
+        origin_host = (_urlparse(origin).hostname or "").lower()
+        req_host = (websocket.headers.get("host") or "").split(":")[0].lower()
+        allowed = {req_host} if req_host else set()
+        allowed |= {h.strip().lower() for h in os.getenv("OPS_ALLOWED_WS_ORIGINS", "").split(",") if h.strip()}
+        if origin_host and req_host and origin_host not in allowed:
+            await websocket.close(code=4403, reason="Origin not allowed")
+            return
+    try:
+        from app.auth import check_access_token
+        if not check_access_token(websocket.query_params.get("token")):
+            await websocket.close(code=4401, reason="Unauthorized")
+            return
+    except Exception:
+        pass
     session = get_session(session_id)
     if not session:
         await websocket.close(code=4004, reason="Invalid or expired session")

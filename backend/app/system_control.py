@@ -12,7 +12,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app.agent_manager import fetch_agent_metrics, fetch_agent_processes, fetch_agent_system_summary, resolve_agent_host
+from app.agent_manager import fetch_agent_metrics, fetch_agent_processes, fetch_agent_system_summary, fetch_from_agent
 from app.auth import get_current_user
 from app.config import CONTAINERIZED, PREVIEW_MODE
 from app.database import get_db
@@ -143,15 +143,19 @@ def system_summary(server_id: str, refresh: bool = Query(False)):
             "cached": False, "stale": False, "cache_age_seconds": 0, "cache_ttl_seconds": _SUMMARY_CACHE_TTL,
             "duration_ms": round((time.perf_counter() - started) * 1000, 2),
         }
-    host = resolve_agent_host(server)
     data = None
     source = "agent"
     modern_agent = _version_parts(server.agent_version) >= (2, 4, 0)
     if server.agent_status == "running":
-        data = fetch_agent_system_summary(host, server.agent_port or 19100, server.agent_token or "")
-        if data is None and not modern_agent:
-            data = fetch_agent_metrics(host, server.agent_port or 19100, server.agent_token or "")
-            source = "agent-legacy"
+        def fetch(host):
+            nonlocal source
+            result = fetch_agent_system_summary(host, server.agent_port or 19100, server.agent_token or "")
+            if result is None and not modern_agent:
+                result = fetch_agent_metrics(host, server.agent_port or 19100, server.agent_token or "")
+                if result is not None:
+                    source = "agent-legacy"
+            return result
+        data = fetch_from_agent(server, fetch)
     if data is None and server.agent_type != "local" and not modern_agent:
         client = get_ssh_client(server)
         if client:
@@ -216,10 +220,12 @@ def list_processes(server_id: str, search: str = Query("", max_length=80), user:
         rows = [row for row in rows if (not needle or needle in f"{row['pid']} {row['command']} {row['user']}".lower()) and (not user or row["user"] == user) and (not state or row["state"].startswith(state))]
         rows.sort(key=lambda row: row["cpu_percent" if sort == "cpu" else "memory_percent"], reverse=True)
         return {"items": rows[:limit], "total": len(rows), "timestamp": time.time(), "source": "preview"}
-    host = resolve_agent_host(server)
     result = None
     if server.agent_status == "running":
-        result = fetch_agent_processes(host, server.agent_port or 19100, server.agent_token or "", search=search, user=user, state=state, sort=sort, limit=limit)
+        result = fetch_from_agent(server, lambda host: fetch_agent_processes(
+            host, server.agent_port or 19100, server.agent_token or "",
+            search=search, user=user, state=state, sort=sort, limit=limit,
+        ))
     if result is not None:
         return {**result, "source": "agent"}
     if server.agent_type == "local" and not CONTAINERIZED:

@@ -1,0 +1,79 @@
+# OpsCenter vm1（VM100）测试环境 —— 需求基线 2026-09-10 §12 阶段5：隔离数据库 + 只读 K8s 凭据
+# 部署位置：vm1:/opt/opscenter-test/（目录结构复刻仓库根，作为 build context）
+# 与生产完全隔离：独立 PG 实例、独立端口（web 8090 / backend 仅 127.0.0.1:9092）、
+# K3s 访问使用 opscenter-test-readonly 只读 ServiceAccount（无写权限，已验证 403）。
+name: opscenter-test
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: opscenter
+      POSTGRES_PASSWORD: ${OPS_TEST_POSTGRES_PASSWORD:?set OPS_TEST_POSTGRES_PASSWORD}
+      POSTGRES_DB: opscenter
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=80"]
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opscenter -d opscenter"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    mem_limit: 640m
+
+  loki:
+    image: grafana/loki:3.7.2
+    command: -config.file=/etc/loki/loki-test.yaml
+    volumes:
+      - ./loki-test.yaml:/etc/loki/loki-test.yaml:ro
+      - ./data/loki:/loki
+    restart: unless-stopped
+    mem_limit: 384m
+
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/docker/backend.Dockerfile
+    image: opscenter/backend:5.0.0-test
+    environment:
+      DATABASE_URL: postgresql+psycopg://opscenter:${OPS_TEST_POSTGRES_PASSWORD:?set OPS_TEST_POSTGRES_PASSWORD}@db:5432/opscenter
+      CONTAINERIZED: "true"
+      LOCAL_AGENT_HOST: host.docker.internal
+      LOKI_URL: http://loki:3100
+      GROUPS_JSON_PATH: /opt/opscenter/frontend/groups.json
+      K8S_API_URL: https://k8s-master-01:6443
+      K8S_TOKEN_FILE: /run/k8s-test/token
+      K8S_CA_PATH: /run/k8s-test/ca.crt
+    volumes:
+      - ./k8s/token:/run/k8s-test/token:ro
+      - ./k8s/ca.crt:/run/k8s-test/ca.crt:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+      # k3s API 证书 SAN 含 k8s-master-01；用主机名经 WG 直连，TLS 域名校验通过
+      - k8s-master-01:10.66.66.13
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:9092:9091
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:9091/openapi.json', timeout=5)\""]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    mem_limit: 768m
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/docker/frontend.Dockerfile
+    image: opscenter/frontend:5.0.0-test
+    depends_on:
+      - backend
+    ports:
+      - 8090:80
+    restart: unless-stopped
+    mem_limit: 128m
