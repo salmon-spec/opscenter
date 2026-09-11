@@ -64,7 +64,11 @@ def test_lightweight_metrics_counts_containers_without_docker_stats(monkeypatch)
     assert data["container_running"] == 1
     assert data["container_stopped"] == 1
     assert data["container_stats"] == []
-    assert calls == [["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"]]
+    # 只校验 docker 相关调用：Linux 下 collect_metrics 间接触发的 platform.processor()
+    # 会额外执行一次 `uname -p`（CPython 在 Linux 的实现走 subprocess，Windows 不会），
+    # 用全量相等断言会让本用例只在 Linux/CI 失败。原意是“轻量采集只跑 docker ps，不跑 docker stats”。
+    docker_calls = [c for c in calls if c and c[0] == "docker"]
+    assert docker_calls == [["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}|{{.Status}}|{{.Ports}}"]]
 
 
 def test_check_auth_rejects_empty_token():

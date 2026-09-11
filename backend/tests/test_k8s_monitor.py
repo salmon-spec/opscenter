@@ -368,6 +368,11 @@ def test_unknown_cluster_404(k8s_env):
 
 def test_mode_none_returns_503(monkeypatch):
     monkeypatch.setattr(k8c, "get_client", lambda: k8c.K8sClient(transport=httpx.MockTransport(_mock_handler)))
+    # 屏蔽“集群内运行”的自动探测：CI 在 K8s Pod 内跑时存在 SA token + KUBERNETES_SERVICE_HOST，
+    # 会被判为 in_cluster，与本用例前提（mode=none → 503）冲突。
+    monkeypatch.setattr(k8c, "_IN_CLUSTER_TOKEN_PATH", "/nonexistent/ci-sa-token")
+    for var in ("KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT_HTTPS", "KUBERNETES_SERVICE_PORT"):
+        monkeypatch.delenv(var, raising=False)
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     res = client.get("/api/v2/clusters")
