@@ -9,6 +9,7 @@ spec:
   replicas: 1
   template:
     spec:
+      serviceAccountName: opscenter-reader
       containers:
         - name: backend
           envFrom:

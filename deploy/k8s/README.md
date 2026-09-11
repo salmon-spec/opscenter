@@ -7,14 +7,20 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
 ## 发布前准备
 
 1. 确认 `middleware` 命名空间中的依赖及 DNS 可用。
-2. 应用 OpsCenter 入站策略。`10.42.0.0/16` 是当前 K3s Pod CIDR；如集群
+2. 创建专用只读 ServiceAccount；它不授予 Secret 读取或工作负载写权限：
+
+   ```sh
+   kubectl apply -f deploy/k8s/opscenter-reader-rbac.yaml
+   ```
+
+3. 应用 OpsCenter 入站策略。`10.42.0.0/16` 是当前 K3s Pod CIDR；如集群
    Pod CIDR 不同，发布前必须同步修改：
 
    ```sh
    kubectl apply -f deploy/k8s/opscenter-networkpolicy.yaml
    ```
-3. 复制 `opscenter-v5-secrets.env.example` 到仓库外，替换所有 `CHANGE_ME`。
-4. 创建或更新中间件连接 Secret（不要把真实值写入 YAML 或 Git）。登录、
+4. 复制 `opscenter-v5-secrets.env.example` 到仓库外，替换所有 `CHANGE_ME`。
+5. 创建或更新中间件连接 Secret（不要把真实值写入 YAML 或 Git）。登录、
    JWT、数据库加密密钥继续由原有 `opscenter-env` Secret 管理，避免重复定义：
 
    ```sh
@@ -23,7 +29,7 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
      --dry-run=client -o yaml | kubectl apply -f -
    ```
 
-5. 应用非敏感配置，并把补丁合并到现有 backend Deployment：
+6. 应用非敏感配置，并把补丁合并到现有 backend Deployment：
 
    ```sh
    kubectl apply -f deploy/k8s/opscenter-v5-config.yaml
@@ -31,7 +37,7 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
      --patch-file deploy/k8s/backend-v5.patch.yaml
    ```
 
-6. 后端挂载的 `/opt/opscenter/frontend` 必须来自可写持久卷，否则 SSH
+7. 后端挂载的 `/opt/opscenter/frontend` 必须来自可写持久卷，否则 SSH
    `known_hosts` 只能在 Pod 生命周期内保存。
 
 ## 启用顺序
