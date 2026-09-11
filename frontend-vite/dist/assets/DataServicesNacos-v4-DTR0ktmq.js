@@ -1,1 +1,0 @@
-import{D as o}from"./DataServiceKind-v4-DkdXiVCx.js";import{o as r,b as a}from"./vendor-vue-v4-qizaePFN.js";import"./index-v4-VVhUzcbk.js";import"./dataservices-v4-IANy8HMt.js";import"./envelope-v4-oN_8dg8Z.js";const _={__name:"DataServicesNacos",setup(t){return(e,c)=>(r(),a(o,{kind:"nacos"}))}};export{_ as default};

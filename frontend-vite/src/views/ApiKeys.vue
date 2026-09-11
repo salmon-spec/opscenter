@@ -56,6 +56,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { api, fmtTime, toast } from '../api'
+import { copyToClipboard } from '../utils/clipboard'
 import EmptyState from '../components/EmptyState.vue'
 
 const keys = ref([])
@@ -93,7 +94,7 @@ async function createKey() {
 
 async function copyToken() {
   try {
-    await navigator.clipboard.writeText(createdToken.value)
+    await copyToClipboard(createdToken.value)
     toast('已复制', 'ok')
   } catch {
     toast('复制失败，请手动选择复制', 'err')

@@ -103,6 +103,7 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { api, fmtDuration, fmtTime, toast } from '../api'
+import { copyToClipboard } from '../utils/clipboard'
 
 const props = defineProps({ visible: Boolean, service: { type: Object, default: null } })
 const emit = defineEmits(['close', 'updated', 'deleted'])
@@ -139,7 +140,7 @@ async function probeNow(){probing.value=true;try{await api.post(`/services/plaza
 async function ackIncident(){try{await api.post(`/services/plaza/incidents/${detail.value.active_incident.id}/acknowledge`);await loadDetail();toast('事件已确认','success')}catch(error){toast(error.message,'error')}}
 async function createSilence(){const reason=window.prompt('请输入静默原因','计划维护');if(!reason)return;try{await api.post('/services/plaza/silences',{plaza_key:plazaKey.value,ends_at:new Date(Date.now()+2*60*60*1000).toISOString(),reason});await loadDetail();toast('已静默 2 小时','success')}catch(error){toast(error.message,'error')}}
 async function endSilence(){if(!confirm('确认提前结束该静默？'))return;try{await api.del(`/services/plaza/silences/${detail.value.active_silence.id}`);await loadDetail();toast('静默已结束','success')}catch(error){toast(error.message,'error')}}
-async function copyText(value,label){try{await navigator.clipboard.writeText(value);toast(`${label}已复制`,'success')}catch{toast(`无法复制${label}，请手动选择`,'error')}}
+async function copyText(value,label){try{await copyToClipboard(value);toast(`${label}已复制`,'success')}catch{toast(`无法复制${label}，请手动选择`,'error')}}
 watch(()=>[props.visible,props.service?.id,props.service?.key],([visible])=>{if(!visible){detail.value=null;editing.value=false;clearReveal();return}loadDetail()},{immediate:true})
 onBeforeUnmount(clearReveal)
 </script>
