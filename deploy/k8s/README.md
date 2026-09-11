@@ -14,7 +14,8 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
    kubectl apply -f deploy/k8s/opscenter-networkpolicy.yaml
    ```
 3. 复制 `opscenter-v5-secrets.env.example` 到仓库外，替换所有 `CHANGE_ME`。
-4. 创建或更新 Secret（不要把真实值写入 YAML 或 Git）：
+4. 创建或更新中间件连接 Secret（不要把真实值写入 YAML 或 Git）。登录、
+   JWT、数据库加密密钥继续由原有 `opscenter-env` Secret 管理，避免重复定义：
 
    ```sh
    kubectl -n opscenter create secret generic opscenter-middleware-secrets \

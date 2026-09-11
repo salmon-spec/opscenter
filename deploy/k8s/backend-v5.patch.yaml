@@ -12,6 +12,10 @@ spec:
       containers:
         - name: backend
           envFrom:
+            - secretRef:
+                name: opscenter-env
+            - configMapRef:
+                name: opscenter-env-fixed
             - configMapRef:
                 name: opscenter-middleware-config
             - secretRef:
