@@ -1,7 +1,7 @@
 <template>
   <div class="demo-shell">
     <aside class="demo-side">
-      <div class="brand"><span>O</span><div><b>运维工作台</b><small>v5.0.1 · 交互预览</small></div></div>
+      <div class="brand"><span>O</span><div><b>运维工作台</b><small>v5.0.2 · 交互预览</small></div></div>
       <nav>
         <button v-for="item in navItems" :key="item.key" :class="{active:activeNav===item.key}" @click="openPage(item)"><i>{{ item.icon }}</i>{{ item.label }}</button>
       </nav>

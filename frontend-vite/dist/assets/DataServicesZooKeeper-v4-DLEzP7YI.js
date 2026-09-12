@@ -1,1 +1,0 @@
-import{D as e}from"./DataServiceKind-v4-D-i-tLsp.js";import{o,b as r}from"./vendor-vue-v4-qizaePFN.js";import"./index-v4-COE4u4Lf.js";import"./dataservices-v4-B7Eow7jl.js";import"./envelope-v4-oN_8dg8Z.js";const _={__name:"DataServicesZooKeeper",setup(t){return(a,p)=>(o(),r(e,{kind:"zookeeper"}))}};export{_ as default};

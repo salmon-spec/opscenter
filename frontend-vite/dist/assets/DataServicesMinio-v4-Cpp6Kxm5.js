@@ -1,1 +1,0 @@
-import{D as o}from"./DataServiceKind-v4-D-i-tLsp.js";import{o as r,b as t}from"./vendor-vue-v4-qizaePFN.js";import"./index-v4-COE4u4Lf.js";import"./dataservices-v4-B7Eow7jl.js";import"./envelope-v4-oN_8dg8Z.js";const _={__name:"DataServicesMinio",setup(e){return(i,a)=>(r(),t(o,{kind:"minio"}))}};export{_ as default};

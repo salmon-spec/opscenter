@@ -10,5 +10,5 @@ window.OpsConfig = {
   refreshInterval: 30,
   maxRecentItems: 10,
   maxRecentDisplay: 5,
-  version: 'v5.0.1',
+  version: 'v5.0.2',
 };

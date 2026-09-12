@@ -1,4 +1,4 @@
-# OpsCenter v5.0.1 K3s 配置契约
+# OpsCenter v5.0.2 K3s 配置契约
 
 本目录只管理 OpsCenter 如何接入现有 `middleware` 命名空间，不复制或接管
 PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的生命周期。
@@ -57,7 +57,7 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
 kubectl -n opscenter rollout status deployment/backend --timeout=180s
 kubectl -n opscenter get pod,svc
 kubectl -n opscenter logs deployment/backend --tail=200
-curl -fsS http://10.66.66.15:30088/openapi.json | grep -q '"version":"5.0.1"'
+curl -fsS http://10.66.66.15:30088/openapi.json | grep -q '"version":"5.0.2"'
 curl -fsS http://10.66.66.15:30088/api/v2/data-services/overview
 ```
 
