@@ -1,1 +1,0 @@
-import{D as a}from"./DataServiceKind-v4-7y0S0p3y.js";import{o as r,b as t}from"./vendor-vue-v4-qizaePFN.js";import"./index-v4-B8N3x6Pc.js";import"./dataservices-v4-CHXNQcYV.js";import"./envelope-v4-oN_8dg8Z.js";const _={__name:"DataServicesKafka",setup(e){return(o,c)=>(r(),t(a,{kind:"kafka"}))}};export{_ as default};

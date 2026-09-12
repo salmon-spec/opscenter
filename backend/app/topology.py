@@ -747,7 +747,7 @@ def _cached_wireguard_snapshot() -> Optional[dict]:
 _SCREEN_CACHE_TTL = 5.0
 _SCREEN_MAX_WORKERS = 6
 _SCREEN_CACHE_LOCK = threading.Lock()
-_SCREEN_CACHE: dict = {"payload": None, "etag": "", "stored_at": 0.0, "fingerprint": None, "data_timestamp": None}
+_SCREEN_CACHE: dict = {"payload": None, "etag": "", "stored_at": 0.0, "data_timestamp": None}
 # ETag 只对业务数据做哈希：剔除时间戳类易变字段，数据未变时 ETag 跨请求稳定（否则 304 永远不命中）
 _SCREEN_VOLATILE_KEYS = ("generated_at", "data_timestamp", "cached", "cache_age_seconds", "elapsed_ms")
 _TCP_PROBE_TIMEOUT = 2.0
@@ -758,30 +758,7 @@ _RESTART_TOP_LIMIT = 5
 def reset_screen_cache() -> None:
     """清空大屏响应缓存（测试与运维用）。"""
     with _SCREEN_CACHE_LOCK:
-        _SCREEN_CACHE.update(payload=None, etag="", stored_at=0.0, fingerprint=None, data_timestamp=None)
-
-
-def _screen_data_fingerprint(db) -> Optional[str]:
-    """大屏读到的关键表数据水位（count + max 时间戳），命中缓存前校验，DB 变更即失效。
-
-    单条 SQL 一次往返；metric_history 只取 max(timestamp)（有独立索引），避免大表 count。
-    查询失败返回 None（调用方视为缓存不可用，退化为每次重建）。
-    """
-    try:
-        row = db.execute(
-            text(
-                "SELECT "
-                "(SELECT count(*) FROM servers), (SELECT max(updated_at) FROM servers), "
-                "(SELECT count(*) FROM database_instances), (SELECT max(updated_at) FROM database_instances), "
-                "(SELECT count(*) FROM alert_events), (SELECT max(created_at) FROM alert_events), "
-                "(SELECT count(*) FROM plaza_health_states), (SELECT max(updated_at) FROM plaza_health_states), "
-                "(SELECT max(timestamp) FROM metric_history), "
-                "(SELECT count(*) FROM plaza_probe_results), (SELECT max(checked_at) FROM plaza_probe_results)"
-            )
-        ).fetchone()
-        return "|".join("" if v is None else str(v) for v in tuple(row))
-    except Exception:
-        return None
+        _SCREEN_CACHE.update(payload=None, etag="", stored_at=0.0, data_timestamp=None)
 
 
 def _screen_etag(payload: dict) -> str:
@@ -1392,7 +1369,7 @@ def get_screen_summary(
     - ETag/If-None-Match：业务数据哈希（不含时间戳类字段），命中返回 304 空体；
     - 5s 响应缓存（防击穿），命中时 cached=true 并带 cache_age_seconds。
     """
-    now_ts = time.time()
+    now_ts = time.monotonic()
     with _SCREEN_CACHE_LOCK:
         # TTL 内命中：直接返回内存载荷，不碰数据库
         fresh = (
@@ -1409,39 +1386,16 @@ def get_screen_summary(
     cached = fresh
 
     if not fresh:
-        # ponytail: 指纹 DB 往返只在响应缓存过期后才做——TTL 内的热命中零 DB 开销（本端点 P95 大头）。
-        # 代价：业务数据变化最坏晚 TTL(5s) 被指纹发现，与 5s 失效粒度一致；要更快失效就缩短 _SCREEN_CACHE_TTL。
-        fingerprint: Optional[str] = None
-        try:
-            with get_db() as db:
-                fingerprint = _screen_data_fingerprint(db)
-        except Exception:
-            fingerprint = None
+        # ponytail: TTL 到期就重建。综合载荷含 K3s/WG/日志等非 DB 数据，不能只凭 DB 指纹续期。
+        # 构建保持在锁外；若并发重复构建成为可测瓶颈，再增加 single-flight。
+        business, data_timestamp = _build_screen_business()
+        etag = _screen_etag(business)
         with _SCREEN_CACHE_LOCK:
-            # 双重检查：指纹未变则复用旧载荷并续期（业务数据没变就不必全量重算）
-            reuse = (
-                fingerprint is not None
-                and _SCREEN_CACHE.get("payload") is not None
-                and fingerprint == _SCREEN_CACHE.get("fingerprint")
+            _SCREEN_CACHE.update(
+                payload=business, etag=etag, stored_at=time.monotonic(),
+                data_timestamp=data_timestamp,
             )
-            if reuse:
-                business = _SCREEN_CACHE["payload"]
-                data_timestamp = _SCREEN_CACHE["data_timestamp"]
-                etag = _SCREEN_CACHE["etag"]
-                cache_age = round(now_ts - _SCREEN_CACHE["stored_at"], 3)
-                _SCREEN_CACHE["stored_at"] = now_ts
-                cached = True
-        if not reuse:
-            # ponytail: 全量构建放在锁外（幂等只读，允许并发重复构建），避免慢构建堵住其它请求。
-            # 若将来 QPS 高到重复构建成为负担，再加 single-flight 标志把构建收回锁内。
-            business, data_timestamp = _build_screen_business()
-            etag = _screen_etag(business)
-            with _SCREEN_CACHE_LOCK:
-                _SCREEN_CACHE.update(
-                    payload=business, etag=etag, stored_at=now_ts,
-                    fingerprint=fingerprint, data_timestamp=data_timestamp,
-                )
-            cache_age = 0.0
+        cache_age = 0.0
 
     if _match_if_none_match(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers={"ETag": f'"{etag}"'})

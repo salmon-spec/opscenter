@@ -19,7 +19,7 @@
       <button class="health-stat is-down" :disabled="sortMode" :class="{active:healthFilter==='down'}" @click="healthFilter='down'"><strong>{{ overview.summary.down ?? statusCount('down') }}</strong><span>离线</span></button>
       <button class="health-stat is-warn" :disabled="sortMode" :class="{active:healthFilter==='degraded'}" @click="healthFilter='degraded'"><strong>{{ overview.summary.degraded ?? statusCount('degraded') }}</strong><span>波动中</span></button>
       <button class="health-stat" :disabled="sortMode" :class="{active:healthFilter==='unknown'}" @click="healthFilter='unknown'"><strong>{{ (overview.summary.unknown ?? statusCount('unknown')) + (overview.summary.disabled ?? statusCount('disabled')) }}</strong><span>未检测 / 停用</span></button>
-      <div class="health-stat availability"><strong>{{ overview.summary.average_uptime_percent == null ? '-' : `${overview.summary.average_uptime_percent}%` }}</strong><span>24h 综合可用率</span><small v-if="overview.generated_at">统计于 {{ shortTime(overview.generated_at) }}</small></div>
+      <div class="health-stat availability"><strong>{{ overview.summary.average_uptime_percent == null ? '-' : `${overview.summary.average_uptime_percent}%` }}</strong><span>24h 综合可用率</span><small v-if="overview.data_timestamp || overview.generated_at" :class="{ stale: overview.stale }">{{ overview.stale ? '数据过期' : '探测于' }} {{ shortTime(overview.data_timestamp || overview.generated_at) }}</small></div>
     </div>
 
     <!-- 分组标签 -->
@@ -46,6 +46,7 @@
           <span>{{ s.server_name || '' }}</span>
           <span>{{ s.has_credentials ? '🔐 已配凭证' : (s.version ? `v${s.version}` : '') }}</span>
         </div>
+        <div v-if="!sortMode" class="svc-freshness" :class="{ stale: s.stale }">{{ serviceFreshnessText(s) }}</div>
         <div v-if="!sortMode" class="svc-actions">
           <a
             class="btn btn-primary btn-sm enter-btn"
@@ -214,7 +215,8 @@ function dropService(targetKey){const from=sortDraft.value.findIndex(item=>item.
 async function saveOrder(){orderSaving.value=true;try{await api.put('/services/plaza/order',{ordered_keys:sortDraft.value.map(item=>item.key)});services.value=[...sortDraft.value];localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}));cancelOrder();toast('服务顺序已保存','success')}catch(error){toast(`顺序保存失败：${error.message}`,'error')}finally{orderSaving.value=false}}
 
 function statusCount(status){return services.value.filter(s=>(s.status||'unknown')===status).length}
-function shortTime(value){const date=new Date(value);return Number.isNaN(date.getTime())?'-':date.toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'})}
+function shortTime(value){const numeric=typeof value==='number'||/^\d+(\.\d+)?$/.test(String(value||''));const date=new Date(numeric?Number(value)*1000:value);return Number.isNaN(date.getTime())?'-':date.toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'})}
+function serviceFreshnessText(service){if(service.probe_enabled===false||service.status==='disabled')return '未启用健康检查';const rawAge=service.status_age_seconds;const age=rawAge===null||rawAge===undefined||rawAge===''?NaN:Number(rawAge);let checked='尚未检测';if(Number.isFinite(age)){checked=age<60?'刚刚检测':age<3600?`${Math.floor(age/60)} 分钟前检测`:`${Math.floor(age/3600)} 小时前检测`}else if(service.status_checked_at||service.last_checked_at){checked=`${shortTime(service.status_checked_at||service.last_checked_at)} 检测`}return service.stale?`数据过期 · ${checked}`:checked}
 
 async function handleServiceUpdated(updated) {
   if (updated) selected.value = { ...selected.value, ...updated }
@@ -242,7 +244,7 @@ async function reload(silent=false) {
   }
 }
 
-async function loadHealthOverview(){try{const data=await api.get('/services/plaza/health-overview',{hours:24});overview.value=data||{summary:{},items:[]};const healthByKey=new Map((data.items||[]).map(item=>[item.key,item]));services.value=services.value.map(service=>{const health=healthByKey.get(service.key);return health?{...service,status:health.status,last_checked_at:health.last_checked_at,uptime_percent_24h:health.uptime_percent}:service});localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}))}catch{/* 总览失败不影响服务入口 */}}
+async function loadHealthOverview(){try{const data=await api.get('/services/plaza/health-overview',{hours:24});overview.value=data||{summary:{},items:[]};const healthByKey=new Map((data.items||[]).map(item=>[item.key,item]));services.value=services.value.map(service=>{const health=healthByKey.get(service.key);return health?{...service,...health}:service});localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}))}catch{/* 总览失败不影响服务入口 */}}
 
 async function loadHosts() {
   if (!hosts.value.length) hosts.value = await api.get('/servers')
@@ -380,6 +382,8 @@ onMounted(()=>reload(true))
 .svc-name { font-size: 15px; font-weight: 600; }
 .svc-desc { font-size: 12px; color: var(--muted); min-height: 32px; }
 .svc-meta { font-size: 12px; display: flex; justify-content: space-between; gap: 6px; }
+.svc-freshness { font-size: 11px; color: var(--muted); }
+.svc-freshness.stale, .health-stat small.stale { color: var(--err); font-weight: 600; }
 .svc-actions { display: flex; gap: 6px; }
 .svc-actions { flex-wrap: wrap; }
 .svc-actions .btn { flex: 1 1 auto; }

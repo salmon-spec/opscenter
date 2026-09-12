@@ -49,7 +49,7 @@
                 <b>{{ card.value }}</b>
               </div>
             </div>
-            <p class="notes muted">数据时间：{{ fmtTime(metrics?.ts) }}<template v-if="ovNotes.length"> · {{ ovNotes.join('；') }}</template></p>
+            <p class="notes muted" :class="{ 'freshness-stale': overview?.stale }">数据时间：{{ freshnessTime }}<template v-if="overview?.cached"> · 缓存 {{ Number(overview.cache_age_seconds || 0).toFixed(1) }} 秒</template><template v-if="metricSourceText"> · {{ metricSourceText }}</template><strong v-if="overview?.stale"> · 数据已过期</strong><template v-if="ovNotes.length"> · {{ ovNotes.join('；') }}</template></p>
           </section>
 
           <section v-show="section === 'trends'">
@@ -237,6 +237,14 @@ const metrics = computed(() => overview.value?.metrics || null)
 const ovNotes = computed(() => overview.value?.notes || [])
 const connNotes = computed(() => connectivity.value?.notes || [])
 const k8sNode = computed(() => overview.value?.k8s_node || null)
+const freshnessTime = computed(() => {
+  const value = overview.value?.data_timestamp || metrics.value?.ts
+  const numeric = typeof value === 'number' || /^\d+(\.\d+)?$/.test(String(value || ''))
+  return fmtTime(numeric ? Number(value) * 1000 : value)
+})
+const metricSourceText = computed(() => ({
+  ok: '指标历史', fallback_summary_cache: '摘要缓存', empty: '无监控数据',
+})[overview.value?.source_status?.metrics] || '')
 
 const targetText = computed(() => {
   const version = checkResult.value?.target_version
@@ -570,6 +578,7 @@ watch(() => [props.visible, props.hostId], ([visible]) => {
 .info-item.wide { grid-column: 1 / -1; }
 .err-text { color: var(--err); font-size: 12px; word-break: break-all; }
 .notes { font-size: 12px; line-height: 1.6; margin: 12px 0 0; }
+.freshness-stale, .freshness-stale strong { color: var(--err); }
 .metric-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .metric-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 4px; }
 .metric-card b { font-size: 18px; }
