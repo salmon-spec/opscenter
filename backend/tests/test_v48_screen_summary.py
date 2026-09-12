@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from app.main import Base, SessionLocal, app, engine
 from app.models import AlertEvent, DatabaseInstance, MetricHistory, Server
 from app import topology
-from app.topology import _LAST_AGENT_SNAPSHOT, record_agent_snapshot
+from app.topology import _LAST_AGENT_SNAPSHOT, record_agent_snapshot, reset_screen_cache
 
 client = TestClient(app)
 
@@ -19,6 +19,8 @@ def clean_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     _LAST_AGENT_SNAPSHOT.clear()
+    # 任务 D：TTL 内命中不再探 DB 指纹，响应缓存不再随写库即时失效 → 测试间必须显式清缓存
+    reset_screen_cache()
     topology._WG_TOPOLOGY_SNAPSHOT = {"summary": {}, "generated_at": None, "partial_errors": []}
     topology._WG_TOPOLOGY_SNAPSHOT_AT = time.time()
     topology._WG_TOPOLOGY_REFRESHING = False

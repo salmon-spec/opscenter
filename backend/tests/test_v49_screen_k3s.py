@@ -318,6 +318,14 @@ def test_services_dual_internal_probe_success_and_failure(monkeypatch):
     assert len(calls) == 2
 
 
+def _expire_screen_cache(seconds=10):
+    """任务 D：TTL 内命中不再探 DB 指纹，写库后最坏晚 _SCREEN_CACHE_TTL(5s) 才失效。
+
+    这里手动让响应缓存过期，才能验证"业务数据变了就失效"。
+    """
+    topology._SCREEN_CACHE["stored_at"] -= seconds
+
+
 def test_etag_304_and_change():
     r1 = client.get("/api/v2/screen/summary")
     assert r1.status_code == 200, r1.text
@@ -343,8 +351,9 @@ def test_etag_304_and_change():
     r304b = client.get("/api/v2/screen/summary", headers={"If-None-Match": f"W/{etag1}"})
     assert r304b.status_code == 304
 
-    # 业务数据变化 → ETag 变化（缓存随 DB 水位自动失效）
+    # 业务数据变化 → ETag 变化（缓存随 DB 水位自动失效；新语义下需缓存已过期才会探指纹）
     add_host("extra-node", "10.66.66.30")
+    _expire_screen_cache()
     r2 = client.get("/api/v2/screen/summary", headers={"If-None-Match": etag1})
     assert r2.status_code == 200
     assert r2.headers["ETag"] != etag1
@@ -358,10 +367,12 @@ def test_docker_hosts_count():
     with SessionLocal() as db:
         db.query(Server).filter(Server.id == uuid.UUID(id1)).update({"docker_available": True})
         db.commit()
+    _expire_screen_cache()
     assert client.get("/api/v2/screen/summary").json()["docker_hosts_count"] == 1
     with SessionLocal() as db:
         db.query(Server).filter(Server.id == uuid.UUID(id2)).update({"docker_available": True})
         db.commit()
+    _expire_screen_cache()
     assert client.get("/api/v2/screen/summary").json()["docker_hosts_count"] == 2
 
 

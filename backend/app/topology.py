@@ -1392,34 +1392,55 @@ def get_screen_summary(
     - ETag/If-None-Match：业务数据哈希（不含时间戳类字段），命中返回 304 空体；
     - 5s 响应缓存（防击穿），命中时 cached=true 并带 cache_age_seconds。
     """
+    now_ts = time.time()
     with _SCREEN_CACHE_LOCK:
+        # TTL 内命中：直接返回内存载荷，不碰数据库
+        fresh = (
+            _SCREEN_CACHE.get("payload") is not None
+            and now_ts - _SCREEN_CACHE["stored_at"] < _SCREEN_CACHE_TTL
+        )
+        if fresh:
+            business = _SCREEN_CACHE["payload"]
+            data_timestamp = _SCREEN_CACHE["data_timestamp"]
+            etag = _SCREEN_CACHE["etag"]
+            cache_age = round(now_ts - _SCREEN_CACHE["stored_at"], 3)
+        else:
+            business = data_timestamp = etag = None
+    cached = fresh
+
+    if not fresh:
+        # ponytail: 指纹 DB 往返只在响应缓存过期后才做——TTL 内的热命中零 DB 开销（本端点 P95 大头）。
+        # 代价：业务数据变化最坏晚 TTL(5s) 被指纹发现，与 5s 失效粒度一致；要更快失效就缩短 _SCREEN_CACHE_TTL。
         fingerprint: Optional[str] = None
         try:
             with get_db() as db:
                 fingerprint = _screen_data_fingerprint(db)
         except Exception:
             fingerprint = None
-        now_ts = time.time()
-        hit = (
-            _SCREEN_CACHE.get("payload") is not None
-            and now_ts - _SCREEN_CACHE["stored_at"] < _SCREEN_CACHE_TTL
-            and fingerprint is not None
-            and fingerprint == _SCREEN_CACHE.get("fingerprint")
-        )
-        if hit:
-            business = _SCREEN_CACHE["payload"]
-            data_timestamp = _SCREEN_CACHE["data_timestamp"]
-            etag = _SCREEN_CACHE["etag"]
-            cached = True
-            cache_age = round(now_ts - _SCREEN_CACHE["stored_at"], 3)
-        else:
+        with _SCREEN_CACHE_LOCK:
+            # 双重检查：指纹未变则复用旧载荷并续期（业务数据没变就不必全量重算）
+            reuse = (
+                fingerprint is not None
+                and _SCREEN_CACHE.get("payload") is not None
+                and fingerprint == _SCREEN_CACHE.get("fingerprint")
+            )
+            if reuse:
+                business = _SCREEN_CACHE["payload"]
+                data_timestamp = _SCREEN_CACHE["data_timestamp"]
+                etag = _SCREEN_CACHE["etag"]
+                cache_age = round(now_ts - _SCREEN_CACHE["stored_at"], 3)
+                _SCREEN_CACHE["stored_at"] = now_ts
+                cached = True
+        if not reuse:
+            # ponytail: 全量构建放在锁外（幂等只读，允许并发重复构建），避免慢构建堵住其它请求。
+            # 若将来 QPS 高到重复构建成为负担，再加 single-flight 标志把构建收回锁内。
             business, data_timestamp = _build_screen_business()
             etag = _screen_etag(business)
-            _SCREEN_CACHE.update(
-                payload=business, etag=etag, stored_at=now_ts,
-                fingerprint=fingerprint, data_timestamp=data_timestamp,
-            )
-            cached = False
+            with _SCREEN_CACHE_LOCK:
+                _SCREEN_CACHE.update(
+                    payload=business, etag=etag, stored_at=now_ts,
+                    fingerprint=fingerprint, data_timestamp=data_timestamp,
+                )
             cache_age = 0.0
 
     if _match_if_none_match(request.headers.get("if-none-match"), etag):
