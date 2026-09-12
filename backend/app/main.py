@@ -57,6 +57,7 @@ from app.services.nacos_config import nacos_config
 from app.config import MQ_ENABLED, MW_LEADER_ENABLED, NACOS_ENABLED
 from app.periodic import run_periodic_job
 from app.database import engine, SessionLocal, get_db
+from app.freshness import freshness_fields, freshness_headers
 
 class TerminalCreateRequest(BaseModel):
     server_id: str
@@ -1453,7 +1454,7 @@ async def shutdown():
 
 # === Server APIs ===
 @app.get("/api/v2/servers")
-def list_servers():
+def list_servers(response: Response):
     with get_db() as db:
         servers = db.query(Server).all()
         result = []
@@ -1492,6 +1493,13 @@ def list_servers():
                 "node_role": s.node_role or "",
                 "runtime_type": s.runtime_type or "",
             })
+        # 新鲜度契约（§8.3）：顶层是数组（前端 Alerts.vue / ServicePlaza.vue 直接当数组用），
+        # 不能换结构 ⇒ 新鲜度走响应头。实时读库、无缓存层、无 TTL ⇒ 不判过期；
+        # 每条数据的采集时刻见行内 last_seen / log_agent_checked_at。
+        for name, value in freshness_headers(freshness_fields(
+            source_status={"servers_db": "ok"}, staleness_seconds=None,
+        )).items():
+            response.headers[name] = value
         return result
 
 def _deploy_agent_background(server_id: str, password: Optional[str] = None):

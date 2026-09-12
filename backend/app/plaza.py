@@ -25,6 +25,7 @@ from app.credential_crypto import decrypt_secret, encrypt_secret
 from app.auth import get_current_user
 from app.config import DEFAULT_NOTIFY_WEBHOOKS
 from app.database import get_db
+from app.freshness import age_seconds, freshness_fields, freshness_headers, to_epoch
 from app.models import (
     PlazaCredentialAccess, PlazaHealthIncident, PlazaHealthSilence,
     PlazaHealthState, PlazaProbeResult, PlazaServicePreference,
@@ -43,6 +44,49 @@ _cached_checks: dict[str, dict] = {}
 _refreshing = False
 _probe_times: dict[str, float] = {}
 _cycle_lock = threading.Lock()
+
+# 新鲜度（§8.3）：连续错过几个探测周期即视为过期；周期取 catalog 的
+# probe_interval_seconds（默认 60，见 models.PlazaServiceProfile）。
+_PLAZA_STALE_MISSED_CYCLES = 3
+_PLAZA_DEFAULT_PROBE_INTERVAL = 60
+_PLAZA_STALE_SECONDS = _PLAZA_DEFAULT_PROBE_INTERVAL * _PLAZA_STALE_MISSED_CYCLES
+
+
+def _probe_staleness(item: dict) -> float:
+    interval = item.get("probe_interval_seconds") or _PLAZA_DEFAULT_PROBE_INTERVAL
+    try:
+        return float(interval) * _PLAZA_STALE_MISSED_CYCLES
+    except (TypeError, ValueError):
+        return float(_PLAZA_STALE_SECONDS)
+
+
+def _iso_utc(value) -> str | None:
+    """datetime / ISO 串 → ISO 串；None 保持 None（广场时间戳统一 UTC 无偏移）。"""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    try:
+        return value.isoformat()
+    except Exception:
+        return None
+
+
+def _status_freshness(status_source: str, status_ts, staleness: float | None) -> dict:
+    """单条目的“这个状态是多久前探的”四件套；声明的 status 由 status_source 说明来源。"""
+    age = age_seconds(status_ts)
+    if staleness is None:  # 未探测（disabled 等）：不判定过期
+        stale = False
+    else:
+        stale = age is None or age > staleness
+    return {
+        "status_checked_at": _iso_utc(status_ts),
+        "status_age_seconds": None if age is None else round(age, 1),
+        "status_source": status_source,
+        "stale": bool(stale),
+        "staleness_seconds": None if staleness is None else round(float(staleness), 3),
+    }
+
 
 class PlazaVisibilityUpdate(BaseModel):
     hidden: bool
@@ -826,10 +870,16 @@ def _sync_legacy_default(profile: PlazaServiceProfile, rows: list[PlazaServiceCr
 
 
 @router.get("/services/plaza")
-def list_plaza_services():
-    """Return curated and user-created Web entries without credentials."""
+def list_plaza_services(response: Response = None):
+    """Return curated and user-created Web entries without credentials.
+
+    response 省略（直接函数调用，如既有单测）时只跳过响应头，返回值不变。
+    """
     catalog, servers = _load_plaza_items()
 
+    with _cache_lock:
+        cached_hit = bool(_cached_checks)
+        cache_age = (time.monotonic() - _cached_at) if _cached_at else 0.0
     checks = _health_checks(catalog)
     now = datetime.utcnow()
     with get_db() as db:
@@ -841,15 +891,26 @@ def list_plaza_services():
         ).all() if hasattr(row, "plaza_key") and hasattr(row, "ends_at")}
 
     result = []
+    probe_stamps: list[float] = []
     for item in catalog:
         if not item.get("enabled"):
             continue
         server = servers.get(item["server_host"])
         health = checks.get(item["key"], {"status": "unknown", "http_status": None, "latency_ms": None, "health_error": ""})
         stable = states.get(item["key"])
-        status = "disabled" if item.get("probe_enabled") is False else (
-            stable.stable_status if stable else health["status"]
-        )
+        if item.get("probe_enabled") is False:
+            status, status_source = "disabled", "disabled"
+        elif stable is not None:
+            status, status_source = stable.stable_status, "stable_state"
+        else:
+            status, status_source = health["status"], "live_probe"
+        # “多久前探的”：优先用支撑该 status 的落库时刻，其次本次内存探测时刻
+        status_ts = (stable.last_checked_at if stable and stable.last_checked_at else None) \
+            or health.get("checked_at")
+        staleness = None if status == "disabled" else _probe_staleness(item)
+        probe_stamp = to_epoch(status_ts)
+        if probe_stamp is not None:
+            probe_stamps.append(probe_stamp)
         result.append({
             "id": f"plaza:{item['key']}",
             "key": item["key"],
@@ -876,6 +937,9 @@ def list_plaza_services():
             "latency_ms": health["latency_ms"],
             "health_error": health["health_error"],
             "last_checked_at": health.get("checked_at"),
+            # 状态新鲜度（§8.3）：status 可能来自落库的 stable_status，
+            # 与本次内存探测的 last_checked_at 不是同一时刻，必须分开暴露。
+            **_status_freshness(status_source, status_ts, staleness),
             "probe_enabled": item.get("probe_enabled", True),
             "consecutive_failures": stable.consecutive_failures if stable else 0,
             "active_incident_id": str(stable.active_incident_id) if stable and stable.active_incident_id else None,
@@ -884,6 +948,16 @@ def list_plaza_services():
             "tags": item.get("tags", []),
             "profile_updated_at": item.get("profile_updated_at"),
         })
+    # 顶层仍是数组（前端按数组消费）：响应级新鲜度走响应头。
+    # data_timestamp = 最新一次探测时刻（各条目里 status_checked_at 是逐条口径）。
+    if response is not None:
+        for name, value in freshness_headers(freshness_fields(
+            data_timestamp=max(probe_stamps) if probe_stamps else None,
+            cached=cached_hit, cache_age_seconds=cache_age,
+            source_status={"health_probe": "cached" if cached_hit else "cold"},
+            staleness_seconds=float(_PLAZA_STALE_SECONDS),
+        )).items():
+            response.headers[name] = value
     return result
 
 
@@ -973,6 +1047,7 @@ def get_plaza_health_overview(hours: int = 24):
     with _cache_lock:
         current_checks = {key: dict(value) for key, value in _cached_checks.items()}
     items = []
+    probe_stamps = []
     status_counts = {"up": 0, "down": 0, "degraded": 0, "unknown": 0, "disabled": 0}
     availability_values = []
     for item in catalog:
@@ -983,21 +1058,33 @@ def get_plaza_health_overview(hours: int = 24):
         cached = current_checks.get(item["key"], {})
         stable = states.get(item["key"])
         if item.get("probe_enabled") is False:
-            status = "disabled"
+            status, status_source = "disabled", "disabled"
+        elif stable is not None:
+            status, status_source = stable.stable_status, "stable_state"
         else:
-            status = stable.stable_status if stable else (cached.get("status") or (latest.status if latest else "unknown"))
+            status = cached.get("status") or (latest.status if latest else "unknown")
+            status_source = "live_probe"
         if status not in status_counts:
             status = "unknown"
         status_counts[status] += 1
         uptime = round(stats["up"] * 100 / stats["checks"], 2) if stats["checks"] else None
         if uptime is not None:
             availability_values.append(uptime)
+        # 已有 last_checked_at 保持原语义（最近一次落库/内存探测时刻），
+        # 新增四件套说明“该 status 是多久前探的”。
+        status_ts = (latest.checked_at if latest else cached.get("checked_at")) \
+            or (stable.last_checked_at if stable else None)
+        staleness = None if status == "disabled" else _probe_staleness(item)
+        probe_stamp = to_epoch(status_ts)
+        if probe_stamp is not None:
+            probe_stamps.append(probe_stamp)
         items.append({
             "key": item["key"], "status": status,
             "checks": stats["checks"], "uptime_percent": uptime,
             "avg_latency_ms": round(stats.get("avg_latency"), 1)
             if stats.get("avg_latency") is not None else None,
             "last_checked_at": latest.checked_at.isoformat() if latest else cached.get("checked_at"),
+            **_status_freshness(status_source, status_ts, staleness),
             "consecutive_failures": stable.consecutive_failures if stable else 0,
             "active_incident_id": str(stable.active_incident_id) if stable and stable.active_incident_id else None,
             "silenced": item["key"] in silenced_keys,
@@ -1012,6 +1099,17 @@ def get_plaza_health_overview(hours: int = 24):
             if availability_values else None,
         },
         "items": items,
+        # 新鲜度（§8.3）：本端点不做网络探测，data_timestamp = 最新落库探测时刻；
+        # generated_at 仍是响应生成时刻。无任何探测记录时 stale=True。
+        **freshness_fields(
+            data_timestamp=max(probe_stamps) if probe_stamps else None,
+            source_status={
+                "plaza_probe_results": "ok" if any(s["checks"] for s in by_key.values()) else "empty",
+                "plaza_health_states": "ok" if states else "empty",
+                "live_probe_cache": "ok" if current_checks else "empty",
+            },
+            staleness_seconds=float(_PLAZA_STALE_SECONDS),
+        ),
     }
 
 

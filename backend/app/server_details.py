@@ -40,6 +40,7 @@ from app.agent_tasks import AGENT_TASKS
 from app.auth import require_operator
 from app.config import LOCAL_AGENT_HOST
 from app.database import get_db
+from app.freshness import METRIC_STALENESS_SECONDS, freshness_fields
 from app.models import MetricHistory, MetricRollup, PlazaHealthState, Server, Service
 
 router = APIRouter(prefix="/api/v2", tags=["server-details"], dependencies=[Depends(require_operator)])
@@ -175,6 +176,7 @@ def _summary_cache_metrics(server_id) -> dict:
 def server_overview(server_id: str):
     server = _load_server(server_id)
     notes: list[str] = []
+    partial_errors: list[str] = []
     latest: dict = {}
     with get_db() as db:
         for metric in _LATEST_METRICS:
@@ -184,12 +186,17 @@ def server_overview(server_id: str):
             ).order_by(MetricHistory.timestamp.desc()).first()
             if row:
                 latest[metric] = (float(row.value), row.timestamp)
+    metrics_source = "ok"
     if not latest:
         latest = _summary_cache_metrics(server.id)
         if latest:
+            metrics_source = "fallback_summary_cache"
             notes.append("metric_history 暂无数据，已回退到进程内摘要缓存")
+            partial_errors.append("metrics: metric_history 为空，回退进程内摘要缓存")
     if not latest:
+        metrics_source = "empty"
         notes.append("暂无监控数据（等待 Agent 采集循环写入）")
+        partial_errors.append("metrics: 无数据")
 
     def metric_value(name: str):
         item = latest.get(name)
@@ -207,10 +214,15 @@ def server_overview(server_id: str):
     }
 
     k8s_node = None
+    k8s_source = "skipped"
     if server.kubernetes_node_name:
         k8s_node, k8s_notes = _k8s_node_bounded(server.kubernetes_node_name)
         notes.extend(k8s_notes)
+        partial_errors.extend(k8s_notes)
+        k8s_source = "ok" if k8s_node else "unavailable"
 
+    # 新鲜度契约（§8.3）：data_timestamp 取最新一个指标采样时刻（无数据则回退响应时刻，
+    # 同时 metrics 源标记为 empty 且 stale=True）；阈值沿用 topology 的 90s。
     return {
         "server": {
             "id": str(server.id),
@@ -240,6 +252,12 @@ def server_overview(server_id: str):
         "metrics": metrics,
         "k8s_node": k8s_node,
         "notes": notes,
+        **freshness_fields(
+            data_timestamp=max(stamps) if stamps else None,
+            source_status={"metrics": metrics_source, "k8s_node": k8s_source},
+            partial_errors=partial_errors,
+            staleness_seconds=METRIC_STALENESS_SECONDS,
+        ),
     }
 
 
