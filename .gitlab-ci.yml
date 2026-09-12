@@ -11,6 +11,7 @@ workflow:
 
 stages:
   - test
+  - deploy
 
 variables:
   # 测试数据库（GitLab CI services: postgres 提供）
@@ -39,3 +40,37 @@ backend-test:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == "main"
+
+# main 通过测试后触发 Jenkins（opscenter-e2e）：
+#   Jenkins → PVE 构建镜像并分发到 K3s 节点 → 自动部署测试环境(VM100:8090) → 【人工确认】部署生产。
+# 变量（项目级，已在 GitLab 配置）：JENKINS_URL / JENKINS_USER / JENKINS_API_TOKEN(masked) / JENKINS_JOB。
+trigger-jenkins:
+  stage: deploy
+  image: python:3.12-slim
+  needs: ["backend-test"]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - |
+      python3 - <<'PY'
+      import base64, http.cookiejar, json, os, urllib.request
+
+      base = os.environ["JENKINS_URL"].rstrip("/")
+      auth = "Basic " + base64.b64encode(
+          f'{os.environ["JENKINS_USER"]}:{os.environ["JENKINS_API_TOKEN"]}'.encode()
+      ).decode()
+      opener = urllib.request.build_opener(
+          urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+      )
+
+      def call(path, data=None, extra_headers=None):
+          headers = {"Authorization": auth}
+          headers.update(extra_headers or {})
+          return opener.open(urllib.request.Request(base + path, data=data, headers=headers), timeout=20)
+
+      crumb = json.load(call("/crumbIssuer/api/json"))["crumb"]          # CSRF 令牌（与 cookie 成对）
+      job = os.environ.get("JENKINS_JOB", "opscenter-e2e")
+      url = f"/job/{job}/buildWithParameters?GIT_SHA={os.environ['CI_COMMIT_SHA']}&DEPLOY_TEST=true"
+      resp = call(url, data=b"", extra_headers={"Jenkins-Crumb": crumb})
+      print(f"jenkins trigger {job} <- {os.environ['CI_COMMIT_SHA']}: HTTP {resp.status}")
+      PY
