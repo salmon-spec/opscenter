@@ -2,6 +2,7 @@ import docker, re, os, subprocess
 from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from app.models import Service, Server, ServiceSource, ServiceStatus
+from app.config import CONTAINERIZED
 
 # Image -> category auto-classification
 IMAGE_CATEGORIES = {
@@ -264,12 +265,24 @@ def _get_host_network_ports(container_name: str) -> Dict[str, List[int]]:
         return {}
 
 
+# 容器内（K3s/Docker 部署）不挂载 Docker socket：docker.from_env() 必然失败，
+# 只在启动时刷一条误导性的 "Docker discovery error"。宿主机模式行为不变。
+DOCKER_SOCKET_PATH = "/var/run/docker.sock"
+
+
+def _local_docker_available() -> bool:
+    """本机 Docker 是否值得尝试连接（容器模式下无 socket 就直接跳过）。"""
+    return not CONTAINERIZED or os.path.exists(DOCKER_SOCKET_PATH)
+
+
 def discover_docker_services(server: Server, db: Session, host: str = None) -> List[Service]:
     """Discover services from Docker containers. Returns list of new/updated services."""
     if host is None:
         host = server.host
     # Normalize loopback addresses so generated URLs are externally accessible
     host = _normalize_host(host)
+    if server.is_local and not _local_docker_available():
+        return []
     try:
         client = docker.from_env() if server.is_local else None
         if not client:
