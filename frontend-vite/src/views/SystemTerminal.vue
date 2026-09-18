@@ -3,17 +3,16 @@
     <aside class="terminal-sidebar">
       <section class="sidebar-section hosts-section">
         <div class="section-label"><span>目标主机</span><span>{{ hosts.length }}</span></div>
-        <div class="host-list">
-          <button v-for="host in hosts" :key="host.id" class="host-item" :class="{active:host.id===selectedHostId}" @click="selectTerminalHost(host.id)">
-            <span class="host-state" :class="host.status==='online'?'online':'offline'"></span>
-            <span class="host-copy"><b>{{ host.name }}</b><small>{{ host.lan_ip || host.host || host.wireguard_ip || '地址未知' }}</small></span>
-            <span class="host-arrow">›</span>
-          </button>
-          <p v-if="!hosts.length" class="empty-list">暂无可用主机</p>
+        <div class="host-picker">
+          <span class="host-state" :class="currentHost?.status==='online'?'online':'offline'"></span>
+          <select class="host-select" :value="selectedHostId" :disabled="!hosts.length" @change="selectTerminalHost($event.target.value)">
+            <option value="" disabled>{{ hosts.length ? '请选择主机' : '暂无可用主机' }}</option>
+            <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
+          </select>
         </div>
+        <small class="host-address">{{ currentHost?.lan_ip || currentHost?.host || currentHost?.wireguard_ip || '地址未知' }}</small>
       </section>
 
-      <button class="btn btn-primary create-session" :disabled="!selectedHostId||creating" @click="createTerminal">{{ creating?'创建中…':'＋ 新建终端' }}</button>
 
       <section class="sidebar-section sessions-section">
         <div class="section-label"><span>当前主机会话</span><span>{{ visibleSessions.length }}</span></div>
@@ -42,7 +41,7 @@
         <div class="connect-icon">›_</div>
         <h2>{{ currentHost?.name || '请选择主机' }}</h2>
         <p>建立安全终端会话，断线后 5 分钟内可重新连接。</p>
-        <button class="btn btn-primary" :disabled="!selectedHostId||creating" @click="createTerminal">{{ creating?'创建中…':'连接终端' }}</button>
+        <button class="btn btn-primary" :disabled="!selectedHostId||creating" @click="createTerminal()">{{ creating?'创建中…':'连接终端' }}</button>
       </div>
     </main>
   </div>
@@ -73,16 +72,16 @@ function persistTabs() {
   try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(sessions.value.map((s) => ({ ...s })))) } catch { /* sessionStorage 不可用时忽略 */ }
 }
 
-async function createTerminal() {
-  if (!selectedHostId.value || creating.value) return
+async function createTerminal(hostId = selectedHostId.value) {
+  if (!hostId || creating.value) return
   creating.value = true
   pageError.value = ''
   try {
-    const data = await api.post('/terminal/sessions', { server_id: selectedHostId.value })
-    const serverName = data.server_name || currentHost.value?.name || '主机'
+    const data = await api.post('/terminal/sessions', { server_id: hostId })
+    const serverName = data.server_name || hosts.value.find((host) => host.id === hostId)?.name || '主机'
     const tab = {
       sessionId: data.session_id,
-      serverId: selectedHostId.value,
+      serverId: hostId,
       serverName,
       title: nextTitle(serverName),
       status: 'connected',
@@ -101,9 +100,15 @@ async function createTerminal() {
 
 function activate(id) { activeSessionId.value = id }
 
-function selectTerminalHost(id) {
+async function selectTerminalHost(id) {
+  if (!id) return
   selectHost(id)
-  activeSessionId.value = sessions.value.find((s) => s.serverId === id)?.sessionId || ''
+  const existing = sessions.value.filter((s) => s.serverId === id)
+  if (existing.length) {
+    activeSessionId.value = existing.find((s) => s.sessionId === activeSessionId.value)?.sessionId || existing[0].sessionId
+    return
+  }
+  await createTerminal(id)
 }
 
 function tabDotClass(status) {
@@ -163,10 +168,9 @@ onMounted(async () => { await refreshHosts(); await restore() })
 .terminal-page{height:100%;min-height:0;max-width:none;margin:0;padding:0;display:grid;grid-template-columns:184px minmax(0,1fr);overflow:hidden;background:#eef2f7}
 .terminal-sidebar{min-height:0;display:flex;flex-direction:column;background:#fff;border-right:1px solid var(--border)}
 .sidebar-section{padding:8px 6px 0}.section-label{height:25px;padding:0 6px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
-.host-list,.session-list{display:flex;flex-direction:column;gap:4px}.hosts-section{flex:none}.sessions-section{flex:1;min-height:0;display:flex;flex-direction:column}.sessions-section .session-list{min-height:0;overflow:auto;padding-bottom:8px;scrollbar-width:thin}
-.host-item{width:100%;border:1px solid transparent;border-radius:8px;background:transparent;padding:8px 6px;display:flex;align-items:center;gap:7px;text-align:left;color:var(--text);cursor:pointer}.host-item:hover{background:#f8fafc}.host-item.active{background:#eff6ff;border-color:#bfdbfe}.host-copy{min-width:0;display:flex;flex:1;flex-direction:column;gap:1px}.host-copy b,.host-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.host-copy b{font-size:12px}.host-copy small{color:var(--muted);font-size:10px}.host-arrow{color:#94a3b8;font-size:16px}
+.session-list{display:flex;flex-direction:column;gap:4px}.hosts-section{flex:none}.sessions-section{flex:1;min-height:0;display:flex;flex-direction:column}.sessions-section .session-list{min-height:0;overflow:auto;padding-bottom:8px;scrollbar-width:thin}
+.host-picker{margin:4px 6px 0;display:flex;align-items:center;gap:7px}.host-select{min-width:0;flex:1;height:34px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);padding:0 26px 0 9px;font:inherit;font-size:12px;outline:none}.host-select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.12)}.host-select:disabled{background:#f8fafc;color:var(--muted)}.host-address{display:block;margin:5px 8px 0;color:var(--muted);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .host-state{width:8px;height:8px;border-radius:50%;background:#94a3b8;flex:none}.host-state.online{background:var(--ok);box-shadow:0 0 0 3px rgba(34,197,94,.12)}.host-state.offline{background:#94a3b8}
-.create-session{margin:10px 10px 2px;flex:none}
 .session-item{min-height:38px;padding:6px 5px 6px 9px;border:1px solid transparent;border-radius:8px;display:flex;align-items:center;gap:7px;cursor:pointer;outline:none}.session-item:hover{background:#f8fafc}.session-item.active{background:#f1f5f9;border-color:#cbd5e1}.session-title{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.session-title-input{min-width:0;flex:1;border:1px solid var(--primary);border-radius:5px;padding:3px 5px;font-size:12px}.session-close{width:24px;height:24px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted);cursor:pointer}.session-close:hover{background:#fee2e2;color:var(--err)}
 .sidebar-footnote{height:42px;padding:0 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .terminal-main{min-width:0;min-height:0;padding:12px;display:flex;flex-direction:column;background:#e9eef5}
@@ -177,5 +181,5 @@ onMounted(async () => { await refreshHosts(); await restore() })
 .term-stage{flex:1;min-height:0;position:relative;overflow:hidden}
 .term-pane{position:absolute;inset:0}
 .connect{text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:0;border:1px dashed #cbd5e1;border-radius:12px;background:#fff}.connect-icon{width:58px;height:58px;border-radius:14px;display:grid;place-items:center;background:#0d1117;color:#7dd3fc;font:700 18px/1 Consolas,monospace}.connect h2{margin:16px 0 4px;font-size:18px}.connect p{max-width:390px;margin:0 0 18px;color:var(--muted);font-size:13px}.empty-list{margin:8px 6px;color:var(--muted);font-size:12px}
-@media(max-width:760px){.terminal-page{grid-template-columns:156px minmax(0,1fr)}.terminal-main{padding:7px}.host-copy small{display:none}}
+@media(max-width:760px){.terminal-page{grid-template-columns:156px minmax(0,1fr)}.terminal-main{padding:7px}}
 </style>

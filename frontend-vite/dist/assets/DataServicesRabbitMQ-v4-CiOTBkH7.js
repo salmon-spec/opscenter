@@ -1,1 +1,0 @@
-import{D as r}from"./DataServiceKind-v4-BvMRSdp2.js";import{o as t,b as a}from"./vendor-vue-v4-BEmlfmIM.js";import"./index-v4-DNElPKq3.js";import"./dataservices-v4-Ct1I98Ad.js";import"./envelope-v4-oN_8dg8Z.js";const _={__name:"DataServicesRabbitMQ",setup(e){return(o,i)=>(t(),a(r,{kind:"rabbitmq"}))}};export{_ as default};

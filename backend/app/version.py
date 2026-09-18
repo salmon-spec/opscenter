@@ -1,2 +1,2 @@
 """OpsCenter version — single source of truth"""
-VERSION = "5.0.5"
+VERSION = "5.0.6"
