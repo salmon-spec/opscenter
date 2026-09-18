@@ -41,7 +41,7 @@
         <p v-if="firstLoading" class="skel skel-line"></p>
         <p v-else class="res-meta">{{ podAbnormal ? `Failed ${podsInfo?.failed ?? 0} · Pending ${podsInfo?.pending ?? 0} · 重启最高 ${podAbnormal.top ? `${podAbnormal.top.namespace}/${podAbnormal.top.name} ${podAbnormal.top.restarts} 次` : '无'}` : 'K3s 数据不可用 / 未配置' }}</p>
       </router-link>
-      <router-link to="/service-health" class="res-card">
+      <router-link to="/" class="res-card">
         <div class="res-head"><span class="res-label">服务可访问率</span><b v-if="firstLoading" class="skel skel-num"></b><b v-else class="res-num" :class="{ 'res-err': serviceAccess && serviceAccess.pct != null && serviceAccess.pct < 100 }">{{ serviceAccess ? (serviceAccess.pct == null ? '--' : serviceAccess.pct + '%') : '--' }}</b></div>
         <p v-if="firstLoading" class="skel skel-line"></p>
         <p v-else class="res-meta">{{ serviceAccess ? `${serviceAccess.fallback ? '探活在线' : '外部可达'} ${serviceAccess.ok}/${serviceAccess.total}${serviceAccess.fallback ? ' · 双层健康未启用' : ''}` : '暂无服务数据' }}</p>
@@ -193,7 +193,7 @@
             <div class="screen-empty screen-empty-sm">双层健康数据未启用，展示服务广场探活状态</div>
             <div v-if="!services.length" class="screen-empty">暂无服务数据</div>
             <div v-else class="health-grid">
-              <div v-for="s in services" :key="s.id" class="health-tile" :class="'st-' + (s.status === 'unknown' ? 'unknown' : s.status)" :title="s.name" @click="go('/service-health')">
+              <div v-for="s in services" :key="s.id" class="health-tile" :class="'st-' + (s.status === 'unknown' ? 'unknown' : s.status)" :title="s.name" @click="go('/')">
                 <span class="tile-name">{{ s.name }}</span>
               </div>
             </div>

@@ -1,33 +1,62 @@
 <template>
   <div class="view terminal-page">
-    <div class="view-head"><div><h1 class="view-title">终端</h1><div class="view-sub">{{ currentHost?.name || '未选择主机' }} · 新建会话使用顶栏当前主机，可同时打开多个标签</div></div></div>
-    <div class="term-tabs">
-      <div v-for="s in sessions" :key="s.sessionId" class="term-tab" :class="{active:s.sessionId===activeSessionId}" @click="activate(s.sessionId)">
-        <span class="tab-dot" :class="tabDotClass(s.status)"></span>
-        <input v-if="editingTitle===s.sessionId" v-model="renameText" class="tab-title-input" @keydown.enter="commitRename(s)" @blur="commitRename(s)" @click.stop />
-        <span v-else class="tab-title" :title="`${s.serverName} · ${s.sessionId}`" @dblclick="beginRename(s)">{{ s.title }}</span>
-        <button class="tab-close" :disabled="deletingSession===s.sessionId" @click.stop="closeTab(s)">{{ deletingSession===s.sessionId?'…':'×' }}</button>
+    <aside class="terminal-sidebar">
+      <section class="sidebar-section hosts-section">
+        <div class="section-label"><span>目标主机</span><span>{{ hosts.length }}</span></div>
+        <div class="host-list">
+          <button v-for="host in hosts" :key="host.id" class="host-item" :class="{active:host.id===selectedHostId}" @click="selectTerminalHost(host.id)">
+            <span class="host-state" :class="host.status==='online'?'online':'offline'"></span>
+            <span class="host-copy"><b>{{ host.name }}</b><small>{{ host.lan_ip || host.host || host.wireguard_ip || '地址未知' }}</small></span>
+            <span class="host-arrow">›</span>
+          </button>
+          <p v-if="!hosts.length" class="empty-list">暂无可用主机</p>
+        </div>
+      </section>
+
+      <button class="btn btn-primary create-session" :disabled="!selectedHostId||creating" @click="createTerminal">{{ creating?'创建中…':'＋ 新建终端' }}</button>
+
+      <section class="sidebar-section sessions-section">
+        <div class="section-label"><span>当前主机会话</span><span>{{ visibleSessions.length }}</span></div>
+        <div class="session-list">
+          <div v-for="s in visibleSessions" :key="s.sessionId" class="session-item" :class="{active:s.sessionId===activeSessionId}" role="button" tabindex="0" @click="activate(s.sessionId)" @keydown.enter="activate(s.sessionId)">
+            <span class="tab-dot" :class="tabDotClass(s.status)"></span>
+            <input v-if="editingTitle===s.sessionId" v-model="renameText" class="session-title-input" @keydown.enter.stop="commitRename(s)" @blur="commitRename(s)" @click.stop />
+            <span v-else class="session-title" :title="`${s.serverName} · ${s.sessionId}`" @dblclick.stop="beginRename(s)">{{ s.title }}</span>
+            <button class="session-close" :disabled="deletingSession===s.sessionId" title="关闭会话" @click.stop="closeTab(s)">{{ deletingSession===s.sessionId?'…':'×' }}</button>
+          </div>
+          <p v-if="!visibleSessions.length" class="empty-list">该主机暂无会话</p>
+        </div>
+      </section>
+
+      <div class="sidebar-footnote"><span class="host-state" :class="currentHost?.status==='online'?'online':'offline'"></span>{{ currentHost?.name || '未选择主机' }}</div>
+    </aside>
+
+    <main class="terminal-main">
+      <div v-if="pageError" class="error-bar"><p>{{ pageError }}</p></div>
+      <div v-show="visibleSessions.length && activeSessionId" class="term-stage">
+        <div v-for="s in sessions" v-show="s.sessionId===activeSessionId" :key="s.sessionId" class="term-pane">
+          <TerminalPanel embedded :session-id="s.sessionId" :title="s.title" :allow-files="s.allowFiles" :active="s.sessionId===activeSessionId" @state="onPanelState(s.sessionId,$event)" />
+        </div>
       </div>
-      <button class="btn btn-sm btn-primary new-tab" :disabled="!selectedHostId||creating" @click="createTerminal">{{ creating?'创建中…':'＋ 新建终端' }}</button>
-    </div>
-    <div v-if="pageError" class="card error-bar"><p>{{ pageError }}</p></div>
-    <div v-show="sessions.length && activeSessionId" class="term-stage">
-      <div v-for="s in sessions" v-show="s.sessionId===activeSessionId" :key="s.sessionId" class="term-pane">
-        <TerminalPanel embedded :session-id="s.sessionId" :title="s.title" :allow-files="s.allowFiles" :active="s.sessionId===activeSessionId" @state="onPanelState(s.sessionId,$event)" />
+      <div v-if="!visibleSessions.length" class="connect">
+        <div class="connect-icon">›_</div>
+        <h2>{{ currentHost?.name || '请选择主机' }}</h2>
+        <p>建立安全终端会话，断线后 5 分钟内可重新连接。</p>
+        <button class="btn btn-primary" :disabled="!selectedHostId||creating" @click="createTerminal">{{ creating?'创建中…':'连接终端' }}</button>
       </div>
-    </div>
-    <div v-if="!sessions.length" class="card connect"><p>选择主机后建立安全终端会话，可同时打开多个标签；断线 5 分钟内可重连。</p><button class="btn btn-primary" :disabled="!selectedHostId" @click="createTerminal">连接终端</button></div>
+    </main>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import TerminalPanel from '../components/TerminalPanel.vue'
 import { useHostContext } from '../hostContext'
 
-const { selectedHostId, currentHost, refreshHosts } = useHostContext()
+const { hosts, selectedHostId, currentHost, refreshHosts, selectHost } = useHostContext()
 const sessions = ref([])
+const visibleSessions = computed(() => sessions.value.filter((s) => s.serverId === selectedHostId.value))
 const activeSessionId = ref('')
 const creating = ref(false)
 const pageError = ref('')
@@ -72,8 +101,13 @@ async function createTerminal() {
 
 function activate(id) { activeSessionId.value = id }
 
-function tabDotClass(s) {
-  return ({ connecting: 'conn', connected: 'ok', disconnected: 'warn', closed: 'off', error: 'err' })[s.status] || 'off'
+function selectTerminalHost(id) {
+  selectHost(id)
+  activeSessionId.value = sessions.value.find((s) => s.serverId === id)?.sessionId || ''
+}
+
+function tabDotClass(status) {
+  return ({ connecting: 'conn', connected: 'ok', disconnected: 'warn', closed: 'off', error: 'err' })[status] || 'off'
 }
 
 function onPanelState(sid, st) {
@@ -90,7 +124,7 @@ async function closeTab(s) {
     await api.del(`/terminal/sessions/${s.sessionId}`)
   } catch { /* 忽略：服务端可能已过期 */ }
   sessions.value = sessions.value.filter((x) => x.sessionId !== s.sessionId)
-  if (activeSessionId.value === s.sessionId) activeSessionId.value = sessions.value[0]?.sessionId || ''
+  if (activeSessionId.value === s.sessionId) activeSessionId.value = sessions.value.find((x) => x.serverId === selectedHostId.value)?.sessionId || ''
   persistTabs()
   deletingSession.value = ''
 }
@@ -118,7 +152,7 @@ async function restore() {
     return null
   }))
   sessions.value.push(...restored.filter(Boolean))
-  activeSessionId.value = sessions.value[0]?.sessionId || ''
+  activeSessionId.value = sessions.value.find((s) => s.serverId === selectedHostId.value)?.sessionId || ''
   persistTabs()
 }
 
@@ -126,23 +160,22 @@ onMounted(async () => { await refreshHosts(); await restore() })
 </script>
 
 <style scoped>
-.terminal-page{height:calc(100vh - 56px);display:flex;flex-direction:column}
-.terminal-page>.view-head{flex:none}
-.term-tabs{display:flex;align-items:center;gap:4px;flex-wrap:nowrap;overflow-x:auto;padding:6px 0;flex:none;scrollbar-width:thin}
-.term-tab{display:flex;align-items:center;gap:6px;padding:5px 6px 5px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card);cursor:pointer;max-width:220px;flex:none;white-space:nowrap;transition:border-color .12s, background .12s}
-.term-tab.active{border-color:var(--primary);background:rgba(37,99,235,.1)}
-.term-tab:hover:not(.active){border-color:#94a3b8}
+.terminal-page{height:100%;min-height:0;max-width:none;margin:0;padding:0;display:grid;grid-template-columns:184px minmax(0,1fr);overflow:hidden;background:#eef2f7}
+.terminal-sidebar{min-height:0;display:flex;flex-direction:column;background:#fff;border-right:1px solid var(--border)}
+.sidebar-section{padding:8px 6px 0}.section-label{height:25px;padding:0 6px;display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.host-list,.session-list{display:flex;flex-direction:column;gap:4px}.hosts-section{flex:none}.sessions-section{flex:1;min-height:0;display:flex;flex-direction:column}.sessions-section .session-list{min-height:0;overflow:auto;padding-bottom:8px;scrollbar-width:thin}
+.host-item{width:100%;border:1px solid transparent;border-radius:8px;background:transparent;padding:8px 6px;display:flex;align-items:center;gap:7px;text-align:left;color:var(--text);cursor:pointer}.host-item:hover{background:#f8fafc}.host-item.active{background:#eff6ff;border-color:#bfdbfe}.host-copy{min-width:0;display:flex;flex:1;flex-direction:column;gap:1px}.host-copy b,.host-copy small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.host-copy b{font-size:12px}.host-copy small{color:var(--muted);font-size:10px}.host-arrow{color:#94a3b8;font-size:16px}
+.host-state{width:8px;height:8px;border-radius:50%;background:#94a3b8;flex:none}.host-state.online{background:var(--ok);box-shadow:0 0 0 3px rgba(34,197,94,.12)}.host-state.offline{background:#94a3b8}
+.create-session{margin:10px 10px 2px;flex:none}
+.session-item{min-height:38px;padding:6px 5px 6px 9px;border:1px solid transparent;border-radius:8px;display:flex;align-items:center;gap:7px;cursor:pointer;outline:none}.session-item:hover{background:#f8fafc}.session-item.active{background:#f1f5f9;border-color:#cbd5e1}.session-title{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.session-title-input{min-width:0;flex:1;border:1px solid var(--primary);border-radius:5px;padding:3px 5px;font-size:12px}.session-close{width:24px;height:24px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--muted);cursor:pointer}.session-close:hover{background:#fee2e2;color:var(--err)}
+.sidebar-footnote{height:42px;padding:0 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.terminal-main{min-width:0;min-height:0;padding:12px;display:flex;flex-direction:column;background:#e9eef5}
 .tab-dot{width:8px;height:8px;border-radius:50%;flex:none}
 .tab-dot.ok{background:var(--ok)}.tab-dot.conn{background:var(--warn)}.tab-dot.warn{background:var(--warn)}.tab-dot.off{background:#94a3b8}.tab-dot.err{background:var(--err)}
-.tab-title{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
-.tab-title-input{border:1px solid var(--primary);border-radius:4px;font-size:13px;padding:2px 4px;width:130px;background:var(--bg);color:var(--text)}
-.tab-close{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:2px 5px;border-radius:4px}
-.tab-close:hover{background:rgba(239,68,68,.12);color:var(--err)}
-.new-tab{flex:none}
-.error-bar{flex:none;margin:0 0 8px}
+.error-bar{flex:none;margin:0 0 8px;padding:9px 12px;border:1px solid #fecaca;border-radius:8px;background:#fef2f2}
 .error-bar p{margin:0;color:var(--err);font-size:13px}
-.term-stage{flex:1;min-height:380px;position:relative;overflow:hidden}
+.term-stage{flex:1;min-height:0;position:relative;overflow:hidden}
 .term-pane{position:absolute;inset:0}
-.connect{text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:420px}
-.connect p{color:var(--muted)}
+.connect{text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:0;border:1px dashed #cbd5e1;border-radius:12px;background:#fff}.connect-icon{width:58px;height:58px;border-radius:14px;display:grid;place-items:center;background:#0d1117;color:#7dd3fc;font:700 18px/1 Consolas,monospace}.connect h2{margin:16px 0 4px;font-size:18px}.connect p{max-width:390px;margin:0 0 18px;color:var(--muted);font-size:13px}.empty-list{margin:8px 6px;color:var(--muted);font-size:12px}
+@media(max-width:760px){.terminal-page{grid-template-columns:156px minmax(0,1fr)}.terminal-main{padding:7px}.host-copy small{display:none}}
 </style>

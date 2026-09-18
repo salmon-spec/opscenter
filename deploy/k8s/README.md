@@ -1,4 +1,4 @@
-# OpsCenter v5.0.2 K3s 配置契约
+# OpsCenter v5.0.5 K3s 配置契约
 
 本目录只管理 OpsCenter 如何接入现有 `middleware` 命名空间，不复制或接管
 PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的生命周期。
@@ -29,7 +29,19 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
      --dry-run=client -o yaml | kubectl apply -f -
    ```
 
-6. 应用非敏感配置，并把补丁合并到现有 backend Deployment：
+6. 如需启用 AI 自动巡检，复制 `opscenter-ai-ops.env.example` 到仓库外，填入
+   CommandCode API Key，然后创建或更新独立 Secret：
+
+   ```sh
+   kubectl -n opscenter create secret generic opscenter-ai-ops \
+     --from-env-file=/secure/path/opscenter-ai-ops.env \
+     --dry-run=client -o yaml | kubectl apply -f -
+   ```
+
+   该 Secret 在 Deployment 补丁中是可选项；未创建时后端仍可启动，但 AI
+   分析与自动巡检不会调用模型。
+
+7. 应用非敏感配置，并把补丁合并到现有 backend Deployment：
 
    ```sh
    kubectl apply -f deploy/k8s/opscenter-v5-config.yaml
@@ -37,7 +49,7 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
      --patch-file deploy/k8s/backend-v5.patch.yaml
    ```
 
-7. 后端挂载的 `/opt/opscenter/frontend` 必须来自可写持久卷，否则 SSH
+8. 后端挂载的 `/opt/opscenter/frontend` 必须来自可写持久卷，否则 SSH
    `known_hosts` 只能在 Pod 生命周期内保存。
 
 ## 启用顺序
@@ -57,7 +69,7 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
 kubectl -n opscenter rollout status deployment/backend --timeout=180s
 kubectl -n opscenter get pod,svc
 kubectl -n opscenter logs deployment/backend --tail=200
-curl -fsS http://10.66.66.15:30088/openapi.json | grep -q '"version":"5.0.2"'
+curl -fsS http://10.66.66.15:30088/openapi.json | grep -q '"version":"5.0.5"'
 curl -fsS http://10.66.66.15:30088/api/v2/data-services/overview
 ```
 

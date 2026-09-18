@@ -15,6 +15,9 @@ spec:
           envFrom:
             - secretRef:
                 name: opscenter-env
+            - secretRef:
+                name: opscenter-ai-ops
+                optional: true
             - configMapRef:
                 name: opscenter-env-fixed
             - configMapRef:

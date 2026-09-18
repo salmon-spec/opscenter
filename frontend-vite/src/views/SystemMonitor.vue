@@ -1,7 +1,7 @@
 <template>
   <div class="view monitor-view">
-    <div class="view-head">
-      <div><h1 class="view-title">系统监控</h1><div class="view-sub">{{ currentHost?.name || '未选择主机' }} · 仅页面可见时每 5 秒刷新</div></div>
+    <div class="view-head monitor-toolbar">
+      <div class="view-sub">{{ currentHost?.name || '未选择主机' }} · 仅页面可见时每 5 秒刷新</div>
       <div class="actions"><span class="muted">更新于 {{ updatedAt }}</span><button class="btn" :disabled="loading" @click="loadSummary(true)">刷新</button></div>
     </div>
     <div v-if="error" class="notice error">{{ error }}</div>

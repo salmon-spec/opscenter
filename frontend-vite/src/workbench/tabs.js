@@ -132,11 +132,12 @@ function activateTabInternal(tab) {
 }
 
 function evictOne() {
-  let victim = state.tabs.find((t) => !t.pinned && !unsavedKeys.has(t.key) && t.key !== state.activeKey)
+  const evictable = (t) => t.routeName !== 'SystemTerminal' && !t.pinned
+  let victim = state.tabs.find((t) => evictable(t) && !unsavedKeys.has(t.key) && t.key !== state.activeKey)
   if (!victim) {
-    if (!state.tabs.some((t) => !t.pinned)) return false
+    if (!state.tabs.some(evictable)) return false
     if (!window.confirm('页签已达上限，关闭最早的未固定页签？')) return false
-    victim = state.tabs.find((t) => !t.pinned && t.key !== state.activeKey) || state.tabs.find((t) => !t.pinned)
+    victim = state.tabs.find((t) => evictable(t) && t.key !== state.activeKey) || state.tabs.find(evictable)
   }
   if (!victim) return false
   removeTab(victim.key)

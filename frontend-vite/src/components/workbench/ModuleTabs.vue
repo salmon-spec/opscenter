@@ -1,12 +1,7 @@
 <template>
-  <div v-if="module" class="module-tabs">
-    <nav class="module-groups" :style="{ '--group-count': module.groups.length }" aria-label="模块导航">
-      <router-link v-for="group in module.groups" :key="group.key" :to="group.path" class="module-group" :class="{ active: activeGroup?.key === group.key }">{{ group.label }}</router-link>
-    </nav>
-    <nav v-if="activeGroup?.items?.length > 1" class="module-pages" :style="{ '--page-count': activeGroup.items.length }" aria-label="功能导航">
-      <router-link v-for="item in activeGroup.items" :key="item.path" :to="item.path" class="module-page" :class="{ active: route.path === item.path }">{{ item.label }}</router-link>
-    </nav>
-  </div>
+  <nav v-if="module" class="module-tabs" aria-label="模块导航">
+    <router-link v-for="item in pages" :key="item.path" :to="item.path" class="module-tab" :class="{ active: route.path === item.path }">{{ item.label }}</router-link>
+  </nav>
 </template>
 
 <script setup>
@@ -34,18 +29,12 @@ const modules = [
   ] },
 ]
 const module = computed(() => modules.find((item) => item.prefix ? route.path.startsWith(item.prefix) : item.paths.some((path) => route.path === path || route.path.startsWith(path))) || null)
-const activeGroup = computed(() => module.value?.groups.find((group) => group.items.some((item) => item.path === route.path)) || null)
+const pages = computed(() => module.value?.groups.flatMap((group) => group.items) || [])
 </script>
 
 <style scoped>
-.module-tabs { flex-shrink: 0; padding: 8px 18px; background: #fff; border-bottom: 1px solid var(--border); }
-.module-groups, .module-pages { display: grid; gap: 6px; }
-.module-groups { grid-template-columns: repeat(var(--group-count), minmax(0, 1fr)); }
-.module-page, .module-group { display: flex; align-items: center; justify-content: center; min-width: 0; border-radius: 7px; text-decoration: none; white-space: nowrap; }
-.module-group { min-height: 32px; color: var(--muted); font-size: 13px; font-weight: 600; }
-.module-group:hover, .module-group.active { color: var(--brand); background: #eff6ff; }
-.module-pages { grid-template-columns: repeat(var(--page-count), minmax(0, 1fr)); max-width: 540px; margin-top: 6px; }
-.module-page { min-height: 27px; border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
-.module-page:hover, .module-page.active { color: var(--brand); border-color: #93c5fd; background: #f8fbff; }
-@media (max-width: 720px) { .module-tabs { padding-inline: 10px; overflow-x: auto; } .module-groups { min-width: 390px; } }
+.module-tabs{height:44px;flex-shrink:0;padding:6px 14px;display:flex;align-items:center;gap:4px;overflow-x:auto;background:#fff;border-bottom:1px solid var(--border)}
+.module-tab{height:31px;padding:0 14px;display:flex;align-items:center;justify-content:center;border-radius:7px;color:var(--muted);font-size:13px;font-weight:600;text-decoration:none;white-space:nowrap}
+.module-tab:hover,.module-tab.active{color:var(--brand);background:#eff6ff}
+@media(max-width:720px){.module-tabs{padding-inline:8px}.module-tab{padding-inline:10px}}
 </style>

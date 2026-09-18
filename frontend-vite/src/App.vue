@@ -11,13 +11,7 @@
         <button class="sidebar-toggle" :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'" @click="toggleSidebar">{{ sidebarCollapsed ? '›' : '‹' }}</button>
       </div>
       <nav class="nav">
-        <template v-for="item in navs" :key="item.path || item.key || item.label">
-          <div v-if="item.children" class="nav-group-wrap">
-            <button class="nav-item nav-group" :class="{active:groupActive(item)}" :title="sidebarCollapsed ? item.label : ''" @click="toggleGroup(item)"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span><span class="chevron">{{ openGroups[item.key]?'⌃':'⌄' }}</span></button>
-            <div v-if="openGroups[item.key]" class="nav-children"><router-link v-for="child in item.children" :key="child.path" :to="child.path" class="nav-item nav-child" :class="{active:childActive(child)}">{{ child.label }}</router-link></div>
-          </div>
-          <router-link v-else :to="item.path" class="nav-item" :title="sidebarCollapsed ? item.label : ''" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
-        </template>
+        <router-link v-for="item in navs" :key="item.path" :to="item.path" class="nav-item" :title="sidebarCollapsed ? item.label : ''" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
       </nav>
       <div class="sidebar-foot">
         <div v-if="hostSummary.total > 0" class="host-mini">
@@ -32,18 +26,19 @@
         <h2 class="topbar-title">{{ route.meta.title || '工作台' }}</h2>
         <div class="topbar-right">
           <ClusterSelector v-if="showClusterSelector" />
-          <HostSelector v-if="showHostSelector" @manage="hostDrawer = true" />
           <span class="muted">{{ nowStr }}</span>
         </div>
       </header>
-      <WorkbenchTabs v-if="!isStandalone" />
       <ModuleTabs v-if="!isStandalone" />
-      <div class="content" :class="{ standalone: isStandalone }">
-        <router-view v-slot="{ Component }">
-          <keep-alive :include="aliveNames">
-            <component :is="Component" :key="viewKey" />
-          </keep-alive>
-        </router-view>
+      <div class="workspace-body">
+        <HostSelector v-if="showHostSelector" @manage="hostDrawer = true" />
+        <div class="content" :class="{ standalone: isStandalone }">
+          <router-view v-slot="{ Component }">
+            <keep-alive :include="aliveNames">
+              <component :is="Component" :key="viewKey" />
+            </keep-alive>
+          </router-view>
+        </div>
       </div>
     </div>
 
@@ -66,13 +61,12 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import router from './router'
 import HostManagerDrawer from './components/HostManagerDrawer.vue'
 import HostSelector from './components/workbench/HostSelector.vue'
 import ClusterSelector from './components/workbench/ClusterSelector.vue'
-import WorkbenchTabs from './components/workbench/WorkbenchTabs.vue'
 import ModuleTabs from './components/workbench/ModuleTabs.vue'
 import { useHostContext } from './hostContext'
 import workbench from './workbench/tabs'
@@ -106,11 +100,9 @@ const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_KEY) === '1')
 function toggleSidebar() {
   sidebarCollapsed.value = !sidebarCollapsed.value
   localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed.value ? '1' : '0')
-  if (sidebarCollapsed.value) Object.keys(openGroups).forEach((key) => { openGroups[key] = false })
-  else navs.filter(groupActive).forEach((item) => { openGroups[item.key] = true })
 }
 // 条件式选择器（需求基线 §6）：hostScope/clusterScope==='required' 才显示，互斥由路由 meta 保证
-const showHostSelector = computed(() => route.meta.hostScope === 'required')
+const showHostSelector = computed(() => route.meta.hostScope === 'required' && !route.meta.hostSelectorInside)
 const showClusterSelector = computed(() => route.meta.clusterScope === 'required')
 // KeepAlive：include 按组件 name（=路由 name）过滤，key 用页签唯一键 → 同路由多上下文多实例。
 // activeKey 必须与当前路由匹配才作为 key，否则回退 route.fullPath（防止跨组件 key 碰撞）。
@@ -120,10 +112,7 @@ const viewKey = computed(() => {
   return tab && tab.routeName === route.name && tab.path === route.path ? tab.key : route.fullPath
 })
 const navs = [
-  { key: 'plaza', label: '服务广场', icon: '▦', children: [
-    { path: '/', label: '服务列表', exact: true },
-    { path: '/service-health', label: '服务健康' },
-  ]},
+  { path: '/', label: '服务广场', icon: '▦', exact: true },
   { path: '/kubernetes/overview', label: 'K3s 集群', icon: '☸', matches: ['/kubernetes/'] },
   { path: '/data-services', label: '数据服务', icon: '◫', matches: ['/data-services'] },
   { path: '/system/monitor', label: '系统', icon: '▥', matches: ['/system/', '/docker', '/database'] },
@@ -131,33 +120,12 @@ const navs = [
   { path: '/hosts', label: '主机管理', icon: '▣' },
   { path: '/topology', label: '拓扑架构', icon: '🔗' },
   { path: '/alerts', label: '告警中心', icon: '🔔' },
+  { path: '/ai-ops', label: 'AI 运维', icon: '✦' },
   { path: '/api-keys', label: '开放API', icon: '🔑' },
   { path: '/logs', label: '日志中心', icon: '≡' },
 ]
-// 服务广场仍保留“服务列表 / 服务健康”二级入口；已集成页签的业务模块直接进入页面。
-const openGroups = reactive({ plaza: !sidebarCollapsed.value })
 function isActive(path, exact) { return exact ? route.path === path : (route.path === path || (path !== '/' && route.path.startsWith(path))) }
 function itemActive(item) { return item.matches ? item.matches.some((path) => route.path.startsWith(path)) : isActive(item.path, item.exact) }
-function childActive(child) { return child.matches ? child.matches.includes(route.path) : isActive(child.path, child.exact) }
-function groupActive(item) { return (item.children || []).some(childActive) }
-function toggleGroup(item) {
-  const opening = !openGroups[item.key]
-  Object.keys(openGroups).forEach((key) => { openGroups[key] = false })
-  openGroups[item.key] = opening
-}
-watch(() => route.path, (path) => {
-  if (sidebarCollapsed.value) {
-    Object.keys(openGroups).forEach((key) => { openGroups[key] = false })
-    return
-  }
-  for (const item of navs) {
-    if (item.children && (item.children || []).some(childActive)) {
-      Object.keys(openGroups).forEach((key) => { openGroups[key] = false })
-      openGroups[item.key] = true
-      break
-    }
-  }
-}, { immediate: true })
 
 // 顶栏时钟 + 主机概览
 const nowStr = ref('')
@@ -227,7 +195,6 @@ onUnmounted(() => {
 .nav-item:hover { background: rgba(148,163,184,.12); color: var(--sidebar-text); }
 .nav-item.active, .nav-item.active:hover { background: rgba(37,99,235,.22); color: var(--sidebar-active); font-weight: 600; }
 .nav-icon { width: 20px; text-align: center; }
-.nav-group-wrap{position:relative}.nav-group{width:100%;border:0;cursor:pointer}.chevron{margin-left:auto}.nav-children{display:flex;flex-direction:column;gap:2px}.nav-child{padding-left:42px;font-size:13px}
 .sidebar-foot { padding: 12px 8px 4px; border-top: 1px solid rgba(148,163,184,.15); }
 .host-mini { font-size: 12px; display: flex; align-items: center; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
@@ -240,24 +207,20 @@ onUnmounted(() => {
 }
 .topbar-title { font-size: 16px; margin: 0; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
-.content { flex: 1; overflow: auto; }
+.workspace-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.content { flex: 1; min-width: 0; overflow: auto; }
 .content.standalone { overflow: hidden; background: var(--screen-bg); }
 .sidebar.collapsed { width: 64px; padding-inline: 6px; }
 .sidebar.collapsed .logo { justify-content: center; padding-inline: 0; }
 .sidebar.collapsed .logo-badge { width: 34px; height: 34px; }
-.sidebar.collapsed .logo-text, .sidebar.collapsed .nav-label, .sidebar.collapsed .chevron, .sidebar.collapsed .host-mini { display: none; }
+.sidebar.collapsed .logo-text, .sidebar.collapsed .nav-label, .sidebar.collapsed .host-mini { display: none; }
 .sidebar.collapsed .sidebar-toggle { position: absolute; right: -17px; top: 9px; z-index: 130; background: var(--sidebar); }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
-.sidebar.collapsed .nav-children { position: absolute; left: 54px; top: 0; min-width: 154px; background: var(--sidebar); padding: 6px; border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,.35); z-index: 120; }
-.sidebar.collapsed .nav-child { justify-content: flex-start; padding: 9px 12px; }
 /* 移动端：侧栏收窄为图标栏，分组子菜单弹出，不遮挡内容 */
 @media (max-width: 768px) {
   .sidebar { width: 56px; padding: 14px 6px; }
   .logo-text { display: none; }
   .nav-item { justify-content: center; padding: 10px 0; }
-  .nav-group .nav-label, .nav-group .chevron { display: none; }
-  .nav-children { position: absolute; left: 52px; top: 0; min-width: 150px; background: var(--sidebar); padding: 6px; border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,.4); z-index: 120; }
-  .nav-child { justify-content: flex-start; padding-left: 12px; }
   .sidebar-toggle { display: none; }
 }
 </style>

@@ -10,6 +10,7 @@ const Assets = () => import('./views/Assets.vue')
 const Screen = () => import('./views/Screen.vue')
 const Topology = () => import('./views/Topology.vue')
 const Alerts = () => import('./views/Alerts.vue')
+const AiOps = () => import('./views/AiOps.vue')
 const ApiKeys = () => import('./views/ApiKeys.vue')
 const Database = () => import('./views/Database.vue')
 const SystemMonitor = () => import('./views/SystemMonitor.vue')
@@ -19,7 +20,6 @@ const SystemSSH = () => import('./views/SystemSSH.vue')
 const SystemTerminal = () => import('./views/SystemTerminal.vue')
 const SystemProcesses = () => import('./views/SystemProcesses.vue')
 const LogCenter = () => import('./views/LogCenter.vue')
-const ServiceHealth = () => import('./views/ServiceHealth.vue')
 const K3sConsolePreview = () => import('./views/K3sConsolePreview.vue')
 const KubernetesOverview = () => import('./views/kubernetes/ClusterOverview.vue')
 const KubernetesWorkloads = () => import('./views/kubernetes/Workloads.vue')
@@ -45,18 +45,19 @@ const routes = [
   { path: '/docker', name: 'Docker', component: Assets, meta: { title: 'Docker', hostScope: 'required', clusterScope: 'none' } },
   { path: '/database', name: 'Database', component: Database, meta: { title: '数据库', hostScope: 'required', clusterScope: 'none' } },
   { path: '/logs', name: 'LogCenter', component: LogCenter, meta: { title: '日志中心', hostScope: 'none', clusterScope: 'none' } },
-  { path: '/service-health', name: 'ServiceHealth', component: ServiceHealth, meta: { title: '服务健康', hostScope: 'none', clusterScope: 'none' } },
+  { path: '/service-health', redirect: '/' },
   { path: '/system', redirect: '/system/monitor' },
   { path: '/system/monitor', name: 'SystemMonitor', component: SystemMonitor, meta: { title: '主机监控', hostScope: 'required', clusterScope: 'none' } },
   { path: '/system/files', name: 'SystemFiles', component: SystemFiles, meta: { title: '系统 · 文件', hostScope: 'required', clusterScope: 'none' } },
   { path: '/system/firewall', name: 'SystemFirewall', component: SystemFirewall, meta: { title: '系统 · 防火墙', hostScope: 'required', clusterScope: 'none' } },
   { path: '/system/ssh', name: 'SystemSSH', component: SystemSSH, meta: { title: '系统 · SSH 管理', hostScope: 'required', clusterScope: 'none' } },
-  { path: '/system/terminal', name: 'SystemTerminal', component: SystemTerminal, meta: { title: '系统 · 终端', hostScope: 'required', clusterScope: 'none' } },
+  { path: '/system/terminal', name: 'SystemTerminal', component: SystemTerminal, meta: { title: '系统 · 终端', hostScope: 'required', hostSelectorInside: true, clusterScope: 'none' } },
   { path: '/system/processes', name: 'SystemProcesses', component: SystemProcesses, meta: { title: '系统 · 进程管理', hostScope: 'required', clusterScope: 'none' } },
   { path: '/screen', name: 'Screen', component: Screen, meta: { title: '健康大屏', hostScope: 'none', clusterScope: 'none' } },
   { path: '/screen-standalone', name: 'ScreenStandalone', component: Screen, meta: { title: '健康大屏', standalone: true, hostScope: 'none', clusterScope: 'none' } },
   { path: '/topology', name: 'Topology', component: Topology, meta: { title: '拓扑架构', hostScope: 'none', clusterScope: 'none' } },
   { path: '/alerts', name: 'Alerts', component: Alerts, meta: { title: '告警中心', hostScope: 'none', clusterScope: 'none' } },
+  { path: '/ai-ops', name: 'AiOps', component: AiOps, meta: { title: 'AI 自动运维', hostScope: 'none', clusterScope: 'none' } },
   { path: '/api-keys', name: 'ApiKeys', component: ApiKeys, meta: { title: '开放 API', hostScope: 'none', clusterScope: 'none' } },
   { path: '/hosts', name: 'Hosts', component: Hosts, meta: { title: '主机管理', hostScope: 'none', clusterScope: 'none' } },
   // v5.0.0 数据服务（中间件纳管与只读浏览）

@@ -45,6 +45,8 @@ from app.plaza import router as plaza_router, plaza_health_loop
 from app.system_control import forget_system_summary, record_system_summary, router as system_control_router
 from app.databases import router as databases_router
 from app.ai_context import router as ai_context_router
+from app.ai_ops import router as ai_ops_router
+from app.ai_inspection import ai_inspection_loop
 # === K3s 只读监控 / 主机详情侧栏（需求基线 2026-09-10） ===
 from app.k8s_monitor import router as k8s_monitor_router
 from app.server_details import router as server_details_router
@@ -321,6 +323,7 @@ app.include_router(metrics_history_router)
 app.include_router(log_center_router)
 app.include_router(alloy_manager_router)
 app.include_router(ai_context_router)
+app.include_router(ai_ops_router)
 app.include_router(k8s_monitor_router)
 app.include_router(server_details_router)
 # v5.0.0 数据服务（Redis/MQ/Kafka/ZK/Nacos/MinIO/MongoDB 纳管 + 只读浏览）
@@ -1344,6 +1347,7 @@ async def startup():
     _start_periodic("agent-health", _agent_health_check_loop)
     # v3.29 T4: 服务健康检查后台循环（间隔/阈值走环境变量）
     _start_periodic("service-health", service_health_loop)
+    _start_periodic("ai-inspection", ai_inspection_loop)
     # v4.5: 服务广场按每个应用的策略探活并沉淀历史数据。
     _start_periodic("plaza-health", plaza_health_loop)
     
