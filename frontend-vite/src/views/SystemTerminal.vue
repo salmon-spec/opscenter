@@ -4,44 +4,43 @@
       <section class="sidebar-section hosts-section">
         <div class="section-label"><span>目标主机</span><span>{{ hosts.length }}</span></div>
         <div class="host-picker">
-          <span class="host-state" :class="currentHost?.status==='online'?'online':'offline'"></span>
-          <select class="host-select" :value="selectedHostId" :disabled="!hosts.length" @change="selectTerminalHost($event.target.value)">
-            <option value="" disabled>{{ hosts.length ? '请选择主机' : '暂无可用主机' }}</option>
+          <span class="host-state" :class="activeHost?.status==='online'?'online':'offline'"></span>
+          <select class="host-select" value="" :disabled="!hosts.length" @change="selectTerminalHost">
+            <option value="">{{ hosts.length ? '选择主机打开终端' : '暂无可用主机' }}</option>
             <option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</option>
           </select>
         </div>
-        <small class="host-address">{{ currentHost?.lan_ip || currentHost?.host || currentHost?.wireguard_ip || '地址未知' }}</small>
+        <small class="host-address">{{ activeHost?.lan_ip || activeHost?.host || activeHost?.wireguard_ip || '地址未知' }}</small>
       </section>
 
 
       <section class="sidebar-section sessions-section">
-        <div class="section-label"><span>当前主机会话</span><span>{{ visibleSessions.length }}</span></div>
+        <div class="section-label"><span>终端会话</span><span>{{ sessions.length }}</span></div>
         <div class="session-list">
-          <div v-for="s in visibleSessions" :key="s.sessionId" class="session-item" :class="{active:s.sessionId===activeSessionId}" role="button" tabindex="0" @click="activate(s.sessionId)" @keydown.enter="activate(s.sessionId)">
+          <div v-for="s in sessions" :key="s.sessionId" class="session-item" :class="{active:s.sessionId===activeSessionId}" role="button" tabindex="0" @click="activate(s.sessionId)" @keydown.enter="activate(s.sessionId)">
             <span class="tab-dot" :class="tabDotClass(s.status)"></span>
             <input v-if="editingTitle===s.sessionId" v-model="renameText" class="session-title-input" @keydown.enter.stop="commitRename(s)" @blur="commitRename(s)" @click.stop />
             <span v-else class="session-title" :title="`${s.serverName} · ${s.sessionId}`" @dblclick.stop="beginRename(s)">{{ s.title }}</span>
             <button class="session-close" :disabled="deletingSession===s.sessionId" title="关闭会话" @click.stop="closeTab(s)">{{ deletingSession===s.sessionId?'…':'×' }}</button>
           </div>
-          <p v-if="!visibleSessions.length" class="empty-list">该主机暂无会话</p>
+          <p v-if="!sessions.length" class="empty-list">暂无终端会话</p>
         </div>
       </section>
 
-      <div class="sidebar-footnote"><span class="host-state" :class="currentHost?.status==='online'?'online':'offline'"></span>{{ currentHost?.name || '未选择主机' }}</div>
+      <div class="sidebar-footnote"><span class="host-state" :class="activeHost?.status==='online'?'online':'offline'"></span>{{ activeHost?.name || '未选择主机' }}</div>
     </aside>
 
     <main class="terminal-main">
       <div v-if="pageError" class="error-bar"><p>{{ pageError }}</p></div>
-      <div v-show="visibleSessions.length && activeSessionId" class="term-stage">
+      <div v-show="sessions.length && activeSessionId" class="term-stage">
         <div v-for="s in sessions" v-show="s.sessionId===activeSessionId" :key="s.sessionId" class="term-pane">
           <TerminalPanel embedded :session-id="s.sessionId" :title="s.title" :allow-files="s.allowFiles" :active="s.sessionId===activeSessionId" @state="onPanelState(s.sessionId,$event)" />
         </div>
       </div>
-      <div v-if="!visibleSessions.length" class="connect">
+      <div v-if="!sessions.length" class="connect">
         <div class="connect-icon">›_</div>
-        <h2>{{ currentHost?.name || '请选择主机' }}</h2>
-        <p>建立安全终端会话，断线后 5 分钟内可重新连接。</p>
-        <button class="btn btn-primary" :disabled="!selectedHostId||creating" @click="createTerminal()">{{ creating?'创建中…':'连接终端' }}</button>
+        <h2>{{ activeHost?.name || '选择主机打开终端' }}</h2>
+        <p>从上方选择目标主机，每选择一次都会新建并打开一个独立终端。</p>
       </div>
     </main>
   </div>
@@ -53,11 +52,13 @@ import { api } from '../api'
 import TerminalPanel from '../components/TerminalPanel.vue'
 import { useHostContext } from '../hostContext'
 
-const { hosts, selectedHostId, currentHost, refreshHosts, selectHost } = useHostContext()
+const { hosts, refreshHosts } = useHostContext()
 const sessions = ref([])
-const visibleSessions = computed(() => sessions.value.filter((s) => s.serverId === selectedHostId.value))
 const activeSessionId = ref('')
-const creating = ref(false)
+const activeHost = computed(() => {
+  const current = sessions.value.find((s) => s.sessionId === activeSessionId.value)
+  return hosts.value.find((host) => host.id === current?.serverId) || null
+})
 const pageError = ref('')
 const deletingSession = ref('')
 const editingTitle = ref('')
@@ -72,9 +73,8 @@ function persistTabs() {
   try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(sessions.value.map((s) => ({ ...s })))) } catch { /* sessionStorage 不可用时忽略 */ }
 }
 
-async function createTerminal(hostId = selectedHostId.value) {
-  if (!hostId || creating.value) return
-  creating.value = true
+async function createTerminal(hostId) {
+  if (!hostId) return
   pageError.value = ''
   try {
     const data = await api.post('/terminal/sessions', { server_id: hostId })
@@ -93,22 +93,15 @@ async function createTerminal(hostId = selectedHostId.value) {
     persistTabs()
   } catch (e) {
     pageError.value = e.message
-  } finally {
-    creating.value = false
   }
 }
 
 function activate(id) { activeSessionId.value = id }
 
-async function selectTerminalHost(id) {
-  if (!id) return
-  selectHost(id)
-  const existing = sessions.value.filter((s) => s.serverId === id)
-  if (existing.length) {
-    activeSessionId.value = existing.find((s) => s.sessionId === activeSessionId.value)?.sessionId || existing[0].sessionId
-    return
-  }
-  await createTerminal(id)
+function selectTerminalHost(event) {
+  const id = event.target.value
+  event.target.value = ''
+  if (id) void createTerminal(id)
 }
 
 function tabDotClass(status) {
@@ -129,7 +122,7 @@ async function closeTab(s) {
     await api.del(`/terminal/sessions/${s.sessionId}`)
   } catch { /* 忽略：服务端可能已过期 */ }
   sessions.value = sessions.value.filter((x) => x.sessionId !== s.sessionId)
-  if (activeSessionId.value === s.sessionId) activeSessionId.value = sessions.value.find((x) => x.serverId === selectedHostId.value)?.sessionId || ''
+  if (activeSessionId.value === s.sessionId) activeSessionId.value = sessions.value[0]?.sessionId || ''
   persistTabs()
   deletingSession.value = ''
 }
@@ -157,7 +150,7 @@ async function restore() {
     return null
   }))
   sessions.value.push(...restored.filter(Boolean))
-  activeSessionId.value = sessions.value.find((s) => s.serverId === selectedHostId.value)?.sessionId || ''
+  activeSessionId.value = sessions.value[0]?.sessionId || ''
   persistTabs()
 }
 
