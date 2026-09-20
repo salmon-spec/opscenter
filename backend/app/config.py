@@ -134,6 +134,9 @@ class Settings(BaseSettings):
     oss_bucket: str = ""
     oss_endpoint: str = ""
     oss_prefix: str = ""
+    oss_buckets: str = ""              # 允许切换的 Bucket 白名单，逗号分隔；空值仅允许 oss_bucket
+    oss_bucket_endpoints: str = ""      # 可选，JSON：{"bucket": "https://oss-cn-....aliyuncs.com"}
+    oss_bucket_prefixes: str = ""       # 可选，JSON：{"bucket": "prefix/"}
 
 
 _settings = Settings()
@@ -237,6 +240,9 @@ OSS_SK = _settings.oss_sk
 OSS_BUCKET = _settings.oss_bucket
 OSS_ENDPOINT = _settings.oss_endpoint.rstrip("/") if _settings.oss_endpoint else ""
 OSS_PREFIX = _settings.oss_prefix.strip().strip("/")
+OSS_BUCKETS = _settings.oss_buckets.strip()
+OSS_BUCKET_ENDPOINTS = _settings.oss_bucket_endpoints.strip()
+OSS_BUCKET_PREFIXES = _settings.oss_bucket_prefixes.strip()
 
 # ── App ──
 from app.version import VERSION  # noqa: E402

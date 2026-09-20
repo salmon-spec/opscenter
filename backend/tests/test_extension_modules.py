@@ -34,10 +34,11 @@ def _fake_oss(monkeypatch):
     monkeypatch.setattr(
         aliyun_oss.aliyun_oss,
         "status",
-        lambda force=False: {
+        lambda force=False, bucket=None: {
             "configured": True,
             "available": True,
-            "bucket": "test-bucket",
+            "bucket": bucket or "test-bucket",
+            "buckets": ["test-bucket", "alt-bucket"],
             "prefix": "voice-workbench/source/",
             "endpoint": "https://oss.example",
             "mode": "readonly",
@@ -46,26 +47,26 @@ def _fake_oss(monkeypatch):
             "checked_at": 1_700_000_000,
         },
     )
-    monkeypatch.setattr(
-        aliyun_oss.aliyun_oss,
-        "list_objects",
-        lambda prefix=None, marker=None, limit=100: {
+    def _fake_list_objects(prefix=None, marker=None, limit=100, bucket=None):
+        if bucket not in (None, "test-bucket", "alt-bucket"):
+            raise aliyun_oss.OssModuleError("存储桶不在只读白名单内")
+        return {
             "prefix": prefix or "voice-workbench/source/",
             "items": [{
                 "type": "text", "name": "README.md",
-                "key": "voice-workbench/source/README.md",
+                "key": "voice-workbench/source/README.md" if not bucket else "README.md",
                 "size": 12, "last_modified": None,
                 "storage_class": "Standard", "mime": "text/markdown",
             }],
             "next_marker": "",
             "truncated": False,
-            "bucket": "test-bucket",
-        },
-    )
+            "bucket": bucket or "test-bucket",
+        }
+    monkeypatch.setattr(aliyun_oss.aliyun_oss, "list_objects", _fake_list_objects)
     monkeypatch.setattr(
         aliyun_oss.aliyun_oss,
         "preview_object",
-        lambda key: {
+        lambda key, bucket=None: {
             "key": key, "name": "README.md", "type": "text",
             "mime": "text/markdown", "size": 12, "previewable": True,
             "content": "hello module", "data_url": None,
@@ -136,15 +137,35 @@ def test_oss_status_objects_preview_and_health(monkeypatch):
     status = client.get(f"{BASE}/oss-browser/status")
     assert status.status_code == 200
     assert status.json()["health"]["available"] is True
+    assert status.json()["health"]["buckets"] == ["test-bucket", "alt-bucket"]
     assert status.json()["module"]["status"] == "running"
 
     objects = client.get(f"{BASE}/oss-browser/objects")
     assert objects.status_code == 200
     assert objects.json()["items"][0]["key"] == "voice-workbench/source/README.md"
 
+    alt_status = client.get(
+        f"{BASE}/oss-browser/status", params={"bucket": "alt-bucket"},
+    )
+    assert alt_status.status_code == 200
+    assert alt_status.json()["health"]["bucket"] == "alt-bucket"
+
+    alt_objects = client.get(
+        f"{BASE}/oss-browser/objects", params={"bucket": "alt-bucket"},
+    )
+    assert alt_objects.status_code == 200
+    assert alt_objects.json()["bucket"] == "alt-bucket"
+    assert alt_objects.json()["items"][0]["key"] == "README.md"
+
+    denied = client.get(
+        f"{BASE}/oss-browser/objects", params={"bucket": "not-allowed"},
+    )
+    assert denied.status_code == 400
+    assert denied.json()["detail"] == "存储桶不在只读白名单内"
+
     preview = client.get(
         f"{BASE}/oss-browser/preview",
-        params={"key": "voice-workbench/source/README.md"},
+        params={"key": "voice-workbench/source/README.md", "bucket": "test-bucket"},
     )
     assert preview.status_code == 200
     assert preview.json()["content"] == "hello module"
@@ -171,7 +192,7 @@ def test_list_objects_accepts_oss_timestamp(monkeypatch):
             is_truncated=False,
         )
     )
-    monkeypatch.setattr(reader, "_client", lambda: client)
+    monkeypatch.setattr(reader, "_client", lambda bucket=None: client)
 
     result = reader.list_objects(prefix="voice-workbench/source/")
     assert result["items"][0]["last_modified"].startswith("2026-")
@@ -187,6 +208,7 @@ def test_audio_mime_types_are_explicit():
 def test_download_closes_oss_response(monkeypatch):
     reader = aliyun_oss.AliyunOssReader()
     monkeypatch.setattr(aliyun_oss, "OSS_PREFIX", "voice-workbench/source")
+    monkeypatch.setattr(aliyun_oss, "OSS_BUCKET", "test-bucket")
 
     class FakeResponse:
         def __init__(self):
@@ -200,7 +222,7 @@ def test_download_closes_oss_response(monkeypatch):
             self.closed = True
 
     response = FakeResponse()
-    reader._client = lambda: SimpleNamespace(get_object=lambda key: response)
+    reader._client = lambda bucket=None: SimpleNamespace(get_object=lambda key: response)
     chunks, filename, mime = reader.open_download("voice-workbench/source/a.txt")
     assert b"".join(chunks) == b"hello module"
     assert filename == "a.txt" and mime == "text/plain"
@@ -209,6 +231,9 @@ def test_download_closes_oss_response(monkeypatch):
 def test_oss_path_validation_rejects_escape(monkeypatch):
     reader = aliyun_oss.AliyunOssReader()
     monkeypatch.setattr(aliyun_oss, "OSS_PREFIX", "voice-workbench/source")
+    monkeypatch.setattr(aliyun_oss, "OSS_BUCKET", "test-bucket")
+    monkeypatch.setattr(aliyun_oss, "OSS_BUCKETS", "")
+    monkeypatch.setattr(aliyun_oss, "OSS_BUCKET_PREFIXES", "")
 
     assert reader.normalize_prefix("voice-workbench/source/2026-09/") == "voice-workbench/source/2026-09/"
     assert reader.normalize_key("voice-workbench/source/README.md") == "voice-workbench/source/README.md"
@@ -224,6 +249,44 @@ def test_oss_path_validation_rejects_escape(monkeypatch):
 
     with pytest.raises(aliyun_oss.OssModuleError):
         reader.normalize_prefix("other-prefix/")
+
+
+def test_oss_bucket_whitelist_and_per_bucket_prefix(monkeypatch):
+    reader = aliyun_oss.AliyunOssReader()
+    monkeypatch.setattr(aliyun_oss, "OSS_BUCKET", "primary-bucket")
+    monkeypatch.setattr(aliyun_oss, "OSS_BUCKETS", "alt-bucket,empty-prefix-bucket")
+    monkeypatch.setattr(aliyun_oss, "OSS_PREFIX", "voice-workbench/source")
+    monkeypatch.setattr(
+        aliyun_oss,
+        "OSS_BUCKET_ENDPOINTS",
+        '{"primary-bucket":"https://oss-cn-wulanchabu.aliyuncs.com","alt-bucket":"https://oss-cn-hangzhou.aliyuncs.com"}',
+    )
+    monkeypatch.setattr(
+        aliyun_oss,
+        "OSS_BUCKET_PREFIXES",
+        '{"primary-bucket":"voice-workbench/source/","empty-prefix-bucket":""}',
+    )
+
+    assert reader.allowed_buckets() == [
+        "primary-bucket", "alt-bucket", "empty-prefix-bucket",
+    ]
+    assert reader.resolve_bucket() == "primary-bucket"
+    assert reader.resolve_bucket("alt-bucket") == "alt-bucket"
+    assert reader._endpoint_for("primary-bucket").startswith("https://oss-cn-wulanchabu")
+    assert reader._endpoint_for("alt-bucket").startswith("https://oss-cn-hangzhou")
+    with pytest.raises(aliyun_oss.OssModuleError):
+        reader._endpoint_for("empty-prefix-bucket")
+    assert reader.prefix_for("alt-bucket") == ""
+    assert reader.prefix_for("primary-bucket") == "voice-workbench/source/"
+    assert reader.normalize_prefix("logs/", "alt-bucket") == "logs/"
+    assert reader.normalize_key("README.md", "alt-bucket") == "README.md"
+
+    with pytest.raises(aliyun_oss.OssModuleError):
+        reader.resolve_bucket("not-allowed")
+    with pytest.raises(aliyun_oss.OssModuleError):
+        reader.normalize_key("README.md", "primary-bucket")
+    with pytest.raises(aliyun_oss.OssModuleError):
+        reader.normalize_key("oss://alt-bucket/README.md", "primary-bucket")
 
 
 def test_module_routes_require_operator_when_configured(monkeypatch):

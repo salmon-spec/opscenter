@@ -1,20 +1,32 @@
 """Read-only Aliyun OSS adapter for the first OpsCenter extension module.
 
-The module deliberately exposes no mutation operations. Every requested prefix
-and object key is normalised and checked against a fixed bucket/root prefix so
-path traversal cannot escape the configured read scope.
+The module deliberately exposes no mutation operations. Every requested bucket,
+prefix, and object key is normalised and checked against a server-side
+allow-list so a client cannot browse an arbitrary bucket or escape the
+configured read scope.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
+import re
 import threading
 import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from app.config import OSS_AK, OSS_BUCKET, OSS_ENDPOINT, OSS_PREFIX, OSS_SK
+from app.config import (
+    OSS_AK,
+    OSS_BUCKET,
+    OSS_BUCKET_ENDPOINTS,
+    OSS_BUCKET_PREFIXES,
+    OSS_BUCKETS,
+    OSS_ENDPOINT,
+    OSS_PREFIX,
+    OSS_SK,
+)
 
 TEXT_EXTENSIONS = {".md", ".txt", ".log", ".csv", ".yaml", ".yml", ".xml", ".json"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
@@ -31,6 +43,7 @@ PDF_EXTENSIONS = {".pdf"}
 TEXT_PREVIEW_BYTES = 256 * 1024
 BINARY_PREVIEW_BYTES = 5 * 1024 * 1024
 STATUS_CACHE_SECONDS = 10.0
+BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
 
 
 class OssModuleError(RuntimeError):
@@ -39,41 +52,146 @@ class OssModuleError(RuntimeError):
 
 class AliyunOssReader:
     def __init__(self) -> None:
-        self._bucket = None
-        self._bucket_lock = threading.Lock()
+        self._clients: dict[str, object] = {}
+        self._client_lock = threading.Lock()
         self._status_lock = threading.Lock()
-        self._status_at = 0.0
-        self._status_value: dict | None = None
+        self._status_at: dict[str, float] = {}
+        self._status_values: dict[str, dict] = {}
+
+    @staticmethod
+    def _clean_prefix(value: str | None) -> str:
+        raw = (value or "").strip().replace("\\", "/").strip("/")
+        return f"{raw}/" if raw else ""
+
+    def allowed_buckets(self) -> list[str]:
+        """Return the configured server-side bucket allow-list."""
+        raw_values = [OSS_BUCKET, *(OSS_BUCKETS or "").split(",")]
+        result: list[str] = []
+        for raw in raw_values:
+            value = str(raw or "").strip()
+            if not value or value in result:
+                continue
+            if not BUCKET_NAME_RE.fullmatch(value):
+                continue
+            result.append(value)
+        return result
+
+    def resolve_bucket(self, value: str | None = None) -> str:
+        """Resolve a requested bucket and reject anything outside the allow-list."""
+        raw = str(value or "").strip()
+        if raw.startswith("oss://"):
+            raw = raw[6:].split("/", 1)[0].strip()
+        bucket = raw or str(OSS_BUCKET or "").strip()
+        if not bucket:
+            raise OssModuleError("OSS 存储桶未配置")
+        if bucket not in self.allowed_buckets():
+            raise OssModuleError("存储桶不在只读白名单内")
+        return bucket
+
+    def _endpoint_map(self) -> dict[str, str]:
+        raw = (OSS_BUCKET_ENDPOINTS or "").strip()
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise OssModuleError("OSS_BUCKET_ENDPOINTS 配置不是合法 JSON") from exc
+        if not isinstance(value, dict):
+            raise OssModuleError("OSS_BUCKET_ENDPOINTS 配置必须是对象")
+        return {
+            str(bucket).strip(): str(endpoint).strip().rstrip("/")
+            for bucket, endpoint in value.items()
+            if str(bucket).strip() and str(endpoint).strip()
+        }
+
+    def _endpoint_for(self, bucket: str | None = None) -> str:
+        safe_bucket = self.resolve_bucket(bucket)
+        endpoints = self._endpoint_map()
+        if endpoints:
+            endpoint = endpoints.get(safe_bucket)
+            if not endpoint:
+                raise OssModuleError(f"存储桶 {safe_bucket} 未配置访问 Endpoint")
+            return endpoint
+        if OSS_ENDPOINT:
+            return OSS_ENDPOINT
+        raise OssModuleError("OSS Endpoint 未配置")
+
+    def _prefix_map(self) -> dict[str, str]:
+        raw = (OSS_BUCKET_PREFIXES or "").strip()
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise OssModuleError("OSS_BUCKET_PREFIXES 配置不是合法 JSON") from exc
+        if not isinstance(value, dict):
+            raise OssModuleError("OSS_BUCKET_PREFIXES 配置必须是对象")
+        return {
+            str(bucket).strip(): self._clean_prefix(str(prefix or ""))
+            for bucket, prefix in value.items()
+            if str(bucket).strip()
+        }
+
+    def prefix_for(self, bucket: str | None = None) -> str:
+        """Return a bucket's read root, with legacy OSS_PREFIX fallback."""
+        safe_bucket = self.resolve_bucket(bucket)
+        prefixes = self._prefix_map()
+        if safe_bucket in prefixes:
+            return prefixes[safe_bucket]
+        if safe_bucket == str(OSS_BUCKET or "").strip():
+            return self._clean_prefix(OSS_PREFIX)
+        return ""
 
     @property
     def root_prefix(self) -> str:
-        value = (OSS_PREFIX or "").strip().replace("\\", "/").strip("/")
-        return f"{value}/" if value else ""
+        """Backward-compatible alias for the default bucket's read root."""
+        return self.prefix_for(OSS_BUCKET)
 
     def configured(self) -> bool:
-        return bool(OSS_ENDPOINT and OSS_BUCKET and OSS_AK and OSS_SK)
+        if not (OSS_AK and OSS_SK and self.allowed_buckets()):
+            return False
+        try:
+            self._endpoint_for()
+            return True
+        except OssModuleError:
+            return False
 
-    def _client(self):
+    def _client(self, bucket: str | None = None):
         if not self.configured():
             raise OssModuleError("OSS 凭据或存储桶未配置")
-        with self._bucket_lock:
-            if self._bucket is None:
+        safe_bucket = self.resolve_bucket(bucket)
+        with self._client_lock:
+            client = self._clients.get(safe_bucket)
+            if client is None:
                 try:
                     import oss2
                 except ImportError as exc:  # pragma: no cover - deployment guard
                     raise OssModuleError("OSS SDK 未安装") from exc
                 auth = oss2.Auth(OSS_AK, OSS_SK)
-                self._bucket = oss2.Bucket(auth, OSS_ENDPOINT, OSS_BUCKET)
-            return self._bucket
+                client = oss2.Bucket(auth, self._endpoint_for(safe_bucket), safe_bucket)
+                self._clients[safe_bucket] = client
+            return client
 
-    def normalize_prefix(self, value: str | None = None) -> str:
-        root = self.root_prefix
+    @staticmethod
+    def _path_from_uri(raw: str) -> tuple[str | None, str]:
+        if not raw.startswith("oss://"):
+            return None, raw
+        parts = raw[6:].split("/", 1)
+        bucket = parts[0].strip() or None
+        path = parts[1] if len(parts) == 2 else ""
+        return bucket, path
+
+    def normalize_prefix(self, value: str | None = None, bucket: str | None = None) -> str:
+        safe_bucket = self.resolve_bucket(bucket)
+        root = self.prefix_for(safe_bucket)
         raw = (value or root).strip().replace("\\", "/")
-        if raw.startswith("oss://"):
-            parts = raw.split("/", 3)
-            raw = parts[3] if len(parts) == 4 else ""
+        uri_bucket, uri_path = self._path_from_uri(raw)
+        if uri_bucket and uri_bucket != safe_bucket:
+            raise OssModuleError("URL 中的存储桶与当前桶不一致")
+        if uri_bucket:
+            raw = uri_path
         raw = raw.lstrip("/")
-        if not raw.endswith("/"):
+        if raw and not raw.endswith("/"):
             raw += "/"
         if "\x00" in raw or ".." in raw.split("/"):
             raise OssModuleError("对象前缀不合法")
@@ -81,13 +199,16 @@ class AliyunOssReader:
             raise OssModuleError("对象前缀超出只读范围")
         return raw
 
-    def normalize_key(self, value: str | None) -> str:
+    def normalize_key(self, value: str | None, bucket: str | None = None) -> str:
+        safe_bucket = self.resolve_bucket(bucket)
         raw = (value or "").strip().replace("\\", "/")
-        if raw.startswith("oss://"):
-            parts = raw.split("/", 3)
-            raw = parts[3] if len(parts) == 4 else ""
+        uri_bucket, uri_path = self._path_from_uri(raw)
+        if uri_bucket and uri_bucket != safe_bucket:
+            raise OssModuleError("URL 中的存储桶与当前桶不一致")
+        if uri_bucket:
+            raw = uri_path
         raw = raw.lstrip("/")
-        root = self.root_prefix
+        root = self.prefix_for(safe_bucket)
         if not raw or "\x00" in raw or ".." in raw.split("/"):
             raise OssModuleError("对象 Key 不合法")
         if root and not raw.startswith(root):
@@ -128,19 +249,24 @@ class AliyunOssReader:
             message = message.replace(OSS_AK, "***")
         return message[:300]
 
-    def status(self, force: bool = False) -> dict:
+    def status(self, force: bool = False, bucket: str | None = None) -> dict:
+        safe_bucket = self.resolve_bucket(bucket) if (bucket or self.allowed_buckets()) else ""
+        prefix = self.prefix_for(safe_bucket) if safe_bucket else ""
         now = time.monotonic()
-        if not force:
+        if not force and safe_bucket:
             with self._status_lock:
-                if self._status_value and now - self._status_at < STATUS_CACHE_SECONDS:
-                    return dict(self._status_value)
+                status_at = self._status_at.get(safe_bucket, 0.0)
+                status_value = self._status_values.get(safe_bucket)
+                if status_value and now - status_at < STATUS_CACHE_SECONDS:
+                    return dict(status_value)
 
         result = {
             "configured": self.configured(),
             "available": False,
-            "bucket": OSS_BUCKET,
-            "prefix": self.root_prefix,
-            "endpoint": OSS_ENDPOINT,
+            "bucket": safe_bucket,
+            "buckets": self.allowed_buckets(),
+            "prefix": prefix,
+            "endpoint": self._endpoint_for(safe_bucket) if safe_bucket else "",
             "mode": "readonly",
             "latency_ms": None,
             "error": "",
@@ -151,25 +277,32 @@ class AliyunOssReader:
         else:
             started = time.perf_counter()
             try:
-                self._client().list_objects(
-                    prefix=self.root_prefix, delimiter="/", max_keys=1,
+                self._client(safe_bucket).list_objects(
+                    prefix=prefix, delimiter="/", max_keys=1,
                 )
                 result["available"] = True
             except Exception as exc:
                 result["error"] = self._safe_error(exc)
             result["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
 
-        with self._status_lock:
-            self._status_at = now
-            self._status_value = dict(result)
+        if safe_bucket:
+            with self._status_lock:
+                self._status_at[safe_bucket] = now
+                self._status_values[safe_bucket] = dict(result)
         return result
 
-    def list_objects(self, prefix: str | None = None, marker: str | None = None,
-                     limit: int = 100) -> dict:
-        safe_prefix = self.normalize_prefix(prefix)
+    def list_objects(
+        self,
+        prefix: str | None = None,
+        marker: str | None = None,
+        limit: int = 100,
+        bucket: str | None = None,
+    ) -> dict:
+        safe_bucket = self.resolve_bucket(bucket)
+        safe_prefix = self.normalize_prefix(prefix, safe_bucket)
         safe_limit = max(1, min(int(limit or 100), 500))
         try:
-            result = self._client().list_objects(
+            result = self._client(safe_bucket).list_objects(
                 prefix=safe_prefix, delimiter="/", max_keys=safe_limit,
                 marker=marker or "",
             )
@@ -191,7 +324,7 @@ class AliyunOssReader:
                 "mime": "",
             })
         for obj in getattr(result, "object_list", []) or []:
-            key = self.normalize_key(getattr(obj, "key", ""))
+            key = self.normalize_key(getattr(obj, "key", ""), safe_bucket)
             modified = getattr(obj, "last_modified", None)
             if isinstance(modified, (int, float)):
                 timestamp = modified / 1000 if modified > 100_000_000_000 else modified
@@ -213,15 +346,16 @@ class AliyunOssReader:
             "items": items,
             "next_marker": getattr(result, "next_marker", "") or "",
             "truncated": bool(getattr(result, "is_truncated", False)),
-            "bucket": OSS_BUCKET,
+            "bucket": safe_bucket,
         }
 
-    def preview_object(self, key: str | None) -> dict:
-        safe_key = self.normalize_key(key)
+    def preview_object(self, key: str | None, bucket: str | None = None) -> dict:
+        safe_bucket = self.resolve_bucket(bucket)
+        safe_key = self.normalize_key(key, safe_bucket)
         kind = self.classify(safe_key)
         mime = self._mime(safe_key)
         try:
-            head = self._client().head_object(safe_key)
+            head = self._client(safe_bucket).head_object(safe_key)
             size = int(getattr(head, "content_length", 0) or 0)
         except Exception as exc:
             raise OssModuleError(self._safe_error(exc)) from exc
@@ -229,6 +363,7 @@ class AliyunOssReader:
         result = {
             "key": safe_key,
             "name": safe_key.rsplit("/", 1)[-1],
+            "bucket": safe_bucket,
             "type": kind,
             "mime": mime,
             "size": size,
@@ -244,7 +379,9 @@ class AliyunOssReader:
                 result["content"] = ""
                 return result
             try:
-                body = self._client().get_object(safe_key, byte_range=(0, read_size - 1)).read()
+                body = self._client(safe_bucket).get_object(
+                    safe_key, byte_range=(0, read_size - 1),
+                ).read()
             except Exception as exc:
                 raise OssModuleError(self._safe_error(exc)) from exc
             result["content"] = body.decode("utf-8", errors="replace")
@@ -253,7 +390,7 @@ class AliyunOssReader:
 
         if kind in {"image", "audio"} and size <= BINARY_PREVIEW_BYTES:
             try:
-                body = self._client().get_object(safe_key).read()
+                body = self._client(safe_bucket).get_object(safe_key).read()
             except Exception as exc:
                 raise OssModuleError(self._safe_error(exc)) from exc
             result["data_url"] = f"data:{mime};base64,{base64.b64encode(body).decode('ascii')}"
@@ -267,10 +404,11 @@ class AliyunOssReader:
             result["message"] = "该格式暂不支持在线预览，可下载后查看"
         return result
 
-    def open_download(self, key: str | None):
-        safe_key = self.normalize_key(key)
+    def open_download(self, key: str | None, bucket: str | None = None):
+        safe_bucket = self.resolve_bucket(bucket)
+        safe_key = self.normalize_key(key, safe_bucket)
         try:
-            response = self._client().get_object(safe_key)
+            response = self._client(safe_bucket).get_object(safe_key)
         except Exception as exc:
             raise OssModuleError(self._safe_error(exc)) from exc
 

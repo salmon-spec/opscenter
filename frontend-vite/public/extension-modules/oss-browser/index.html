@@ -39,6 +39,10 @@
     .metric b { display: block; margin: 4px 0 2px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .browser { min-height: 500px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
     .toolbar { min-height: 55px; display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-bottom: 1px solid var(--border); }
+    .bucket-picker { height: 34px; flex: none; display: inline-flex; align-items: center; gap: 7px; padding-left: 10px; border: 1px solid var(--border); border-radius: 7px; background: #fff; }
+    .bucket-picker span { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+    .bucket-picker select { width: 205px; height: 100%; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text); font-size: 11.5px; }
+    .bucket-picker select:disabled { color: var(--muted); }
     .path { min-width: 190px; flex: 1; height: 34px; display: flex; align-items: center; padding: 0 11px; border: 1px solid var(--border); border-radius: 7px; background: #f8fafc; color: #334155; font: 11.5px/1 Consolas, "Courier New", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .search { width: 230px; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; outline: none; }
     .search:focus { border-color: #93b4f6; box-shadow: 0 0 0 3px rgba(37,99,235,.09); }
@@ -103,7 +107,10 @@
       .summary { grid-template-columns: 1fr; }
       .summary .metric:nth-child(3), .summary .metric:nth-child(4) { display: none; }
       .toolbar { flex-wrap: wrap; }
-      .path { order: 3; flex: 1 1 100%; }
+      .bucket-picker { order: 2; flex: 1 1 calc(100% - 43px); }
+      .bucket-picker select { width: 100%; }
+      .toolbar .search { order: 3; }
+      .path { order: 4; flex: 1 1 100%; }
       .search { width: 100%; }
       .col-time, .col-type { display: none; }
       .col-name { width: 72%; } .col-size { width: 28%; }
@@ -126,7 +133,7 @@
 
     <main class="workspace">
       <div class="summary">
-        <div class="metric"><span>Bucket</span><b id="bucketValue">-</b><small>固定存储桶</small></div>
+        <div class="metric"><span>Bucket</span><b id="bucketValue">-</b><small id="bucketCountValue">白名单可切换</small></div>
         <div class="metric"><span>只读前缀</span><b id="prefixValue">-</b><small>服务端范围校验</small></div>
         <div class="metric"><span>当前目录</span><b id="countValue">0 个对象</b><small id="folderValue">0 个目录</small></div>
         <div class="metric"><span>健康检查</span><b id="latencyValue">-</b><small id="checkedValue">等待检测</small></div>
@@ -136,6 +143,7 @@
       <section class="browser">
         <div class="toolbar">
           <button class="btn icon" id="upButton" title="返回上级" disabled>↑</button>
+          <label class="bucket-picker" for="bucketSelect"><span>Bucket</span><select id="bucketSelect" aria-label="选择 OSS 存储桶" disabled><option>加载中</option></select></label>
           <div class="path" id="pathValue">oss://</div>
           <input class="search" id="searchInput" type="search" placeholder="筛选当前目录">
         </div>
@@ -180,6 +188,7 @@
   <script>
     const state = {
       info: {},
+      bucket: '',
       rootPrefix: '',
       prefix: '',
       items: [],
@@ -254,6 +263,22 @@
       node.style.borderColor = kind === 'err' ? '#fecaca' : '#fde68a'
       node.style.background = kind === 'err' ? '#fef2f2' : '#fffbeb'
       node.style.color = kind === 'err' ? '#b91c1c' : '#92400e'
+    }
+
+    function renderBuckets(health) {
+      const buckets = Array.isArray(health.buckets) ? health.buckets.filter(Boolean) : []
+      if (!state.bucket || !buckets.includes(state.bucket)) state.bucket = health.bucket || buckets[0] || ''
+      const select = el('bucketSelect')
+      select.innerHTML = ''
+      for (const bucket of buckets) {
+        const option = document.createElement('option')
+        option.value = bucket
+        option.textContent = bucket
+        select.appendChild(option)
+      }
+      select.disabled = buckets.length <= 1
+      if (state.bucket) select.value = state.bucket
+      el('bucketCountValue').textContent = buckets.length > 1 ? `${buckets.length} 个可切换桶` : '当前账号仅开放 1 个桶'
     }
 
     function filteredItems() {
@@ -380,7 +405,7 @@
       renderRows()
       renderPreview()
       try {
-        state.preview = await request(endpoint('preview'), { key: item.key })
+        state.preview = await request(endpoint('preview'), { key: item.key, bucket: state.bucket })
       } catch (error) {
         state.preview = { type: item.type, message: error.message, content: null, data_url: null }
       }
@@ -402,13 +427,13 @@
       state.loading = true
       setNotice('')
       try {
-        const data = await request(endpoint('objects'), { prefix: state.prefix, limit: 500 })
+        const data = await request(endpoint('objects'), { prefix: state.prefix, limit: 500, bucket: state.bucket })
         state.items = (data.items || []).sort((a, b) => {
           if (a.type === 'folder' && b.type !== 'folder') return -1
           if (a.type !== 'folder' && b.type === 'folder') return 1
           return a.name.localeCompare(b.name, 'zh-CN')
         })
-        el('pathValue').textContent = `oss://${data.bucket}/${state.prefix}`
+        el('pathValue').textContent = `oss://${data.bucket || state.bucket}/${state.prefix}`
         el('upButton').disabled = state.prefix === state.rootPrefix
         if (data.truncated) setNotice('对象数量较多，当前仅显示首批结果，可使用筛选定位。')
         renderRows()
@@ -424,11 +449,12 @@
     async function loadStatus() {
       setStatus('', '连接中')
       try {
-        const result = await request(endpoint('status'), { force: true })
+        const result = await request(endpoint('status'), { force: true, bucket: state.bucket || undefined })
         const health = result.health || {}
+        renderBuckets(health)
         state.rootPrefix = health.prefix || ''
         state.prefix = state.prefix || state.rootPrefix
-        el('bucketValue').textContent = health.bucket || '-'
+        el('bucketValue').textContent = state.bucket || health.bucket || '-'
         el('prefixValue').textContent = health.prefix || '-'
         el('latencyValue').textContent = health.available ? '正常' : '异常'
         el('checkedValue').textContent = health.latency_ms === null ? '最近探测完成' : `探测 ${health.latency_ms} ms`
@@ -446,7 +472,7 @@
       if (!item) return
       el('downloadButton').disabled = true
       try {
-        await download(endpoint('download'), { key: item.key }, item.name)
+        await download(endpoint('download'), { key: item.key, bucket: state.bucket }, item.name)
       } catch (error) {
         setNotice(error.message, 'err')
       } finally {
@@ -483,6 +509,20 @@
     })
 
     el('upButton').addEventListener('click', goUp)
+    el('bucketSelect').addEventListener('change', (event) => {
+      state.bucket = event.target.value
+      state.rootPrefix = ''
+      state.prefix = ''
+      state.items = []
+      state.current = null
+      state.preview = null
+      state.search = ''
+      el('searchInput').value = ''
+      el('pathValue').textContent = `oss://${state.bucket}/`
+      renderRows()
+      renderPreview()
+      loadStatus()
+    })
     el('refreshButton').addEventListener('click', loadStatus)
     el('downloadButton').addEventListener('click', downloadCurrent)
     el('copyButton').addEventListener('click', copyKey)

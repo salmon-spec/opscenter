@@ -29,8 +29,8 @@ MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 BUILTIN_MODULES = {
     "oss-browser": {
         "name": "OSS 文件浏览",
-        "version": "1.0.0",
-        "description": "只读浏览阿里云 OSS 指定 Bucket 与前缀内的文件",
+        "version": "1.1.0",
+        "description": "只读浏览阿里云 OSS 白名单 Bucket 与前缀内的文件",
         "icon": "▤",
         "entry_url": "/v3/extension-modules/oss-browser/index.html",
         "runtime": "iframe",
@@ -273,6 +273,7 @@ def _oss_guard():
 def oss_status(
     module_key: str,
     force: bool = Query(False),
+    bucket: Optional[str] = Query(None),
     user: object = Depends(require_operator),
 ):
     with get_db() as db:
@@ -280,7 +281,10 @@ def oss_status(
         if module_key != "oss-browser":
             raise HTTPException(status_code=404, detail="该模块没有状态接口")
         _oss_guard()
-        result = _record_health(row, aliyun_oss.status(force=force))
+        try:
+            result = _record_health(row, aliyun_oss.status(force=force, bucket=bucket))
+        except OssModuleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         db.commit()
         return {"module": _module_dict(row, include_manifest=False), "health": result}
 
@@ -291,6 +295,7 @@ def oss_objects(
     prefix: Optional[str] = Query(None),
     marker: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=500),
+    bucket: Optional[str] = Query(None),
     user: object = Depends(require_operator),
 ):
     with get_db() as db:
@@ -299,7 +304,7 @@ def oss_objects(
             raise HTTPException(status_code=404, detail="该模块没有对象浏览接口")
         _oss_guard()
         try:
-            return aliyun_oss.list_objects(prefix, marker, limit)
+            return aliyun_oss.list_objects(prefix, marker, limit, bucket)
         except OssModuleError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -308,6 +313,7 @@ def oss_objects(
 def oss_preview(
     module_key: str,
     key: str = Query(...),
+    bucket: Optional[str] = Query(None),
     user: object = Depends(require_operator),
 ):
     with get_db() as db:
@@ -316,7 +322,7 @@ def oss_preview(
             raise HTTPException(status_code=404, detail="该模块没有预览接口")
         _oss_guard()
         try:
-            return aliyun_oss.preview_object(key)
+            return aliyun_oss.preview_object(key, bucket)
         except OssModuleError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -325,6 +331,7 @@ def oss_preview(
 def oss_download(
     module_key: str,
     key: str = Query(...),
+    bucket: Optional[str] = Query(None),
     user: object = Depends(require_operator),
 ):
     with get_db() as db:
@@ -333,7 +340,7 @@ def oss_download(
             raise HTTPException(status_code=404, detail="该模块没有下载接口")
         _oss_guard()
         try:
-            chunks, filename, mime = aliyun_oss.open_download(key)
+            chunks, filename, mime = aliyun_oss.open_download(key, bucket)
         except OssModuleError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return StreamingResponse(
