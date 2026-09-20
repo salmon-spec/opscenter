@@ -128,6 +128,13 @@ class Settings(BaseSettings):
     # 同时 OPS_AUTH_ENABLED=true 时优先走 JWT。两者都未启用则沿用免登录（现状兼容）。
     operator_token: str = ""
 
+    # ── Aliyun OSS extension module (v5.1.0, readonly) ──
+    oss_ak: str = ""
+    oss_sk: str = ""
+    oss_bucket: str = ""
+    oss_endpoint: str = ""
+    oss_prefix: str = ""
+
 
 _settings = Settings()
 
@@ -223,6 +230,13 @@ ZOOKEEPER_HOSTS = _settings.zookeeper_hosts
 MW_LEADER_ENABLED = _settings.mw_leader_enabled
 MW_PROBE_TIMEOUT = _settings.mw_probe_timeout
 OPERATOR_TOKEN = _settings.operator_token
+
+# ── Aliyun OSS extension module (v5.1.0) ──
+OSS_AK = _settings.oss_ak
+OSS_SK = _settings.oss_sk
+OSS_BUCKET = _settings.oss_bucket
+OSS_ENDPOINT = _settings.oss_endpoint.rstrip("/") if _settings.oss_endpoint else ""
+OSS_PREFIX = _settings.oss_prefix.strip().strip("/")
 
 # ── App ──
 from app.version import VERSION  # noqa: E402

@@ -571,3 +571,29 @@ class Cluster(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+class ExtensionModule(Base):
+    """扩展模块清单与启停状态（v5.1.0）。模块代码不在本进程内执行。"""
+    __tablename__ = "extension_modules"
+    key = Column(String(64), primary_key=True)
+    name = Column(String(80), nullable=False)
+    version = Column(String(40), default="1.0.0")
+    description = Column(Text, default="")
+    icon = Column(String(16), default="◇")
+    entry_url = Column(Text, nullable=False)
+    runtime = Column(String(32), default="iframe")
+    isolation = Column(String(40), default="sandboxed-iframe")
+    source = Column(String(20), default="registered")
+    capabilities = Column(JSONB, default=list)
+    permissions = Column(JSONB, default=list)
+    manifest = Column(JSONB, default=dict)
+    sort_order = Column(Integer, default=100)
+    running = Column(Boolean, default=False)
+    status = Column(String(20), default="stopped")
+    last_error = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    stopped_at = Column(DateTime, nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+

@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OSS 文件浏览</title>
+  <style>
+    :root {
+      --bg: #f4f6fa; --panel: #fff; --text: #1f2937; --muted: #68758a;
+      --border: #e2e8f0; --brand: #2563eb; --brand-soft: #eff6ff;
+      --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .app { height: 100%; min-height: 560px; display: flex; flex-direction: column; overflow: hidden; }
+    .module-head { min-height: 64px; flex: none; display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--border); }
+    .module-title { min-width: 0; }
+    .module-title h1 { margin: 0; font-size: 18px; }
+    .module-title p { margin: 3px 0 0; color: var(--muted); font-size: 11.5px; }
+    .head-status { margin-left: auto; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .status { height: 27px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: #f1f5f9; color: var(--muted); font-size: 11px; font-weight: 600; }
+    .status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .status.ok { background: #f0fdf4; color: #15803d; }
+    .status.warn { background: #fffbeb; color: #b45309; }
+    .status.err { background: #fef2f2; color: var(--err); }
+    .btn { height: 33px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 11px; border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--text); font-size: 12px; }
+    .btn:hover { border-color: #93b4f6; color: var(--brand); }
+    .btn:disabled { opacity: .48; cursor: not-allowed; }
+    .btn.primary { border-color: var(--brand); background: var(--brand); color: #fff; }
+    .btn.primary:hover { background: #1d4ed8; color: #fff; }
+    .btn.icon { width: 33px; padding: 0; }
+    .workspace { flex: 1; min-height: 0; overflow: auto; padding: 13px 15px 18px; }
+    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-bottom: 11px; }
+    .metric { min-width: 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+    .metric span, .metric small { display: block; color: var(--muted); font-size: 10.5px; }
+    .metric b { display: block; margin: 4px 0 2px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .browser { min-height: 500px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .toolbar { min-height: 55px; display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-bottom: 1px solid var(--border); }
+    .path { min-width: 190px; flex: 1; height: 34px; display: flex; align-items: center; padding: 0 11px; border: 1px solid var(--border); border-radius: 7px; background: #f8fafc; color: #334155; font: 11.5px/1 Consolas, "Courier New", monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .search { width: 230px; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; outline: none; }
+    .search:focus { border-color: #93b4f6; box-shadow: 0 0 0 3px rgba(37,99,235,.09); }
+    .readonly { height: 27px; display: inline-flex; align-items: center; padding: 0 9px; border-radius: 999px; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; font-size: 10.5px; font-weight: 600; }
+    .browser-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 390px; }
+    .list-pane { min-width: 0; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+    .filters { min-height: 43px; display: flex; align-items: center; gap: 5px; padding: 7px 10px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+    .chip { height: 26px; padding: 0 9px; border: 1px solid var(--border); border-radius: 999px; background: #fff; color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+    .chip.active { border-color: #bfdbfe; background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+    .table-scroll { flex: 1; min-height: 0; overflow: auto; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid var(--border); text-align: left; font-size: 11.5px; }
+    th { position: sticky; top: 0; z-index: 2; background: #f8fafc; color: var(--muted); font-weight: 600; }
+    tr.file { cursor: pointer; }
+    tr.file:hover td { background: #f8fafc; }
+    tr.file.active td { background: #eff6ff; }
+    .col-name { width: 54%; } .col-size { width: 15%; } .col-time { width: 24%; } .col-type { width: 7%; }
+    .name { min-width: 0; display: flex; align-items: center; gap: 9px; }
+    .mark { width: 30px; height: 30px; flex: none; display: grid; place-items: center; border-radius: 7px; background: #f1f5f9; color: #475569; font: 700 9px/1 Consolas, monospace; }
+    .mark.folder { background: #fff7ed; color: #c2410c; }
+    .mark.image { background: #ecfeff; color: #0e7490; }
+    .mark.audio { background: #f0fdf4; color: #15803d; }
+    .mark.text { background: #eff6ff; color: var(--brand); }
+    .mark.json { background: #f5f3ff; color: #6d28d9; }
+    .mark.pdf { background: #fef2f2; color: #b91c1c; }
+    .name-text { min-width: 0; }
+    .name-text b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .name-text small { display: block; margin-top: 2px; color: var(--muted); font: 9.5px/1.2 Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .muted { color: var(--muted); }
+    .empty-state { padding: 58px 16px; text-align: center; color: var(--muted); }
+    .preview-pane { min-width: 0; display: flex; flex-direction: column; background: #fbfcfe; }
+    .preview-head { flex: none; min-height: 68px; padding: 11px 12px; background: #fff; border-bottom: 1px solid var(--border); }
+    .preview-title { font-weight: 700; word-break: break-all; }
+    .preview-meta { margin-top: 3px; color: var(--muted); font-size: 10.5px; }
+    .preview-actions { display: flex; gap: 6px; margin-top: 8px; }
+    .preview-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+    .preview-box { min-height: 260px; background: #fff; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .preview-label { height: 35px; display: flex; align-items: center; padding: 0 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 10.5px; }
+    pre.text-preview { min-height: 225px; margin: 0; padding: 13px; white-space: pre-wrap; overflow-wrap: anywhere; color: #334155; font: 11px/1.65 Consolas, "Courier New", monospace; }
+    .image-preview { min-height: 260px; display: grid; place-items: center; padding: 12px; background: #f8fafc; }
+    .image-preview img { max-width: 100%; max-height: 430px; border-radius: 6px; box-shadow: 0 8px 22px rgba(15,23,42,.12); }
+    .audio-preview { min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; padding: 20px; background: #f8fafc; }
+    .audio-preview audio { width: min(100%, 330px); }
+    .unsupported { min-height: 240px; display: grid; place-items: center; padding: 30px; color: var(--muted); text-align: center; }
+    .meta { margin-top: 10px; background: #fff; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .meta-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; padding: 8px 10px; border-bottom: 1px solid #eef2f6; font-size: 10.5px; }
+    .meta-row:last-child { border-bottom: 0; }
+    .meta-row span:first-child { color: var(--muted); }
+    .meta-row span:last-child { word-break: break-all; }
+    .notice { margin-bottom: 9px; padding: 9px 11px; border: 1px solid #fde68a; border-radius: 7px; background: #fffbeb; color: #92400e; font-size: 11px; }
+    .center { min-height: 320px; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 30px; }
+    @media (max-width: 1050px) {
+      .browser-body { grid-template-columns: 1fr; }
+      .list-pane { border-right: 0; }
+      .preview-pane { min-height: 460px; border-top: 1px solid var(--border); }
+      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 680px) {
+      .module-head { padding: 9px 10px; }
+      .head-status .readonly, .head-status .status { display: none; }
+      .workspace { padding: 9px; }
+      .summary { grid-template-columns: 1fr; }
+      .summary .metric:nth-child(3), .summary .metric:nth-child(4) { display: none; }
+      .toolbar { flex-wrap: wrap; }
+      .path { order: 3; flex: 1 1 100%; }
+      .search { width: 100%; }
+      .col-time, .col-type { display: none; }
+      .col-name { width: 72%; } .col-size { width: 28%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="module-head">
+      <div class="module-title">
+        <h1>OSS 文件浏览</h1>
+        <p id="subtitle">阿里云 OSS · 只读访问</p>
+      </div>
+      <div class="head-status">
+        <span class="readonly">只读模式</span>
+        <span class="status" id="healthStatus"><i></i><span>连接中</span></span>
+        <button class="btn" id="refreshButton">刷新</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <div class="summary">
+        <div class="metric"><span>Bucket</span><b id="bucketValue">-</b><small>固定存储桶</small></div>
+        <div class="metric"><span>只读前缀</span><b id="prefixValue">-</b><small>服务端范围校验</small></div>
+        <div class="metric"><span>当前目录</span><b id="countValue">0 个对象</b><small id="folderValue">0 个目录</small></div>
+        <div class="metric"><span>健康检查</span><b id="latencyValue">-</b><small id="checkedValue">等待检测</small></div>
+      </div>
+
+      <div class="notice" id="notice" style="display:none"></div>
+      <section class="browser">
+        <div class="toolbar">
+          <button class="btn icon" id="upButton" title="返回上级" disabled>↑</button>
+          <div class="path" id="pathValue">oss://</div>
+          <input class="search" id="searchInput" type="search" placeholder="筛选当前目录">
+        </div>
+        <div class="browser-body">
+          <div class="list-pane">
+            <div class="filters" id="filters">
+              <button class="chip active" data-type="all">全部</button>
+              <button class="chip" data-type="folder">目录</button>
+              <button class="chip" data-type="text">文本</button>
+              <button class="chip" data-type="json">JSON</button>
+              <button class="chip" data-type="image">图片</button>
+              <button class="chip" data-type="audio">音频</button>
+              <button class="chip" data-type="pdf">PDF</button>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead><tr><th class="col-name">名称</th><th class="col-size">大小</th><th class="col-time">最后修改</th><th class="col-type">类型</th></tr></thead>
+                <tbody id="fileRows"></tbody>
+              </table>
+              <div class="empty-state" id="emptyState">当前目录为空</div>
+            </div>
+          </div>
+          <aside class="preview-pane">
+            <div class="preview-head">
+              <div class="preview-title" id="previewTitle">未选择文件</div>
+              <div class="preview-meta" id="previewMeta">选择对象后可在线预览文本、JSON、图片和音频</div>
+              <div class="preview-actions">
+                <button class="btn" id="copyButton" disabled>复制 Key</button>
+                <button class="btn primary" id="downloadButton" disabled>下载</button>
+              </div>
+            </div>
+            <div class="preview-body">
+              <div class="preview-box" id="previewBox"><div class="center">选择一个文件查看预览</div></div>
+              <div class="meta" id="metaList" style="display:none"></div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      info: {},
+      rootPrefix: '',
+      prefix: '',
+      items: [],
+      current: null,
+      preview: null,
+      filter: 'all',
+      search: '',
+      loading: false,
+    }
+    const pending = new Map()
+    let requestId = 0
+
+    const el = (id) => document.getElementById(id)
+    const moduleKey = () => state.info.key || 'oss-browser'
+    const endpoint = (name) => `/modules/${moduleKey()}/${name}`
+
+    function request(path, query = {}, method = 'GET', timeoutMs = 20000) {
+      const id = `req-${Date.now()}-${++requestId}`
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          reject(new Error('模块接口请求超时'))
+        }, timeoutMs)
+        pending.set(id, { resolve, reject, timer })
+        window.parent.postMessage({ type: 'ops-module-api-request', id, path, query, method }, '*')
+      })
+    }
+
+    function download(path, query, filename) {
+      const id = `download-${Date.now()}-${++requestId}`
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          reject(new Error('下载请求超时'))
+        }, 120000)
+        pending.set(id, { resolve, reject, timer })
+        window.parent.postMessage({ type: 'ops-module-download-request', id, path, query, filename }, '*')
+      })
+    }
+
+    function formatBytes(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
+      const units = ['B', 'KB', 'MB', 'GB', 'TB']
+      let size = Number(value)
+      let index = 0
+      while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1 }
+      return `${size.toFixed(index ? 1 : 0)} ${units[index]}`
+    }
+
+    function formatTime(value) {
+      if (!value) return '-'
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) return value
+      const pad = (number) => String(number).padStart(2, '0')
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+    }
+
+    function typeMark(type) {
+      return ({ folder: 'DIR', text: 'TXT', json: '{}', image: 'IMG', audio: 'WAV', pdf: 'PDF' })[type] || 'OBJ'
+    }
+
+    function setStatus(kind, text) {
+      const node = el('healthStatus')
+      node.className = `status ${kind || ''}`.trim()
+      node.innerHTML = `<i></i><span>${text}</span>`
+    }
+
+    function setNotice(message, kind = 'warn') {
+      const node = el('notice')
+      node.textContent = message || ''
+      node.style.display = message ? 'block' : 'none'
+      node.style.borderColor = kind === 'err' ? '#fecaca' : '#fde68a'
+      node.style.background = kind === 'err' ? '#fef2f2' : '#fffbeb'
+      node.style.color = kind === 'err' ? '#b91c1c' : '#92400e'
+    }
+
+    function filteredItems() {
+      const query = state.search.trim().toLowerCase()
+      return state.items.filter((item) => {
+        const typeMatch = state.filter === 'all' || item.type === state.filter
+        const textMatch = !query || item.name.toLowerCase().includes(query) || item.key.toLowerCase().includes(query)
+        return typeMatch && textMatch
+      })
+    }
+
+    function renderRows() {
+      const items = filteredItems()
+      const body = el('fileRows')
+      body.innerHTML = ''
+      for (const item of items) {
+        const row = document.createElement('tr')
+        row.className = `file${state.current?.key === item.key ? ' active' : ''}`
+        row.innerHTML = `
+          <td><div class="name"><span class="mark ${item.type}">${typeMark(item.type)}</span><span class="name-text"><b></b><small></small></span></div></td>
+          <td>${item.type === 'folder' ? '-' : formatBytes(item.size)}</td>
+          <td class="muted">${formatTime(item.last_modified)}</td>
+          <td class="muted">${item.type.toUpperCase()}</td>`
+        row.querySelector('b').textContent = item.name
+        row.querySelector('small').textContent = item.key
+        row.addEventListener('click', () => openItem(item))
+        body.appendChild(row)
+      }
+      const folders = items.filter((item) => item.type === 'folder').length
+      el('emptyState').style.display = items.length ? 'none' : 'block'
+      el('countValue').textContent = `${items.length} 个对象`
+      el('folderValue').textContent = `${folders} 个目录`
+    }
+
+    function renderMeta(item) {
+      const node = el('metaList')
+      node.style.display = 'block'
+      node.innerHTML = ''
+      const rows = [
+        ['对象 Key', item.key],
+        ['MIME', item.mime || '-'],
+        ['大小', formatBytes(item.size)],
+        ['修改时间', formatTime(item.last_modified)],
+        ['存储类型', item.storage_class || '-'],
+      ]
+      for (const [label, value] of rows) {
+        const row = document.createElement('div')
+        row.className = 'meta-row'
+        const key = document.createElement('span')
+        key.textContent = label
+        const content = document.createElement('span')
+        content.textContent = value
+        row.append(key, content)
+        node.appendChild(row)
+      }
+    }
+
+    function renderPreview() {
+      const box = el('previewBox')
+      const item = state.current
+      const preview = state.preview
+      if (!item) {
+        box.innerHTML = '<div class="center">选择一个文件查看预览</div>'
+        el('metaList').style.display = 'none'
+        el('copyButton').disabled = true
+        el('downloadButton').disabled = true
+        return
+      }
+      el('previewTitle').textContent = item.name
+      el('previewMeta').textContent = `${formatBytes(item.size)} · ${item.mime || item.type}`
+      el('copyButton').disabled = false
+      el('downloadButton').disabled = false
+      if (!preview) {
+        box.innerHTML = '<div class="center">正在加载预览</div>'
+        return
+      }
+      box.innerHTML = ''
+      if (preview.type === 'image' && preview.data_url) {
+        const wrap = document.createElement('div')
+        wrap.className = 'image-preview'
+        const image = document.createElement('img')
+        image.alt = preview.name
+        image.src = preview.data_url
+        wrap.appendChild(image)
+        box.appendChild(wrap)
+      } else if (preview.type === 'audio' && preview.data_url) {
+        const wrap = document.createElement('div')
+        wrap.className = 'audio-preview'
+        const audio = document.createElement('audio')
+        audio.controls = true
+        audio.preload = 'metadata'
+        audio.src = preview.data_url
+        wrap.appendChild(audio)
+        box.appendChild(wrap)
+      } else if ((preview.type === 'text' || preview.type === 'json') && preview.content !== null) {
+        const label = document.createElement('div')
+        label.className = 'preview-label'
+        label.textContent = preview.truncated ? '内容预览 · 已截断' : '内容预览'
+        const text = document.createElement('pre')
+        text.className = 'text-preview'
+        text.textContent = preview.content
+        box.append(label, text)
+      } else {
+        const unsupported = document.createElement('div')
+        unsupported.className = 'unsupported'
+        unsupported.textContent = preview.message || '该格式暂不支持在线预览，可下载后查看'
+        box.appendChild(unsupported)
+      }
+      renderMeta(item)
+    }
+
+    async function openItem(item) {
+      if (item.type === 'folder') {
+        state.prefix = item.key
+        state.current = null
+        state.preview = null
+        state.search = ''
+        el('searchInput').value = ''
+        await loadObjects()
+        return
+      }
+      state.current = item
+      state.preview = null
+      renderRows()
+      renderPreview()
+      try {
+        state.preview = await request(endpoint('preview'), { key: item.key })
+      } catch (error) {
+        state.preview = { type: item.type, message: error.message, content: null, data_url: null }
+      }
+      renderPreview()
+    }
+
+    function goUp() {
+      if (!state.prefix || state.prefix === state.rootPrefix) return
+      const relative = state.prefix.slice(state.rootPrefix.length).replace(/\/$/, '')
+      const parts = relative.split('/').filter(Boolean)
+      parts.pop()
+      state.prefix = state.rootPrefix + (parts.length ? `${parts.join('/')}/` : '')
+      state.current = null
+      state.preview = null
+      loadObjects()
+    }
+
+    async function loadObjects() {
+      state.loading = true
+      setNotice('')
+      try {
+        const data = await request(endpoint('objects'), { prefix: state.prefix, limit: 500 })
+        state.items = (data.items || []).sort((a, b) => {
+          if (a.type === 'folder' && b.type !== 'folder') return -1
+          if (a.type !== 'folder' && b.type === 'folder') return 1
+          return a.name.localeCompare(b.name, 'zh-CN')
+        })
+        el('pathValue').textContent = `oss://${data.bucket}/${state.prefix}`
+        el('upButton').disabled = state.prefix === state.rootPrefix
+        if (data.truncated) setNotice('对象数量较多，当前仅显示首批结果，可使用筛选定位。')
+        renderRows()
+      } catch (error) {
+        state.items = []
+        renderRows()
+        setNotice(error.message, 'err')
+      } finally {
+        state.loading = false
+      }
+    }
+
+    async function loadStatus() {
+      setStatus('', '连接中')
+      try {
+        const result = await request(endpoint('status'), { force: true })
+        const health = result.health || {}
+        state.rootPrefix = health.prefix || ''
+        state.prefix = state.prefix || state.rootPrefix
+        el('bucketValue').textContent = health.bucket || '-'
+        el('prefixValue').textContent = health.prefix || '-'
+        el('latencyValue').textContent = health.available ? '正常' : '异常'
+        el('checkedValue').textContent = health.latency_ms === null ? '最近探测完成' : `探测 ${health.latency_ms} ms`
+        setStatus(health.available ? 'ok' : 'warn', health.available ? 'OSS 可用' : 'OSS 异常')
+        if (health.error) setNotice(health.error)
+        await loadObjects()
+      } catch (error) {
+        setStatus('err', '模块异常')
+        setNotice(error.message, 'err')
+      }
+    }
+
+    async function downloadCurrent() {
+      const item = state.current
+      if (!item) return
+      el('downloadButton').disabled = true
+      try {
+        await download(endpoint('download'), { key: item.key }, item.name)
+      } catch (error) {
+        setNotice(error.message, 'err')
+      } finally {
+        el('downloadButton').disabled = false
+      }
+    }
+
+    async function copyKey() {
+      if (!state.current) return
+      try {
+        await navigator.clipboard.writeText(state.current.key)
+        el('copyButton').textContent = '已复制'
+        setTimeout(() => { el('copyButton').textContent = '复制 Key' }, 1200)
+      } catch {
+        setNotice('浏览器未允许剪贴板访问', 'warn')
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      if (event.source !== window.parent) return
+      const data = event.data || {}
+      if (data.type === 'ops-module-info') {
+        state.info = data.module || {}
+        el('subtitle').textContent = `${state.info.name || 'OSS 文件浏览'} · v${state.info.version || '1.0.0'} · 只读访问`
+        loadStatus()
+      } else if (data.type === 'ops-module-api-response') {
+        const task = pending.get(data.id)
+        if (!task) return
+        pending.delete(data.id)
+        clearTimeout(task.timer)
+        if (data.ok) task.resolve(data.data)
+        else task.reject(new Error(data.data?.message || '模块请求失败'))
+      }
+    })
+
+    el('upButton').addEventListener('click', goUp)
+    el('refreshButton').addEventListener('click', loadStatus)
+    el('downloadButton').addEventListener('click', downloadCurrent)
+    el('copyButton').addEventListener('click', copyKey)
+    el('searchInput').addEventListener('input', (event) => {
+      state.search = event.target.value
+      renderRows()
+    })
+    el('filters').addEventListener('click', (event) => {
+      const button = event.target.closest('[data-type]')
+      if (!button) return
+      state.filter = button.dataset.type
+      document.querySelectorAll('.chip').forEach((node) => node.classList.toggle('active', node === button))
+      renderRows()
+    })
+
+    // The host may not have mounted its message listener yet; keep announcing
+    // until the module info arrives, then stop.
+    const announceReady = () => window.parent.postMessage({ type: 'ops-module-ready' }, '*')
+    announceReady()
+    const readyTimer = setInterval(() => {
+      if (state.info.key) { clearInterval(readyTimer); return }
+      announceReady()
+    }, 400)
+    setTimeout(() => clearInterval(readyTimer), 15000)
+  </script>
+</body>
+</html>

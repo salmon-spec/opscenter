@@ -12,6 +12,9 @@
       </div>
       <nav class="nav">
         <router-link v-for="item in navs" :key="item.path" :to="item.path" class="nav-item" :title="sidebarCollapsed ? item.label : ''" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
+        <div class="nav-section">扩展模块</div>
+        <router-link v-for="item in runningModules" :key="item.key" :to="`/extensions/${item.key}`" class="nav-item" :title="sidebarCollapsed ? item.name : ''" :class="{ active: route.path === `/extensions/${item.key}` }"><span class="nav-icon">{{ item.icon || '◇' }}</span><span class="nav-label">{{ item.name }}</span></router-link>
+        <router-link to="/modules" class="nav-item" :title="sidebarCollapsed ? '模块管理' : ''" :class="{ active: route.path === '/modules' }"><span class="nav-icon">◇</span><span class="nav-label">模块管理</span></router-link>
       </nav>
       <div class="sidebar-foot">
         <div v-if="hostSummary.total > 0" class="host-mini">
@@ -130,12 +133,20 @@ function itemActive(item) { return item.matches ? item.matches.some((path) => ro
 // 顶栏时钟 + 主机概览
 const nowStr = ref('')
 const hostSummary = ref({ total: 0, online: 0 })
+const runningModules = ref([])
 let clockTimer = null
 
 function tick() {
   const d = new Date()
   const pad = (n) => String(n).padStart(2, '0')
   nowStr.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
+async function loadModules() {
+  try {
+    const data = await api.get('/modules', { running: true })
+    runningModules.value = data.items || []
+  } catch { /* 模块接口故障不影响主系统导航 */ }
 }
 
 async function loadHosts() {
@@ -162,10 +173,13 @@ onMounted(() => {
   clockTimer = setInterval(tick, 1000)
   window.addEventListener('ops-toast', onToast)
   window.addEventListener('ops-auth-required', requireLogin)
+  window.addEventListener('ops-modules-changed', loadModules)
   loadHosts()
+  loadModules()
 })
 onUnmounted(() => {
   clearInterval(clockTimer)
+  window.removeEventListener('ops-modules-changed', loadModules)
   window.removeEventListener('ops-toast', onToast)
   window.removeEventListener('ops-auth-required', requireLogin)
 })
@@ -188,6 +202,7 @@ onUnmounted(() => {
 .sidebar-toggle { margin-left: auto; width: 24px; height: 24px; padding: 0; border: 1px solid rgba(148,163,184,.24); border-radius: 7px; background: rgba(148,163,184,.08); color: var(--sidebar-text); cursor: pointer; font-size: 20px; line-height: 20px; }
 .sidebar-toggle:hover { color: #fff; background: rgba(148,163,184,.18); }
 .nav { flex: 1; margin-top: 14px; display: flex; flex-direction: column; gap: 2px; }
+.nav-section { margin: 12px 8px 5px; padding-top: 10px; border-top: 1px solid rgba(148,163,184,.15); color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
 .nav-item {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
   color: var(--sidebar-text); text-decoration: none; font-size: 14px; transition: all .15s;
@@ -214,6 +229,7 @@ onUnmounted(() => {
 .sidebar.collapsed .logo { justify-content: center; padding-inline: 0; }
 .sidebar.collapsed .logo-badge { width: 34px; height: 34px; }
 .sidebar.collapsed .logo-text, .sidebar.collapsed .nav-label, .sidebar.collapsed .host-mini { display: none; }
+.sidebar.collapsed .nav-section { display: none; }
 .sidebar.collapsed .sidebar-toggle { position: absolute; right: -17px; top: 9px; z-index: 130; background: var(--sidebar); }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; }
 /* 移动端：侧栏收窄为图标栏，分组子菜单弹出，不遮挡内容 */

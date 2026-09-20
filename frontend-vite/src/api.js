@@ -8,6 +8,40 @@ export const setAccessToken = (token) => localStorage.setItem(TOKEN_KEY, token |
 export const clearAccessToken = () => localStorage.removeItem(TOKEN_KEY)
 
 async function request(path, { method = 'GET', body, query, signal, timeoutMs } = {}) {
+async function requestBlob(path, { query, signal, timeoutMs } = {}) {
+  let url = API_BASE + '/api/v2' + path
+  if (query) {
+    const p = new URLSearchParams()
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== null && v !== '') p.append(k, v)
+    }
+    const qs = p.toString()
+    if (qs) url += '?' + qs
+  }
+  const headers = {}
+  const token = getAccessToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  const controller = timeoutMs ? new AbortController() : null
+  const abort = () => controller?.abort()
+  if (signal?.aborted) abort()
+  else if (signal) signal.addEventListener('abort', abort, { once: true })
+  const timer = controller ? setTimeout(abort, timeoutMs) : null
+  try {
+    const res = await fetch(url, { headers, signal: controller?.signal || signal })
+    if (!res.ok) {
+      let data = null
+      try { data = await res.json() } catch { /* binary error body */ }
+      const err = new Error((data && (data.detail || data.msg)) || `HTTP ${res.status}`)
+      err.status = res.status
+      throw err
+    }
+    return res.blob()
+  } finally {
+    if (timer) clearTimeout(timer)
+    if (signal) signal.removeEventListener('abort', abort)
+  }
+}
+
   let url = API_BASE + '/api/v2' + path
   if (query) {
     const p = new URLSearchParams()
@@ -58,6 +92,7 @@ async function request(path, { method = 'GET', body, query, signal, timeoutMs } 
 }
 
 export const api = {
+  download: (path, query, options = {}) => requestBlob(path, { query, signal: options.signal, timeoutMs: options.timeoutMs }),
   get: (path, query, options = {}) => request(path, { query, signal: options.signal, timeoutMs: options.timeoutMs }),
   post: (path, body, options = {}) => request(path, { method: 'POST', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
   put: (path, body, options = {}) => request(path, { method: 'PUT', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),

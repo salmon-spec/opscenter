@@ -37,6 +37,8 @@ const DataServicesZooKeeper = () => import('./views/dataservices/DataServicesZoo
 const DataServicesNacos = () => import('./views/dataservices/DataServicesNacos.vue')
 const DataServicesMinio = () => import('./views/dataservices/DataServicesMinio.vue')
 const DataServicesMongoDB = () => import('./views/dataservices/DataServicesMongoDB.vue')
+const ModuleManager = () => import('./views/ModuleManager.vue')
+const ExtensionHost = () => import('./views/ExtensionHost.vue')
 
 const routes = [
   { path: '/', name: 'ServicePlaza', component: ServicePlaza, meta: { title: '服务广场', hostScope: 'none', clusterScope: 'none' } },
@@ -60,6 +62,8 @@ const routes = [
   { path: '/ai-ops', name: 'AiOps', component: AiOps, meta: { title: 'AI 自动运维', hostScope: 'none', clusterScope: 'none' } },
   { path: '/api-keys', name: 'ApiKeys', component: ApiKeys, meta: { title: '开放 API', hostScope: 'none', clusterScope: 'none' } },
   { path: '/hosts', name: 'Hosts', component: Hosts, meta: { title: '主机管理', hostScope: 'none', clusterScope: 'none' } },
+  { path: '/modules', name: 'ModuleManager', component: ModuleManager, meta: { title: '模块管理', hostScope: 'none', clusterScope: 'none' } },
+  { path: '/extensions/:moduleKey', name: 'ExtensionHost', component: ExtensionHost, meta: { title: '扩展模块', hostScope: 'none', clusterScope: 'none' } },
   // v5.0.0 数据服务（中间件纳管与只读浏览）
   { path: '/data-services', name: 'DataServicesOverview', component: DataServicesOverview, meta: { title: '数据服务', hostScope: 'none', clusterScope: 'none' } },
   { path: '/data-services/redis', name: 'DataServicesRedis', component: DataServicesRedis, meta: { title: 'Redis 缓存', hostScope: 'none', clusterScope: 'none' } },

@@ -54,6 +54,7 @@ from app.agent_tasks import AGENT_TASKS
 # === v5.0.0 中间件接入（K3s middleware ns） ===
 from app.auth import MutationAuthMiddleware, get_current_user, require_operator, router as auth_router
 from app.data_services import router as data_services_router
+from app.extension_modules import router as extension_modules_router, seed_extension_modules
 from app.services.mq import task_queue
 from app.services.nacos_config import nacos_config
 from app.config import MQ_ENABLED, MW_LEADER_ENABLED, NACOS_ENABLED
@@ -328,6 +329,8 @@ app.include_router(k8s_monitor_router)
 app.include_router(server_details_router)
 # v5.0.0 数据服务（Redis/MQ/Kafka/ZK/Nacos/MinIO/MongoDB 纳管 + 只读浏览）
 app.include_router(data_services_router)
+# v5.1.0 外部服务模块化接口（模块管理 + sandbox iframe 托管 + OSS 只读浏览）
+app.include_router(extension_modules_router)
 
 # === Startup ===
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
@@ -1334,6 +1337,10 @@ async def startup():
             Base.metadata.create_all(bind=engine)
             _ensure_new_columns()
             _migrate_legacy_service_credentials()
+            try:
+                seed_extension_modules()
+            except Exception as exc:
+                print(f"[modules] seed skipped: {exc}", flush=True)
             break
         except Exception:
             await asyncio.sleep(2)
