@@ -591,6 +591,8 @@ class ExtensionModule(Base):
     running = Column(Boolean, default=False)
     status = Column(String(20), default="stopped")
     last_error = Column(Text, nullable=True)
+    config_ciphertext = Column(Text, nullable=True)
+    config_updated_at = Column(DateTime, nullable=True)
     started_at = Column(DateTime, nullable=True)
     stopped_at = Column(DateTime, nullable=True)
     last_checked_at = Column(DateTime, nullable=True)

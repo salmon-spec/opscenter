@@ -94,6 +94,39 @@
     .meta-row span:last-child { word-break: break-all; }
     .notice { margin-bottom: 9px; padding: 9px 11px; border: 1px solid #fde68a; border-radius: 7px; background: #fffbeb; color: #92400e; font-size: 11px; }
     .center { min-height: 320px; display: grid; place-items: center; color: var(--muted); text-align: center; padding: 30px; }
+    .modal { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; padding: 18px; }
+    .modal.open { display: grid; }
+    .modal-backdrop { position: absolute; inset: 0; background: rgba(15,23,42,.46); }
+    .config-dialog { position: relative; width: min(100%, 560px); max-height: min(92vh, 720px); overflow: auto; background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 24px 70px rgba(15,23,42,.24); }
+    .config-head { min-height: 60px; display: flex; align-items: center; gap: 12px; padding: 12px 15px; border-bottom: 1px solid var(--border); }
+    .config-head h2 { margin: 0; font-size: 16px; }
+    .config-head p { margin: 3px 0 0; color: var(--muted); font-size: 10.5px; }
+    .config-close { width: 31px; height: 31px; margin-left: auto; border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--muted); font-size: 18px; line-height: 1; }
+    .config-body { padding: 14px 15px; }
+    .config-current { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+    .config-current div { min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: #f8fafc; }
+    .config-current span, .config-current b { display: block; }
+    .config-current span { color: var(--muted); font-size: 10px; }
+    .config-current b { margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+    .field { display: block; margin-top: 11px; }
+    .field > span { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 5px; color: #334155; font-size: 11.5px; font-weight: 600; }
+    .field small { color: var(--muted); font-size: 10px; font-weight: 400; }
+    .field input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; outline: none; color: var(--text); }
+    .field input:focus { border-color: #93b4f6; box-shadow: 0 0 0 3px rgba(37,99,235,.09); }
+    .config-note { min-height: 18px; margin: 10px 0 0; color: var(--muted); font-size: 10.5px; }
+    .config-note.err { color: var(--err); }
+    .config-note.ok { color: var(--ok); }
+    .config-actions { display: flex; align-items: center; gap: 8px; padding: 12px 15px; border-top: 1px solid var(--border); background: #fbfcfe; }
+    .config-actions .spacer { flex: 1; }
+    .btn.danger { border-color: #fecaca; color: #b91c1c; }
+    .btn.danger:hover { border-color: #fca5a5; color: #991b1b; }
+    @media (max-width: 520px) {
+      .head-status { gap: 5px; }
+      .head-status .btn { padding: 0 8px; font-size: 11px; }
+      .config-current { grid-template-columns: 1fr; }
+      .config-actions { flex-wrap: wrap; }
+      .config-actions .spacer { display: none; }
+    }
     @media (max-width: 1050px) {
       .browser-body { grid-template-columns: 1fr; }
       .list-pane { border-right: 0; }
@@ -127,6 +160,7 @@
       <div class="head-status">
         <span class="readonly">只读模式</span>
         <span class="status" id="healthStatus"><i></i><span>连接中</span></span>
+        <button class="btn" id="configButton">AK/SK 配置</button>
         <button class="btn" id="refreshButton">刷新</button>
       </div>
     </header>
@@ -185,9 +219,40 @@
     </main>
   </div>
 
+  <div class="modal" id="configModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-config></div>
+    <section class="config-dialog" role="dialog" aria-modal="true" aria-labelledby="configTitle">
+      <header class="config-head">
+        <div>
+          <h2 id="configTitle">OSS AK/SK 配置</h2>
+          <p>保存前验证凭据并自动发现 Bucket</p>
+        </div>
+        <button class="config-close" type="button" data-close-config aria-label="关闭">×</button>
+      </header>
+      <div class="config-body">
+        <div class="config-current">
+          <div><span>当前来源</span><b id="configSourceValue">-</b></div>
+          <div><span>AccessKey ID</span><b id="configAkValue">-</b></div>
+          <div><span>可访问 Bucket</span><b id="configBucketValue">-</b></div>
+        </div>
+        <label class="field"><span>AccessKey ID</span><input id="akInput" autocomplete="off" spellcheck="false" placeholder="LTAI..."></label>
+        <label class="field"><span>AccessKey Secret</span><input id="skInput" type="password" autocomplete="new-password" placeholder="输入 AccessKey Secret"></label>
+        <label class="field"><span>Endpoint <small>可选，留空使用系统 Endpoint</small></span><input id="endpointInput" type="url" autocomplete="off" spellcheck="false" placeholder="https://oss-cn-wulanchabu.aliyuncs.com"></label>
+        <p class="config-note" id="configNote">Secret 加密保存，保存后不会回显。</p>
+      </div>
+      <footer class="config-actions">
+        <button class="btn danger" id="resetConfigButton" type="button">恢复系统配置</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-close-config>取消</button>
+        <button class="btn primary" id="saveConfigButton" type="button">保存并验证</button>
+      </footer>
+    </section>
+  </div>
+
   <script>
     const state = {
       info: {},
+      config: {},
       bucket: '',
       rootPrefix: '',
       prefix: '',
@@ -205,7 +270,7 @@
     const moduleKey = () => state.info.key || 'oss-browser'
     const endpoint = (name) => `/modules/${moduleKey()}/${name}`
 
-    function request(path, query = {}, method = 'GET', timeoutMs = 20000) {
+    function request(path, query = {}, method = 'GET', timeoutMs = 20000, body = undefined) {
       const id = `req-${Date.now()}-${++requestId}`
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -213,7 +278,7 @@
           reject(new Error('模块接口请求超时'))
         }, timeoutMs)
         pending.set(id, { resolve, reject, timer })
-        window.parent.postMessage({ type: 'ops-module-api-request', id, path, query, method }, '*')
+        window.parent.postMessage({ type: 'ops-module-api-request', id, path, query, method, body }, '*')
       })
     }
 
@@ -260,9 +325,99 @@
       const node = el('notice')
       node.textContent = message || ''
       node.style.display = message ? 'block' : 'none'
-      node.style.borderColor = kind === 'err' ? '#fecaca' : '#fde68a'
-      node.style.background = kind === 'err' ? '#fef2f2' : '#fffbeb'
-      node.style.color = kind === 'err' ? '#b91c1c' : '#92400e'
+      node.style.borderColor = kind === 'err' ? '#fecaca' : (kind === 'ok' ? '#bbf7d0' : '#fde68a')
+      node.style.background = kind === 'err' ? '#fef2f2' : (kind === 'ok' ? '#f0fdf4' : '#fffbeb')
+      node.style.color = kind === 'err' ? '#b91c1c' : (kind === 'ok' ? '#15803d' : '#92400e')
+    }
+
+    function setConfigNote(message, kind = '') {
+      const node = el('configNote')
+      node.className = `config-note${kind ? ` ${kind}` : ''}`
+      node.textContent = message || 'Secret 加密保存，保存后不会回显。'
+    }
+
+    function renderConfig() {
+      const config = state.config || {}
+      el('configSourceValue').textContent = config.source === 'module' ? '模块配置' : (config.source === 'environment' ? '系统环境' : '-')
+      el('configAkValue').textContent = config.access_key_masked || '未配置'
+      el('configBucketValue').textContent = config.bucket_count ? `${config.bucket_count} 个` : '-'
+      el('resetConfigButton').disabled = config.source !== 'module'
+      if (config.endpoint) el('endpointInput').placeholder = config.endpoint
+    }
+
+    async function loadConfig() {
+      try {
+        state.config = await request(endpoint('config'))
+        renderConfig()
+      } catch (error) {
+        state.config = { error: error.message }
+        renderConfig()
+      }
+    }
+
+    function openConfig() {
+      el('akInput').value = ''
+      el('skInput').value = ''
+      el('endpointInput').value = ''
+      setConfigNote('')
+      renderConfig()
+      el('configModal').classList.add('open')
+      el('configModal').setAttribute('aria-hidden', 'false')
+      setTimeout(() => el('akInput').focus(), 0)
+    }
+
+    function closeConfig() {
+      el('akInput').value = ''
+      el('skInput').value = ''
+      el('configModal').classList.remove('open')
+      el('configModal').setAttribute('aria-hidden', 'true')
+    }
+
+    async function saveConfig() {
+      const accessKeyId = el('akInput').value.trim()
+      const accessKeySecret = el('skInput').value.trim()
+      if (!accessKeyId || !accessKeySecret) {
+        setConfigNote('AccessKey ID 和 AccessKey Secret 必须填写。', 'err')
+        return
+      }
+      el('saveConfigButton').disabled = true
+      setConfigNote('正在验证凭据并读取 Bucket...')
+      try {
+        state.config = await request(endpoint('config'), {}, 'POST', 35000, {
+          access_key_id: accessKeyId,
+          access_key_secret: accessKeySecret,
+          endpoint: el('endpointInput').value.trim(),
+        })
+        renderConfig()
+        closeConfig()
+        setNotice('模块 AK/SK 已更新，Bucket 列表已刷新。', 'ok')
+        state.bucket = ''
+        state.prefix = ''
+        await loadStatus()
+      } catch (error) {
+        setConfigNote(error.message, 'err')
+      } finally {
+        el('saveConfigButton').disabled = false
+      }
+    }
+
+    async function resetConfig() {
+      if (!window.confirm('恢复系统环境中的 OSS 配置？模块内保存的 AK/SK 将被清除。')) return
+      el('resetConfigButton').disabled = true
+      setConfigNote('正在恢复系统配置...')
+      try {
+        state.config = await request(endpoint('config/reset'), {}, 'POST', 20000, {})
+        renderConfig()
+        closeConfig()
+        setNotice('已恢复系统 OSS 配置。', 'ok')
+        state.bucket = ''
+        state.prefix = ''
+        await loadStatus()
+      } catch (error) {
+        setConfigNote(error.message, 'err')
+      } finally {
+        renderConfig()
+      }
     }
 
     function renderBuckets(health) {
@@ -497,6 +652,7 @@
       if (data.type === 'ops-module-info') {
         state.info = data.module || {}
         el('subtitle').textContent = `${state.info.name || 'OSS 文件浏览'} · v${state.info.version || '1.0.0'} · 只读访问`
+        loadConfig()
         loadStatus()
       } else if (data.type === 'ops-module-api-response') {
         const task = pending.get(data.id)
@@ -509,6 +665,15 @@
     })
 
     el('upButton').addEventListener('click', goUp)
+    el('configButton').addEventListener('click', openConfig)
+    el('saveConfigButton').addEventListener('click', saveConfig)
+    el('resetConfigButton').addEventListener('click', resetConfig)
+    el('configModal').addEventListener('click', (event) => {
+      if (event.target.closest('[data-close-config]')) closeConfig()
+    })
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && el('configModal').classList.contains('open')) closeConfig()
+    })
     el('bucketSelect').addEventListener('change', (event) => {
       state.bucket = event.target.value
       state.rootPrefix = ''

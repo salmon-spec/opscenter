@@ -57,6 +57,51 @@ class AliyunOssReader:
         self._status_lock = threading.Lock()
         self._status_at: dict[str, float] = {}
         self._status_values: dict[str, dict] = {}
+        self._config_lock = threading.Lock()
+        self._runtime_config: dict | None = None
+
+    def _config_snapshot(self) -> dict | None:
+        with self._config_lock:
+            return dict(self._runtime_config) if self._runtime_config else None
+
+    def configure(self, config: dict | None) -> None:
+        """Apply a module-managed OSS configuration and invalidate clients."""
+        normalized = dict(config) if isinstance(config, dict) else None
+        with self._config_lock:
+            if normalized == self._runtime_config:
+                return
+            self._runtime_config = normalized
+            self._clients.clear()
+            self._status_at.clear()
+            self._status_values.clear()
+
+    def _credentials(self) -> tuple[str, str]:
+        config = self._config_snapshot() or {}
+        return (
+            str(config.get("access_key_id") or OSS_AK).strip(),
+            str(config.get("access_key_secret") or OSS_SK).strip(),
+        )
+
+    @staticmethod
+    def _mask_access_key(value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        if len(raw) <= 10:
+            return f"{raw[:2]}****{raw[-2:]}"
+        return f"{raw[:6]}...{raw[-4:]}"
+
+    def config_summary(self) -> dict:
+        """Return non-secret credential metadata for the module UI."""
+        config = self._config_snapshot()
+        access_key, _ = self._credentials()
+        return {
+            "configured": self.configured(),
+            "source": "module" if config else "environment",
+            "access_key_masked": self._mask_access_key(access_key),
+            "endpoint": str((config or {}).get("endpoint") or OSS_ENDPOINT).rstrip("/"),
+            "bucket_count": len(self.allowed_buckets()),
+        }
 
     @staticmethod
     def _clean_prefix(value: str | None) -> str:
@@ -65,7 +110,11 @@ class AliyunOssReader:
 
     def allowed_buckets(self) -> list[str]:
         """Return the configured server-side bucket allow-list."""
-        raw_values = [OSS_BUCKET, *(OSS_BUCKETS or "").split(",")]
+        config = self._config_snapshot()
+        raw_values = (
+            list(config.get("buckets") or [])
+            if config else [OSS_BUCKET, *(OSS_BUCKETS or "").split(",")]
+        )
         result: list[str] = []
         for raw in raw_values:
             value = str(raw or "").strip()
@@ -82,6 +131,10 @@ class AliyunOssReader:
         if raw.startswith("oss://"):
             raw = raw[6:].split("/", 1)[0].strip()
         bucket = raw or str(OSS_BUCKET or "").strip()
+        if not raw:
+            config = self._config_snapshot() or {}
+            buckets = self.allowed_buckets()
+            bucket = str(config.get("default_bucket") or (buckets[0] if buckets else OSS_BUCKET)).strip()
         if not bucket:
             raise OssModuleError("OSS 存储桶未配置")
         if bucket not in self.allowed_buckets():
@@ -89,6 +142,16 @@ class AliyunOssReader:
         return bucket
 
     def _endpoint_map(self) -> dict[str, str]:
+        config = self._config_snapshot()
+        if config:
+            value = config.get("bucket_endpoints") or {}
+            if not isinstance(value, dict):
+                raise OssModuleError("模块 Endpoint 配置不合法")
+            return {
+                str(bucket).strip(): str(endpoint).strip().rstrip("/")
+                for bucket, endpoint in value.items()
+                if str(bucket).strip() and str(endpoint).strip()
+            }
         raw = (OSS_BUCKET_ENDPOINTS or "").strip()
         if not raw:
             return {}
@@ -112,6 +175,10 @@ class AliyunOssReader:
             if not endpoint:
                 raise OssModuleError(f"存储桶 {safe_bucket} 未配置访问 Endpoint")
             return endpoint
+        config = self._config_snapshot() or {}
+        configured_endpoint = str(config.get("endpoint") or "").strip().rstrip("/")
+        if configured_endpoint:
+            return configured_endpoint
         if OSS_ENDPOINT:
             return OSS_ENDPOINT
         raise OssModuleError("OSS Endpoint 未配置")
@@ -138,6 +205,12 @@ class AliyunOssReader:
         prefixes = self._prefix_map()
         if safe_bucket in prefixes:
             return prefixes[safe_bucket]
+        config = self._config_snapshot()
+        if config:
+            configured_prefixes = config.get("bucket_prefixes") or {}
+            if isinstance(configured_prefixes, dict):
+                return self._clean_prefix(str(configured_prefixes.get(safe_bucket) or ""))
+            return ""
         if safe_bucket == str(OSS_BUCKET or "").strip():
             return self._clean_prefix(OSS_PREFIX)
         return ""
@@ -148,7 +221,8 @@ class AliyunOssReader:
         return self.prefix_for(OSS_BUCKET)
 
     def configured(self) -> bool:
-        if not (OSS_AK and OSS_SK and self.allowed_buckets()):
+        access_key, secret_key = self._credentials()
+        if not (access_key and secret_key and self.allowed_buckets()):
             return False
         try:
             self._endpoint_for()
@@ -167,7 +241,8 @@ class AliyunOssReader:
                     import oss2
                 except ImportError as exc:  # pragma: no cover - deployment guard
                     raise OssModuleError("OSS SDK 未安装") from exc
-                auth = oss2.Auth(OSS_AK, OSS_SK)
+                access_key, secret_key = self._credentials()
+                auth = oss2.Auth(access_key, secret_key)
                 client = oss2.Bucket(auth, self._endpoint_for(safe_bucket), safe_bucket)
                 self._clients[safe_bucket] = client
             return client
@@ -240,15 +315,66 @@ class AliyunOssReader:
             return AUDIO_MIME_EXTENSIONS[suffix]
         return mimetypes.guess_type(key)[0] or "application/octet-stream"
 
+
     @staticmethod
-    def _safe_error(exc: Exception) -> str:
+    def _sanitize_error(exc: Exception, *secrets: str) -> str:
         message = str(exc).strip() or exc.__class__.__name__
-        if OSS_SK:
-            message = message.replace(OSS_SK, "***")
-        if OSS_AK:
-            message = message.replace(OSS_AK, "***")
+        for secret in secrets:
+            if secret:
+                message = message.replace(secret, "***")
         return message[:300]
 
+    def _safe_error(self, exc: Exception) -> str:
+        access_key, secret_key = self._credentials()
+        return self._sanitize_error(exc, secret_key, access_key)
+
+    @staticmethod
+    def _endpoint_for_location(location: str, fallback: str) -> str:
+        region = str(location or "").strip()
+        if not region:
+            return fallback
+        suffix = "-internal.aliyuncs.com" if "-internal.aliyuncs.com" in fallback else ".aliyuncs.com"
+        return f"https://{region}{suffix}"
+
+    @staticmethod
+    def discover_buckets(
+        access_key_id: str,
+        access_key_secret: str,
+        endpoint: str | None = None,
+    ) -> dict:
+        """Validate credentials and discover bucket endpoints from ListBuckets."""
+        access_key = str(access_key_id or "").strip()
+        secret_key = str(access_key_secret or "").strip()
+        base_endpoint = str(endpoint or OSS_ENDPOINT or "").strip().rstrip("/")
+        if not access_key or not secret_key:
+            raise OssModuleError("AccessKey ID 和 AccessKey Secret 不能为空")
+        if not base_endpoint:
+            raise OssModuleError("OSS Endpoint 未配置")
+        try:
+            import oss2
+        except ImportError as exc:  # pragma: no cover - deployment guard
+            raise OssModuleError("OSS SDK 未安装") from exc
+        try:
+            result = oss2.Service(oss2.Auth(access_key, secret_key), base_endpoint).list_buckets()
+        except Exception as exc:
+            raise OssModuleError(AliyunOssReader._sanitize_error(exc, secret_key, access_key)) from exc
+
+        buckets: list[str] = []
+        bucket_endpoints: dict[str, str] = {}
+        for item in getattr(result, "buckets", []) or []:
+            name = str(getattr(item, "name", "") or "").strip()
+            if not BUCKET_NAME_RE.fullmatch(name) or name in bucket_endpoints:
+                continue
+            location = str(getattr(item, "location", "") or "").strip()
+            buckets.append(name)
+            bucket_endpoints[name] = AliyunOssReader._endpoint_for_location(location, base_endpoint)
+        if not buckets:
+            raise OssModuleError("凭据有效，但账号下没有可访问的 OSS Bucket")
+        return {
+            "buckets": sorted(buckets),
+            "bucket_endpoints": bucket_endpoints,
+            "endpoint": base_endpoint,
+        }
     def status(self, force: bool = False, bucket: str | None = None) -> dict:
         safe_bucket = self.resolve_bucket(bucket) if (bucket or self.allowed_buckets()) else ""
         prefix = self.prefix_for(safe_bucket) if safe_bucket else ""

@@ -8,6 +8,7 @@ message bridge, so they never receive the operator token.
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from typing import Optional
@@ -18,6 +19,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.auth import require_operator
+from app.credential_crypto import decrypt_secret, encrypt_secret
 from app.database import get_db
 from app.models import ExtensionModule
 from app.services.aliyun_oss import OssModuleError, aliyun_oss
@@ -29,7 +31,7 @@ MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 BUILTIN_MODULES = {
     "oss-browser": {
         "name": "OSS 文件浏览",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "description": "只读浏览阿里云 OSS 白名单 Bucket 与前缀内的文件",
         "icon": "▤",
         "entry_url": "/v3/extension-modules/oss-browser/index.html",
@@ -83,6 +85,29 @@ class ModuleRegistration(BaseModel):
         if parsed.username or parsed.password:
             raise ValueError("模块入口不能包含账号密码")
         return value
+
+
+class OssCredentialUpdate(BaseModel):
+    access_key_id: str = Field(..., min_length=3, max_length=256)
+    access_key_secret: str = Field(..., min_length=8, max_length=512)
+    endpoint: str = Field("", max_length=500)
+
+    @field_validator("access_key_id", "access_key_secret", "endpoint")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("endpoint")
+    @classmethod
+    def _valid_endpoint(cls, value: str) -> str:
+        if not value:
+            return ""
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Endpoint 必须是 HTTP(S) 地址")
+        if parsed.username or parsed.password:
+            raise ValueError("Endpoint 不能包含账号密码")
+        return value.rstrip("/")
 
 
 def seed_extension_modules() -> None:
@@ -143,6 +168,28 @@ def _get_module(db, key: str) -> ExtensionModule:
     if row is None:
         raise HTTPException(status_code=404, detail="模块不存在")
     return row
+
+
+def _decrypt_module_config(row: ExtensionModule) -> dict | None:
+    if not row.config_ciphertext:
+        return None
+    try:
+        value = json.loads(decrypt_secret(row.config_ciphertext))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="模块配置无法解密，请检查 CREDENTIAL_KEY") from exc
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=500, detail="模块配置格式不合法")
+    return value
+
+
+def _apply_oss_config(row: ExtensionModule) -> None:
+    aliyun_oss.configure(_decrypt_module_config(row))
+
+
+def _oss_config_response(row: ExtensionModule) -> dict:
+    result = aliyun_oss.config_summary()
+    result["updated_at"] = _iso(row.config_updated_at)
+    return result
 
 
 def _require_running(db, key: str) -> ExtensionModule:
@@ -247,6 +294,7 @@ def check_module_health(module_key: str, user: object = Depends(require_operator
     with get_db() as db:
         row = _get_module(db, module_key)
         if module_key == "oss-browser":
+            _apply_oss_config(row)
             result = _record_health(row, aliyun_oss.status(force=True))
         else:
             result = {
@@ -264,7 +312,76 @@ def check_module_health(module_key: str, user: object = Depends(require_operator
         }
 
 
-def _oss_guard():
+@router.get("/{module_key}/config")
+def get_oss_config(module_key: str, user: object = Depends(require_operator)):
+    with get_db() as db:
+        row = _get_module(db, module_key)
+        if module_key != "oss-browser":
+            raise HTTPException(status_code=404, detail="该模块没有配置接口")
+        _apply_oss_config(row)
+        return _oss_config_response(row)
+
+
+@router.post("/{module_key}/config")
+def save_oss_config(
+    module_key: str,
+    data: OssCredentialUpdate,
+    user: object = Depends(require_operator),
+):
+    with get_db() as db:
+        row = _get_module(db, module_key)
+        if module_key != "oss-browser":
+            raise HTTPException(status_code=404, detail="该模块没有配置接口")
+        try:
+            discovered = aliyun_oss.discover_buckets(
+                data.access_key_id, data.access_key_secret, data.endpoint,
+            )
+        except OssModuleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        previous = _decrypt_module_config(row) or {}
+        buckets = discovered["buckets"]
+        default_bucket = str(previous.get("default_bucket") or "").strip()
+        config = {
+            "access_key_id": data.access_key_id,
+            "access_key_secret": data.access_key_secret,
+            "endpoint": discovered["endpoint"],
+            "buckets": buckets,
+            "bucket_endpoints": discovered["bucket_endpoints"],
+            "default_bucket": default_bucket if default_bucket in buckets else buckets[0],
+            "bucket_prefixes": {
+                bucket: prefix
+                for bucket, prefix in (previous.get("bucket_prefixes") or {}).items()
+                if bucket in buckets and isinstance(prefix, str)
+            },
+        }
+        try:
+            row.config_ciphertext = encrypt_secret(json.dumps(config, ensure_ascii=False))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        row.config_updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(row)
+        aliyun_oss.configure(config)
+        return _oss_config_response(row)
+
+
+@router.post("/{module_key}/config/reset")
+def reset_oss_config(module_key: str, user: object = Depends(require_operator)):
+    with get_db() as db:
+        row = _get_module(db, module_key)
+        if module_key != "oss-browser":
+            raise HTTPException(status_code=404, detail="该模块没有配置接口")
+        row.config_ciphertext = None
+        row.config_updated_at = None
+        db.commit()
+        db.refresh(row)
+        aliyun_oss.configure(None)
+        return _oss_config_response(row)
+
+
+def _oss_guard(row: ExtensionModule):
+    _apply_oss_config(row)
     if not aliyun_oss.configured():
         raise HTTPException(status_code=503, detail="OSS 凭据或存储桶未配置")
 
@@ -280,7 +397,7 @@ def oss_status(
         row = _require_running(db, module_key)
         if module_key != "oss-browser":
             raise HTTPException(status_code=404, detail="该模块没有状态接口")
-        _oss_guard()
+        _oss_guard(row)
         try:
             result = _record_health(row, aliyun_oss.status(force=force, bucket=bucket))
         except OssModuleError as exc:
@@ -299,10 +416,10 @@ def oss_objects(
     user: object = Depends(require_operator),
 ):
     with get_db() as db:
-        _require_running(db, module_key)
+        row = _require_running(db, module_key)
         if module_key != "oss-browser":
             raise HTTPException(status_code=404, detail="该模块没有对象浏览接口")
-        _oss_guard()
+        _oss_guard(row)
         try:
             return aliyun_oss.list_objects(prefix, marker, limit, bucket)
         except OssModuleError as exc:
@@ -317,10 +434,10 @@ def oss_preview(
     user: object = Depends(require_operator),
 ):
     with get_db() as db:
-        _require_running(db, module_key)
+        row = _require_running(db, module_key)
         if module_key != "oss-browser":
             raise HTTPException(status_code=404, detail="该模块没有预览接口")
-        _oss_guard()
+        _oss_guard(row)
         try:
             return aliyun_oss.preview_object(key, bucket)
         except OssModuleError as exc:
@@ -335,10 +452,10 @@ def oss_download(
     user: object = Depends(require_operator),
 ):
     with get_db() as db:
-        _require_running(db, module_key)
+        row = _require_running(db, module_key)
         if module_key != "oss-browser":
             raise HTTPException(status_code=404, detail="该模块没有下载接口")
-        _oss_guard()
+        _oss_guard(row)
         try:
             chunks, filename, mime = aliyun_oss.open_download(key, bucket)
         except OssModuleError as exc:

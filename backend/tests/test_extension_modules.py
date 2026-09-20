@@ -5,13 +5,16 @@ API contract, isolation guard, path validation, and lifecycle persistence.
 """
 
 import pytest
+import sys
 from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from app import auth
-from app.database import Base, engine
+from app.credential_crypto import decrypt_secret
+from app.database import Base, engine, get_db
 from app.extension_modules import seed_extension_modules
 from app.main import app
+from app.models import ExtensionModule
 from app.services import aliyun_oss
 
 client = TestClient(app)
@@ -22,6 +25,7 @@ BASE = "/api/v2/modules"
 def _fresh_db(monkeypatch):
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
+    aliyun_oss.aliyun_oss.configure(None)
     monkeypatch.setattr(auth, "AUTH_ENABLED", False)
     monkeypatch.setattr(auth, "OPERATOR_TOKEN", "")
     seed_extension_modules()
@@ -73,6 +77,81 @@ def _fake_oss(monkeypatch):
             "truncated": False, "message": "",
         },
     )
+
+
+def test_oss_module_config_is_encrypted_masked_and_resettable(monkeypatch):
+    def _fake_discover(access_key_id, access_key_secret, endpoint=None):
+        assert access_key_id == "LTAI-module-ak"
+        assert access_key_secret == "module-secret-value"
+        return {
+            "endpoint": "https://oss-cn-wulanchabu.aliyuncs.com",
+            "buckets": ["bucket-a", "bucket-b"],
+            "bucket_endpoints": {
+                "bucket-a": "https://oss-cn-wulanchabu.aliyuncs.com",
+                "bucket-b": "https://oss-cn-beijing.aliyuncs.com",
+            },
+        }
+
+    monkeypatch.setattr(aliyun_oss.aliyun_oss, "discover_buckets", _fake_discover)
+
+    saved = client.post(
+        f"{BASE}/oss-browser/config",
+        json={
+            "access_key_id": "LTAI-module-ak",
+            "access_key_secret": "module-secret-value",
+            "endpoint": "https://oss-cn-wulanchabu.aliyuncs.com",
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["source"] == "module"
+    assert saved.json()["access_key_masked"] == "LTAI-m...e-ak"
+    assert saved.json()["bucket_count"] == 2
+    assert aliyun_oss.aliyun_oss.allowed_buckets() == ["bucket-a", "bucket-b"]
+    assert "access_key_secret" not in saved.json()
+
+    with get_db() as db:
+        row = db.query(ExtensionModule).filter(ExtensionModule.key == "oss-browser").first()
+        assert row.config_ciphertext
+        assert "module-secret-value" not in row.config_ciphertext
+        decrypted = decrypt_secret(row.config_ciphertext)
+        assert "module-secret-value" in decrypted
+
+    current = client.get(f"{BASE}/oss-browser/config")
+    assert current.status_code == 200
+    assert current.json()["source"] == "module"
+    assert "module-secret-value" not in current.text
+
+    reset = client.post(f"{BASE}/oss-browser/config/reset")
+    assert reset.status_code == 200
+    assert reset.json()["source"] == "environment"
+    with get_db() as db:
+        row = db.query(ExtensionModule).filter(ExtensionModule.key == "oss-browser").first()
+        assert row.config_ciphertext is None
+
+
+def test_discover_buckets_derives_regional_endpoints(monkeypatch):
+    class FakeService:
+        def __init__(self, auth, endpoint):
+            assert auth == "module-auth"
+            assert endpoint == "https://oss-cn-wulanchabu.aliyuncs.com"
+
+        def list_buckets(self):
+            return SimpleNamespace(buckets=[
+                SimpleNamespace(name="bucket-bj", location="oss-cn-beijing"),
+                SimpleNamespace(name="bucket-hz", location="oss-cn-hangzhou"),
+            ])
+
+    monkeypatch.setitem(sys.modules, "oss2", SimpleNamespace(
+        Auth=lambda access_key, secret_key: "module-auth",
+        Service=FakeService,
+    ))
+
+    result = aliyun_oss.AliyunOssReader.discover_buckets(
+        "module-ak", "module-secret", "https://oss-cn-wulanchabu.aliyuncs.com",
+    )
+    assert result["buckets"] == ["bucket-bj", "bucket-hz"]
+    assert result["bucket_endpoints"]["bucket-bj"] == "https://oss-cn-beijing.aliyuncs.com"
+    assert result["bucket_endpoints"]["bucket-hz"] == "https://oss-cn-hangzhou.aliyuncs.com"
 
 
 def test_builtin_seed_and_lifecycle():

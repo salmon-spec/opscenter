@@ -1222,6 +1222,8 @@ def _ensure_new_columns():
         "ALTER TABLE servers ADD COLUMN IF NOT EXISTS runtime_type VARCHAR(20)",
         "ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_lan_probe JSONB",
         "ALTER TABLE servers ADD COLUMN IF NOT EXISTS last_wg_probe JSONB",
+        "ALTER TABLE extension_modules ADD COLUMN IF NOT EXISTS config_ciphertext TEXT",
+        "ALTER TABLE extension_modules ADD COLUMN IF NOT EXISTS config_updated_at TIMESTAMP",
     ]
     try:
         with engine.connect() as conn:
