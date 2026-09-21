@@ -38,7 +38,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, toast } from '../api'
 
@@ -49,6 +49,7 @@ const module = ref(null)
 const loading = ref(true)
 const loadError = ref('')
 const starting = ref(false)
+let loadRevision = 0
 
 const sandboxValue = computed(() => {
   const requested = Array.isArray(module.value?.manifest?.sandbox)
@@ -59,35 +60,91 @@ const sandboxValue = computed(() => {
 })
 
 async function loadModule() {
+  const revision = ++loadRevision
+  const requestedKey = moduleKey.value
   loading.value = true
   loadError.value = ''
+  module.value = null
+  starting.value = false
   try {
-    module.value = await api.get(`/modules/${moduleKey.value}`)
+    const result = await api.get(`/modules/${requestedKey}`)
+    if (revision === loadRevision) module.value = result
   } catch (error) {
-    loadError.value = error.message
+    if (revision === loadRevision) loadError.value = error.message
   } finally {
-    loading.value = false
+    if (revision === loadRevision) loading.value = false
   }
 }
 
 async function startModule() {
+  const revision = loadRevision
+  const requestedKey = moduleKey.value
   starting.value = true
   try {
-    module.value = await api.post(`/modules/${moduleKey.value}/start`)
+    const result = await api.post(`/modules/${requestedKey}/start`)
+    if (requestedKey !== moduleKey.value || revision !== loadRevision) return
+    module.value = result
     window.dispatchEvent(new CustomEvent('ops-modules-changed'))
     toast(`${module.value.name} 已启动`, 'ok')
   } catch (error) {
-    toast(error.message, 'err')
+    if (revision === loadRevision) toast(error.message, 'err')
   } finally {
-    starting.value = false
+    if (revision === loadRevision) starting.value = false
   }
 }
 
-function allowedPath(path) {
-  if (!path || path.startsWith('//') || path.includes('..') || path.includes('\\')) return false
+function normalizePolicyPath(value) {
+  let decoded = String(value || '')
+  for (let index = 0; index < 2; index += 1) {
+    try {
+      const next = decodeURIComponent(decoded)
+      if (next === decoded) break
+      decoded = next
+    } catch {
+      return ''
+    }
+  }
+  if (!decoded.startsWith('/') || decoded.includes('\\') || decoded.includes('\0') || decoded.includes('?') || decoded.includes('#')) return ''
+  try {
+    return new URL(decoded, window.location.origin).pathname
+  } catch {
+    return ''
+  }
+}
+
+function normalizeModulePrefix(prefix) {
+  if (typeof prefix !== 'string' || !prefix.startsWith('/')) return ''
+  const moduleKeyValue = String(module.value?.key || '')
+  if (!moduleKeyValue) return ''
+  try {
+    const url = new URL(prefix, window.location.origin)
+    if (url.origin !== window.location.origin || url.search || url.hash) return ''
+    const normalized = normalizePolicyPath(url.pathname)
+    const requiredPrefix = `/modules/${moduleKeyValue}/`
+    return normalized.startsWith(requiredPrefix) ? normalized : ''
+  } catch {
+    return ''
+  }
+}
+
+function resolveAllowedPath(path) {
+  const raw = String(path || '')
+  if (!raw || raw.startsWith('//') || raw.includes('\\')) return ''
   const prefixes = module.value?.manifest?.api_prefixes
-  if (!Array.isArray(prefixes) || !prefixes.length) return false
-  return prefixes.some((prefix) => typeof prefix === 'string' && prefix.startsWith('/') && path.startsWith(prefix))
+  if (!Array.isArray(prefixes) || !prefixes.length) return ''
+  try {
+    const url = new URL(raw, window.location.origin)
+    if (url.origin !== window.location.origin || url.search || url.hash) return ''
+    const normalized = normalizePolicyPath(url.pathname)
+    if (!normalized) return ''
+    const allowed = prefixes
+      .map(normalizeModulePrefix)
+      .filter(Boolean)
+      .map((prefix) => prefix.endsWith('/') ? prefix : `${prefix}/`)
+    return allowed.some((prefix) => normalized.startsWith(prefix)) ? normalized : ''
+  } catch {
+    return ''
+  }
 }
 
 function reply(id, ok, data) {
@@ -101,13 +158,18 @@ function reply(id, ok, data) {
 
 async function handleApiRequest(data) {
   const id = String(data.id || '')
-  if (!id || !allowedPath(String(data.path || ''))) return reply(id, false, { message: '模块无权访问该接口' })
+  const path = resolveAllowedPath(data.path)
+  if (!id || !path) return reply(id, false, { message: '模块无权访问该接口' })
   const method = String(data.method || 'GET').toUpperCase()
   if (!['GET', 'POST'].includes(method)) return reply(id, false, { message: '模块仅允许只读 API 请求' })
+  const requestedTimeout = Number(data.timeoutMs)
+  const timeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.min(Math.max(requestedTimeout, 1000), 120000)
+    : 20000
   try {
     const result = method === 'GET'
-      ? await api.get(data.path, data.query || {}, { timeoutMs: 20000 })
-      : await api.post(data.path, data.body ?? {}, { query: data.query || {}, timeoutMs: 20000 })
+      ? await api.get(path, data.query || {}, { timeoutMs })
+      : await api.post(path, data.body ?? {}, { query: data.query || {}, timeoutMs })
     reply(id, true, result)
   } catch (error) {
     reply(id, false, { message: error.message, status: error.status })
@@ -116,8 +178,8 @@ async function handleApiRequest(data) {
 
 async function handleDownload(data) {
   const id = String(data.id || '')
-  const path = String(data.path || '')
-  if (!id || !allowedPath(path)) return reply(id, false, { message: '模块无权下载该对象' })
+  const path = resolveAllowedPath(data.path)
+  if (!id || !path) return reply(id, false, { message: '模块无权下载该对象' })
   try {
     const blob = await api.download(path, data.query || {}, { timeoutMs: 120000 })
     const objectUrl = URL.createObjectURL(blob)
@@ -165,7 +227,11 @@ onMounted(() => {
   window.addEventListener('message', onMessage)
   loadModule()
 })
-onUnmounted(() => window.removeEventListener('message', onMessage))
+watch(moduleKey, () => loadModule())
+onUnmounted(() => {
+  loadRevision += 1
+  window.removeEventListener('message', onMessage)
+})
 </script>
 
 <style scoped>
@@ -186,8 +252,8 @@ onUnmounted(() => window.removeEventListener('message', onMessage))
 .center-state b { color: var(--text); font-size: 16px; }
 .error-state { color: var(--err); }
 @media (max-width: 720px) {
-  .host-bar { align-items: flex-start; padding: 9px 10px; }
+  .host-bar { align-items: flex-start; flex-wrap: wrap; padding: 9px 10px; }
   .host-identity small, .host-meta > .muted { display: none; }
-  .host-meta { gap: 6px; }
+  .host-meta { gap: 6px; margin-left: auto; }
 }
 </style>

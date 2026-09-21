@@ -102,7 +102,8 @@ const API = (p) => {
   try { const t = localStorage.getItem('ops_token'); if (t) headers['Authorization'] = 'Bearer ' + t; } catch(e){}
   return fetch(p, { headers }).then(r => r.ok ? r.json() : Promise.reject(r.status));
 };
-const PHYS = /^(eth|ens|enp|en|wlan|wg)/;
+const PHYS = /^(eth|ens|enp|eno|enx|nic|wlan|wlp|ww|bond)/;
+const VIRTUAL = /^(lo|docker|br-|veth|virbr|tap|vnet|wg|tun|tailscale)/;
 const fmtGB = (b) => (b/1e9).toFixed(2);
 const fmtRate = (m) => (m==null?0:m).toFixed(1);
 const fmtMs = (m) => (m==null?0:m).toFixed(0);
@@ -116,17 +117,25 @@ createApp({
     const quotaGB = 50;
     const ifaces = ref({});
     const todayDaily = ref({});
+    const networkSummary = ref(null);
     const history = ref([]);
     const latency = ref([]);
 
+    const uplinkKeys = computed(() => Object.keys(ifaces.value).filter((name) => {
+      const item = ifaces.value[name] || {};
+      return item.is_uplink === true || (PHYS.test(name) && !VIRTUAL.test(name));
+    }));
+
     const totals = computed(() => {
+      if (networkSummary.value) return { rx: networkSummary.value.rx_rate_mbps || 0, tx: networkSummary.value.tx_rate_mbps || 0 };
       let rx=0, tx=0;
-      for (const k in ifaces.value) { if (PHYS.test(k)) { rx += ifaces.value[k].rx_rate_mbps||0; tx += ifaces.value[k].tx_rate_mbps||0; } }
+      for (const k of uplinkKeys.value) { rx += ifaces.value[k].rx_rate_mbps||0; tx += ifaces.value[k].tx_rate_mbps||0; }
       return { rx, tx };
     });
     const todayTot = computed(() => {
+      if (networkSummary.value) return { rx: networkSummary.value.daily_rx_bytes || 0, tx: networkSummary.value.daily_tx_bytes || 0 };
       let rx=0, tx=0;
-      for (const k in todayDaily.value) { rx += todayDaily.value[k].rx_bytes||0; tx += todayDaily.value[k].tx_bytes||0; }
+      for (const k of uplinkKeys.value) { const item = todayDaily.value[k] || {}; rx += item.rx_bytes||0; tx += item.tx_bytes||0; }
       return { rx, tx };
     });
     const overQuota = computed(() => (todayTot.value.rx + todayTot.value.tx)/1e9 > quotaGB);
@@ -160,7 +169,7 @@ createApp({
       });
     };
     const updateIfaceBar = () => {
-      const keys = Object.keys(ifaces.value).filter(k=>PHYS.test(k)).sort((a,b)=>(ifaces.value[b].rx_rate_mbps||0)-(ifaces.value[a].rx_rate_mbps||0)).slice(0,8);
+      const keys = [...uplinkKeys.value].sort((a,b)=>(ifaces.value[b].rx_rate_mbps||0)-(ifaces.value[a].rx_rate_mbps||0)).slice(0,8);
       charts.ifaceBar.setOption({
         grid: { ...baseGrid, left: 60 },
         tooltip:{trigger:'axis', axisPointer:{type:'shadow'}},
@@ -174,7 +183,7 @@ createApp({
       });
     };
     const updateTodayBar = () => {
-      const keys = Object.keys(todayDaily.value).filter(k=>PHYS.test(k)).sort((a,b)=>(todayDaily.value[b].rx_bytes||0)-(todayDaily.value[a].rx_bytes||0)).slice(0,8);
+      const keys = [...uplinkKeys.value].filter(k => todayDaily.value[k]).sort((a,b)=>(todayDaily.value[b].rx_bytes||0)-(todayDaily.value[a].rx_bytes||0)).slice(0,8);
       const rx = keys.map(k=> +(todayDaily.value[k].rx_bytes/1e9).toFixed(2));
       const tx = keys.map(k=> +(todayDaily.value[k].tx_bytes/1e9).toFixed(2));
       charts.todayBar.setOption({
@@ -224,7 +233,7 @@ createApp({
     const updateAll = () => { updateGauge(); updateIfaceBar(); updateTodayBar(); updateLatency(); updateHistory(); };
 
     const loadServers = () => API('/api/v2/servers').then(d => { servers.value = d.servers || d || []; if (!selectedId.value && servers.value.length) { selectedId.value = servers.value[0].id; loadAll(); } }).catch(()=>{});
-    const loadRealtime = () => { if (!selectedId.value) return; API('/api/v2/monitor/'+selectedId.value+'/network').then(d => { ifaces.value = d.interfaces||{}; todayDaily.value = d.today_daily||{}; }).catch(()=>{}); };
+    const loadRealtime = () => { if (!selectedId.value) return; API('/api/v2/monitor/'+selectedId.value+'/network').then(d => { ifaces.value = d.interfaces||{}; todayDaily.value = d.today_daily||{}; networkSummary.value = d.summary||null; }).catch(()=>{}); };
     const loadHistory = () => { if (!selectedId.value) return; API('/api/v2/monitor/'+selectedId.value+'/network/history?days=7').then(d => { history.value = d.series||[]; }).catch(()=>{}); };
     const loadLatency = () => { if (!selectedId.value) return; API('/api/v2/monitor/'+selectedId.value+'/network/latency?target=8.8.8.8&days=7').then(d => { latency.value = d.points||[]; }).catch(()=>{}); };
     const loadAll = () => { loadRealtime(); loadHistory(); loadLatency(); };

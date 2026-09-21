@@ -7,7 +7,6 @@ export const getAccessToken = () => localStorage.getItem(TOKEN_KEY) || ''
 export const setAccessToken = (token) => localStorage.setItem(TOKEN_KEY, token || '')
 export const clearAccessToken = () => localStorage.removeItem(TOKEN_KEY)
 
-async function request(path, { method = 'GET', body, query, signal, timeoutMs } = {}) {
 async function requestBlob(path, { query, signal, timeoutMs } = {}) {
   let url = API_BASE + '/api/v2' + path
   if (query) {
@@ -42,6 +41,7 @@ async function requestBlob(path, { query, signal, timeoutMs } = {}) {
   }
 }
 
+async function request(path, { method = 'GET', body, query, signal, timeoutMs } = {}) {
   let url = API_BASE + '/api/v2' + path
   if (query) {
     const p = new URLSearchParams()

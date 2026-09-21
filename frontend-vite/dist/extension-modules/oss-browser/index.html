@@ -33,7 +33,7 @@
     .btn.primary:hover { background: #1d4ed8; color: #fff; }
     .btn.icon { width: 33px; padding: 0; }
     .workspace { flex: 1; min-height: 0; overflow: auto; padding: 13px 15px 18px; }
-    .summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-bottom: 11px; }
+    .summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; margin-bottom: 11px; }
     .metric { min-width: 0; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
     .metric span, .metric small { display: block; color: var(--muted); font-size: 10.5px; }
     .metric b { display: block; margin: 4px 0 2px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -72,6 +72,8 @@
     .name-text b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .name-text small { display: block; margin-top: 2px; color: var(--muted); font: 9.5px/1.2 Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .muted { color: var(--muted); }
+    .size-main { display: block; font-weight: 650; }
+    .size-sub { display: block; margin-top: 2px; color: var(--muted); font-size: 9.5px; }
     .empty-state { padding: 58px 16px; text-align: center; color: var(--muted); }
     .preview-pane { min-width: 0; display: flex; flex-direction: column; background: #fbfcfe; }
     .preview-head { flex: none; min-height: 68px; padding: 11px 12px; background: #fff; border-bottom: 1px solid var(--border); }
@@ -131,14 +133,14 @@
       .browser-body { grid-template-columns: 1fr; }
       .list-pane { border-right: 0; }
       .preview-pane { min-height: 460px; border-top: 1px solid var(--border); }
-      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
     @media (max-width: 680px) {
       .module-head { padding: 9px 10px; }
       .head-status .readonly, .head-status .status { display: none; }
       .workspace { padding: 9px; }
-      .summary { grid-template-columns: 1fr; }
-      .summary .metric:nth-child(3), .summary .metric:nth-child(4) { display: none; }
+      .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .summary .metric:nth-child(1), .summary .metric:nth-child(5) { display: none; }
       .toolbar { flex-wrap: wrap; }
       .bucket-picker { order: 2; flex: 1 1 calc(100% - 43px); }
       .bucket-picker select { width: 100%; }
@@ -168,8 +170,9 @@
     <main class="workspace">
       <div class="summary">
         <div class="metric"><span>Bucket</span><b id="bucketValue">-</b><small id="bucketCountValue">白名单可切换</small></div>
-        <div class="metric"><span>只读前缀</span><b id="prefixValue">-</b><small>服务端范围校验</small></div>
-        <div class="metric"><span>当前目录</span><b id="countValue">0 个对象</b><small id="folderValue">0 个目录</small></div>
+        <div class="metric"><span>当前总大小</span><b id="totalSizeValue">统计中</b><small id="totalObjectsValue">递归统计当前前缀</small></div>
+        <div class="metric"><span>当前目录</span><b id="countValue">0 个文件</b><small id="directFileValue">0 个直属文件</small></div>
+        <div class="metric"><span>一级目录</span><b id="folderValue">0 个目录</b><small id="summaryTimeValue">等待目录统计</small></div>
         <div class="metric"><span>健康检查</span><b id="latencyValue">-</b><small id="checkedValue">等待检测</small></div>
       </div>
 
@@ -257,6 +260,7 @@
       rootPrefix: '',
       prefix: '',
       items: [],
+      summary: {},
       current: null,
       preview: null,
       filter: 'all',
@@ -278,7 +282,7 @@
           reject(new Error('模块接口请求超时'))
         }, timeoutMs)
         pending.set(id, { resolve, reject, timer })
-        window.parent.postMessage({ type: 'ops-module-api-request', id, path, query, method, body }, '*')
+        window.parent.postMessage({ type: 'ops-module-api-request', id, path, query, method, body, timeoutMs }, '*')
       })
     }
 
@@ -301,6 +305,11 @@
       let index = 0
       while (size >= 1024 && index < units.length - 1) { size /= 1024; index += 1 }
       return `${size.toFixed(index ? 1 : 0)} ${units[index]}`
+    }
+
+    function formatCount(value) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return '-'
+      return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(Number(value))
     }
 
     function formatTime(value) {
@@ -450,22 +459,33 @@
       const body = el('fileRows')
       body.innerHTML = ''
       for (const item of items) {
+        const folderStats = item.type === 'folder' ? state.summary?.folders?.[item.key] : null
         const row = document.createElement('tr')
         row.className = `file${state.current?.key === item.key ? ' active' : ''}`
         row.innerHTML = `
           <td><div class="name"><span class="mark ${item.type}">${typeMark(item.type)}</span><span class="name-text"><b></b><small></small></span></div></td>
-          <td>${item.type === 'folder' ? '-' : formatBytes(item.size)}</td>
+          <td><span class="size-main"></span><small class="size-sub"></small></td>
           <td class="muted">${formatTime(item.last_modified)}</td>
           <td class="muted">${item.type.toUpperCase()}</td>`
-        row.querySelector('b').textContent = item.name
-        row.querySelector('small').textContent = item.key
+        row.querySelector('.name-text b').textContent = item.name
+        row.querySelector('.name-text small').textContent = item.key
+        if (item.type === 'folder') {
+          row.querySelector('.size-main').textContent = folderStats ? `${formatCount(folderStats.count)} 个文件` : '统计中'
+          row.querySelector('.size-sub').textContent = folderStats ? formatBytes(folderStats.size) : ''
+        } else {
+          row.querySelector('.size-main').textContent = formatBytes(item.size)
+          row.querySelector('.size-sub').textContent = ''
+        }
         row.addEventListener('click', () => openItem(item))
         body.appendChild(row)
       }
       const folders = items.filter((item) => item.type === 'folder').length
+      const files = items.filter((item) => item.type !== 'folder').length
       el('emptyState').style.display = items.length ? 'none' : 'block'
-      el('countValue').textContent = `${items.length} 个对象`
-      el('folderValue').textContent = `${folders} 个目录`
+      el('countValue').textContent = `${formatCount(files)} 个文件`
+      el('directFileValue').textContent = `${formatCount(state.summary?.direct_object_count ?? files)} 个直属文件`
+      el('folderValue').textContent = `${formatCount(folders)} 个目录`
+      el('summaryTimeValue').textContent = state.summary?.scanned_at ? `统计于 ${formatTime(state.summary.scanned_at)}${state.summary.cached ? ' · 缓存' : ''}` : '等待目录统计'
     }
 
     function renderMeta(item) {
@@ -581,19 +601,38 @@
     async function loadObjects() {
       state.loading = true
       setNotice('')
+      state.summary = {}
+      el('totalSizeValue').textContent = '统计中'
+      el('totalObjectsValue').textContent = '递归统计当前前缀'
       try {
-        const data = await request(endpoint('objects'), { prefix: state.prefix, limit: 500, bucket: state.bucket })
+        const [objectsResult, summaryResult] = await Promise.allSettled([
+          request(endpoint('objects'), { prefix: state.prefix, limit: 500, bucket: state.bucket }),
+          request(endpoint('summary'), { prefix: state.prefix, bucket: state.bucket }, 'GET', 120000),
+        ])
+        if (objectsResult.status !== 'fulfilled') throw objectsResult.reason
+        const data = objectsResult.value
         state.items = (data.items || []).sort((a, b) => {
           if (a.type === 'folder' && b.type !== 'folder') return -1
           if (a.type !== 'folder' && b.type === 'folder') return 1
           return a.name.localeCompare(b.name, 'zh-CN')
         })
+        if (summaryResult.status === 'fulfilled') {
+          state.summary = summaryResult.value || {}
+          el('totalSizeValue').textContent = formatBytes(state.summary.total_size)
+          el('totalObjectsValue').textContent = `${formatCount(state.summary.object_count)} 个文件`
+        } else {
+          el('totalSizeValue').textContent = '-'
+          el('totalObjectsValue').textContent = '目录统计不可用'
+        }
         el('pathValue').textContent = `oss://${data.bucket || state.bucket}/${state.prefix}`
         el('upButton').disabled = state.prefix === state.rootPrefix
         if (data.truncated) setNotice('对象数量较多，当前仅显示首批结果，可使用筛选定位。')
+        else if (summaryResult.status === 'rejected') setNotice(`目录统计不可用：${summaryResult.reason.message}`, 'warn')
         renderRows()
       } catch (error) {
         state.items = []
+        el('totalSizeValue').textContent = '-'
+        el('totalObjectsValue').textContent = '目录统计不可用'
         renderRows()
         setNotice(error.message, 'err')
       } finally {
@@ -610,7 +649,6 @@
         state.rootPrefix = health.prefix || ''
         state.prefix = state.prefix || state.rootPrefix
         el('bucketValue').textContent = state.bucket || health.bucket || '-'
-        el('prefixValue').textContent = health.prefix || '-'
         el('latencyValue').textContent = health.available ? '正常' : '异常'
         el('checkedValue').textContent = health.latency_ms === null ? '最近探测完成' : `探测 ${health.latency_ms} ms`
         setStatus(health.available ? 'ok' : 'warn', health.available ? 'OSS 可用' : 'OSS 异常')

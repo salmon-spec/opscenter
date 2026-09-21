@@ -612,6 +612,81 @@ if __name__ == '__main__':
 
 # === Network monitoring (v3.25.1) ===
 
+_PHYSICAL_IFACE_PREFIXES = (
+    'eth', 'ens', 'enp', 'eno', 'enx', 'nic', 'wlan', 'wlp', 'ww',
+)
+_VIRTUAL_IFACE_PREFIXES = (
+    'lo', 'docker', 'br-', 'veth', 'virbr', 'tap', 'vnet', 'wg', 'tun',
+    'tailscale',
+)
+
+
+def _interface_kind(name):
+    """Classify a Linux interface without running external commands."""
+    base = os.path.join('/sys/class/net', name)
+    try:
+        if os.path.isdir(os.path.join(base, 'bridge')):
+            return 'bridge'
+        if os.path.isdir(os.path.join(base, 'bonding')):
+            return 'bond'
+    except OSError:
+        pass
+    if name == 'lo' or name.startswith('lo'):
+        return 'loopback'
+    if name.startswith(_VIRTUAL_IFACE_PREFIXES):
+        return 'virtual'
+    try:
+        if os.path.exists(os.path.join(base, 'device')):
+            return 'physical'
+    except OSError:
+        pass
+    if name.startswith(_PHYSICAL_IFACE_PREFIXES):
+        return 'physical'
+    return 'virtual'
+
+
+def _interface_master(name):
+    """Return the bridge/bond master name for a slave interface."""
+    path = os.path.join('/sys/class/net', name, 'master')
+    try:
+        return os.path.basename(os.readlink(path))
+    except OSError:
+        return ''
+
+
+def select_host_interfaces(interfaces):
+    """Select interfaces that represent host traffic without double counting.
+
+    Physical uplinks are preferred. Bond masters replace their physical slaves,
+    while Linux bridges and tap/veth/container interfaces stay detail-only.
+    """
+    if not interfaces:
+        return []
+
+    def kind(name):
+        value = interfaces.get(name) or {}
+        return value.get('kind') or _interface_kind(name)
+
+    def master(name):
+        value = interfaces.get(name) or {}
+        return value.get('master') or _interface_master(name)
+
+    bonds = [name for name in interfaces if kind(name) == 'bond']
+    if bonds:
+        return sorted(bonds)
+
+    physical = [name for name in interfaces if kind(name) == 'physical']
+    candidates = physical or [
+        name for name in interfaces
+        if kind(name) not in ('loopback', 'bridge', 'virtual')
+    ]
+    selected = [
+        name for name in candidates
+        if not master(name) or kind(master(name)) != 'bond'
+    ]
+    return sorted(selected or candidates)
+
+
 def collect_network():
     """读取 /proc/net/dev 返回各网卡 rx/tx 计数器（字节数）。
 
@@ -630,6 +705,8 @@ def collect_network():
             if len(fields) < 16:
                 continue
             result[iface.strip()] = {
+                'kind': _interface_kind(iface.strip()),
+                'master': _interface_master(iface.strip()),
                 'rx_bytes': int(fields[0]),
                 'rx_packets': int(fields[1]),
                 'rx_errors': int(fields[2]),
@@ -639,6 +716,11 @@ def collect_network():
             }
     except Exception:
         pass
+    selected = set(select_host_interfaces(result))
+    for values in result.values():
+        values['is_uplink'] = False
+    for name in selected:
+        result[name]['is_uplink'] = True
     return result
 
 

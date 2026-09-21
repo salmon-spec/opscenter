@@ -29,6 +29,42 @@ _VALID_SIGNALS = {
     "STOP": getattr(signal_module, "SIGSTOP", 19),
     "CONT": getattr(signal_module, "SIGCONT", 18),
 }
+_HOST_IFACE_RE = re.compile(r"^(eth|ens|enp|eno|enx|nic|wlan|wlp|ww|bond)\d*")
+_VIRTUAL_IFACE_RE = re.compile(r"^(lo|docker|br-|veth|virbr|tap|vnet|wg|tun|tailscale)")
+
+
+def is_host_network_interface(name: str) -> bool:
+    return bool(_HOST_IFACE_RE.match(name or "")) and not _VIRTUAL_IFACE_RE.match(name or "")
+
+
+def _fallback_uplink(interface: Dict[str, Any]) -> bool:
+    name = str(interface.get("interface") or interface.get("name") or "")
+    return is_host_network_interface(name)
+
+
+def summarize_network_interfaces(interfaces: list[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build a host-level counter summary with the same uplink-only contract.
+
+    New Agents mark interfaces with is_uplink. Older payloads fall back to the
+    physical interface naming convention so bridges and taps are not summed.
+    """
+    marked = [item for item in interfaces if item.get("is_uplink") is True]
+    selected = marked or [item for item in interfaces if _fallback_uplink(item)]
+    rx_mbps = sum(float(item.get("rx_rate_mbps") or 0) for item in selected)
+    tx_mbps = sum(float(item.get("tx_rate_mbps") or 0) for item in selected)
+    daily_dates = {str(item.get("daily_date")) for item in selected if item.get("daily_date")}
+    return {
+        "interfaces": [str(item.get("interface") or item.get("name") or "") for item in selected],
+        "daily_date": daily_dates.pop() if len(daily_dates) == 1 else "",
+        "rx_rate_mbps": round(rx_mbps, 3),
+        "tx_rate_mbps": round(tx_mbps, 3),
+        "rx_bytes_per_sec": round(rx_mbps * 1_000_000 / 8, 3),
+        "tx_bytes_per_sec": round(tx_mbps * 1_000_000 / 8, 3),
+        "rx_bytes": sum(int(item.get("rx_bytes") or 0) for item in selected),
+        "tx_bytes": sum(int(item.get("tx_bytes") or 0) for item in selected),
+        "daily_rx_bytes": sum(int(item.get("daily_rx_bytes") or 0) for item in selected),
+        "daily_tx_bytes": sum(int(item.get("daily_tx_bytes") or 0) for item in selected),
+    }
 
 
 def _version_parts(value: str | None) -> tuple[int, ...]:
@@ -55,12 +91,15 @@ def _server(server_id: str) -> Server:
 
 def _normalize(data: Dict[str, Any], server_id: str, source: str) -> Dict[str, Any]:
     interfaces = data.get("network_interfaces") or []
+    network_summary = data.get("network_summary")
+    if not isinstance(network_summary, dict) or not network_summary:
+        network_summary = summarize_network_interfaces(interfaces)
     rx_rate = data.get("net_rx_rate")
     tx_rate = data.get("net_tx_rate")
     if rx_rate is None:
-        rx_rate = sum(float(item.get("rx_rate_mbps") or 0) for item in interfaces) * 1_000_000 / 8
+        rx_rate = network_summary.get("rx_bytes_per_sec")
     if tx_rate is None:
-        tx_rate = sum(float(item.get("tx_rate_mbps") or 0) for item in interfaces) * 1_000_000 / 8
+        tx_rate = network_summary.get("tx_bytes_per_sec")
     return {
         "server_id": server_id,
         "source": source,
@@ -86,12 +125,13 @@ def _normalize(data: Dict[str, Any], server_id: str, source: str) -> Dict[str, A
             "load1": data.get("load1", 0),
             "load5": data.get("load5", 0),
             "load15": data.get("load15", 0),
-            "net_rx": rx_rate if rx_rate is not None else data.get("net_rx", 0),
-            "net_tx": tx_rate if tx_rate is not None else data.get("net_tx", 0),
+            "net_rx": rx_rate if rx_rate is not None else 0,
+            "net_tx": tx_rate if tx_rate is not None else 0,
             "uptime": data.get("uptime", 0),
         },
         "disks": data.get("disks") or [],
         "disk_devices": data.get("disk_devices") or [],
+        "network_summary": network_summary,
         "network_interfaces": interfaces,
     }
 

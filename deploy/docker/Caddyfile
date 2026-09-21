@@ -13,6 +13,8 @@
     }
     @versionedAssets path /v3/assets/*
     header @versionedAssets Cache-Control "public, max-age=31536000, immutable"
+    @moduleDocuments path /v3/extension-modules/*/index.html
+    header @moduleDocuments Cache-Control "no-cache, must-revalidate"
     handle /v3/* {
         root * /srv
         file_server

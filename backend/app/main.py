@@ -42,7 +42,7 @@ from app.topology import router as topology_router
 from app.control import router as control_router
 from app.service_health import run_service_health_cycle, service_health_loop
 from app.plaza import router as plaza_router, plaza_health_loop
-from app.system_control import forget_system_summary, record_system_summary, router as system_control_router
+from app.system_control import forget_system_summary, record_system_summary, is_host_network_interface, summarize_network_interfaces, router as system_control_router
 from app.databases import router as databases_router
 from app.ai_context import router as ai_context_router
 from app.ai_ops import router as ai_ops_router
@@ -54,7 +54,11 @@ from app.agent_tasks import AGENT_TASKS
 # === v5.0.0 中间件接入（K3s middleware ns） ===
 from app.auth import MutationAuthMiddleware, get_current_user, require_operator, router as auth_router
 from app.data_services import router as data_services_router
-from app.extension_modules import router as extension_modules_router, seed_extension_modules
+from app.extension_modules import (
+    command_code_usage_loop,
+    router as extension_modules_router,
+    seed_extension_modules,
+)
 from app.services.mq import task_queue
 from app.services.nacos_config import nacos_config
 from app.config import MQ_ENABLED, MW_LEADER_ENABLED, NACOS_ENABLED
@@ -1444,6 +1448,7 @@ async def startup():
     _start_periodic("agent-upgrade", lambda: asyncio.to_thread(_upgrade_outdated_agents_once))
     _start_periodic("report", report_loop)    # v3.28 R2 日报（REPORT_ENABLED=false 关闭）
     _start_periodic("retention", retention_loop)   # 每天 01:00 清理过期数据
+    _start_periodic("command-code-usage", command_code_usage_loop)
     seed_default_rules()
     seed_cert_rule()
     seed_backup_rule()                    # 幂等 seed 默认规则（仅空表时写入）
@@ -1543,7 +1548,7 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_status = "running"
                 row.agent_port = result.get("agent_port", 19100)
                 row.agent_token = result.get("agent_token", "")
-                row.agent_version = result.get("agent_version", "2.6.2")
+                row.agent_version = result.get("agent_version", "2.6.3")
             else:
                 row.agent_status = "error"
                 row.last_error = result.get("message", "Agent 部署失败")[-1000:]
@@ -2846,6 +2851,60 @@ def _agent_request(server, path, timeout=5):
     return fetch_from_agent(server, fetch)
 
 
+def _run_network_aggregation_once() -> None:
+    try:
+        with get_db() as db:
+            servers = db.query(Server).filter(Server.enabled == True).all()
+            for srv in servers:
+                data = _agent_request(srv, "/api/v1/network")
+                if not data:
+                    continue
+                interfaces = data.get("interfaces") or {}
+                summary = data.get("summary") if isinstance(data.get("summary"), dict) else None
+                if not summary:
+                    summary = summarize_network_interfaces(list(interfaces.values()))
+                stats_date = datetime.utcnow().date()
+                try:
+                    stats_date = datetime.strptime(str(summary.get("daily_date")), "%Y-%m-%d").date()
+                except ValueError:
+                    pass
+
+                def store_stat(iface, values):
+                    existing = db.query(NetworkStats).filter(
+                        NetworkStats.server_id == srv.id,
+                        NetworkStats.date == stats_date,
+                        NetworkStats.interface == iface,
+                    ).first()
+                    if existing:
+                        existing.rx_bytes = values.get("daily_rx_bytes", 0)
+                        existing.tx_bytes = values.get("daily_tx_bytes", 0)
+                        existing.peak_rx_mbps = max(existing.peak_rx_mbps or 0, values.get("rx_rate_mbps", 0))
+                        existing.peak_tx_mbps = max(existing.peak_tx_mbps or 0, values.get("tx_rate_mbps", 0))
+                    else:
+                        db.add(NetworkStats(
+                            server_id=srv.id, date=stats_date, interface=iface,
+                            rx_bytes=values.get("daily_rx_bytes", 0),
+                            tx_bytes=values.get("daily_tx_bytes", 0),
+                            rx_packets=values.get("rx_packets", 0),
+                            tx_packets=values.get("tx_packets", 0),
+                            rx_errors=values.get("rx_errors", 0),
+                            tx_errors=values.get("tx_errors", 0),
+                            peak_rx_mbps=values.get("rx_rate_mbps", 0),
+                            peak_tx_mbps=values.get("tx_rate_mbps", 0),
+                        ))
+                for iface, values in interfaces.items():
+                    store_stat(iface, values)
+                store_stat("__host__", {
+                    "daily_rx_bytes": summary.get("daily_rx_bytes", 0),
+                    "daily_tx_bytes": summary.get("daily_tx_bytes", 0),
+                    "rx_rate_mbps": summary.get("rx_rate_mbps", 0),
+                    "tx_rate_mbps": summary.get("tx_rate_mbps", 0),
+                })
+            db.commit()
+    except Exception as exc:
+        print(f"[network-aggregation] error: {exc}", flush=True)
+
+
 @app.get("/api/v2/monitor/{server_id}/network")
 def monitor_network(server_id: str):
     """实时带宽 + 今日累计流量（来自 Agent /api/v1/network）。
@@ -2861,6 +2920,9 @@ def monitor_network(server_id: str):
     if data is None:
         return {"server_id": server_id, "connected": False, "interfaces": {}, "today_daily": {}}
     ifaces = data.get("interfaces") or {}
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else None
+    if not summary:
+        summary = summarize_network_interfaces(list(ifaces.values()))
     today_daily = {
         name: {
             "rx_bytes": st.get("daily_rx_bytes", 0),
@@ -2868,7 +2930,7 @@ def monitor_network(server_id: str):
         }
         for name, st in ifaces.items()
     }
-    return {"server_id": server_id, "connected": True, **data, "today_daily": today_daily}
+    return {"server_id": server_id, "connected": True, **data, "summary": summary, "today_daily": today_daily}
 
 
 @app.get("/api/v2/monitor/{server_id}/network/history")
@@ -2885,16 +2947,24 @@ def monitor_network_history(server_id: str, days: int = 7):
             NetworkStats.server_id == srv.id,
             NetworkStats.date >= since,
         ).all()
-    by_date = {}
-    for r in rows:
-        d = str(r.date)
-        if d not in by_date:
-            by_date[d] = {"rx_bytes": 0, "tx_bytes": 0, "peak_rx_mbps": 0.0, "peak_tx_mbps": 0.0}
-        by_date[d]["rx_bytes"] += r.rx_bytes or 0
-        by_date[d]["tx_bytes"] += r.tx_bytes or 0
-        by_date[d]["peak_rx_mbps"] = max(by_date[d]["peak_rx_mbps"], r.peak_rx_mbps or 0)
-        by_date[d]["peak_tx_mbps"] = max(by_date[d]["peak_tx_mbps"], r.peak_tx_mbps or 0)
-    result = [{"date": d, **v} for d, v in sorted(by_date.items())]
+    rows_by_date = {}
+    for row in rows:
+        rows_by_date.setdefault(str(row.date), []).append(row)
+    result = []
+    for day, day_rows in sorted(rows_by_date.items()):
+        aggregate_rows = [row for row in day_rows if row.interface == "__host__"]
+        selected = aggregate_rows[-1:] or [
+            row for row in day_rows if is_host_network_interface(row.interface)
+        ]
+        if not selected:
+            continue
+        result.append({
+            "date": day,
+            "rx_bytes": sum(row.rx_bytes or 0 for row in selected),
+            "tx_bytes": sum(row.tx_bytes or 0 for row in selected),
+            "peak_rx_mbps": max((row.peak_rx_mbps or 0 for row in selected), default=0),
+            "peak_tx_mbps": max((row.peak_tx_mbps or 0 for row in selected), default=0),
+        })
     # series 为 history 的别名（network.html 读 d.series，index.html 读 d.history，双兼容）
     return {"server_id": server_id, "days": days, "history": result, "series": result}
 
@@ -2980,50 +3050,13 @@ def monitor_network_latency(server_id: str, target: str = "8.8.8.8", days: int =
 
 
 async def daily_network_aggregation():
-    """每日 00:05 从各 Agent 拉取当日累计流量，upsert 进 network_stats。"""
+    """每 5 分钟增量更新各主机当日流量，保留上传接口的本地统计日期。"""
     from datetime import timedelta
-    import requests as req
     while True:
+        await asyncio.to_thread(_run_network_aggregation_once)
         now = datetime.utcnow()
-        # 距下一个 00:05 的秒数
-        nxt = now.replace(hour=0, minute=5, second=0, microsecond=0)
-        if now >= nxt:
-            nxt = nxt + timedelta(days=1)
-        await asyncio.sleep((nxt - now).total_seconds())
-        try:
-            with get_db() as db:
-                servers = db.query(Server).filter(Server.enabled == True).all()
-                for srv in servers:
-                    data = _agent_request(srv, "/api/v1/network")
-                    if not data:
-                        continue
-                    today = datetime.utcnow().date()
-                    for iface, st in (data.get("interfaces") or {}).items():
-                        existing = db.query(NetworkStats).filter(
-                            NetworkStats.server_id == srv.id,
-                            NetworkStats.date == today,
-                            NetworkStats.interface == iface,
-                        ).first()
-                        if existing:
-                            existing.rx_bytes = st.get("daily_rx_bytes", 0)
-                            existing.tx_bytes = st.get("daily_tx_bytes", 0)
-                            existing.peak_rx_mbps = max(existing.peak_rx_mbps or 0, st.get("rx_rate_mbps", 0))
-                            existing.peak_tx_mbps = max(existing.peak_tx_mbps or 0, st.get("tx_rate_mbps", 0))
-                        else:
-                            db.add(NetworkStats(
-                                server_id=srv.id, date=today, interface=iface,
-                                rx_bytes=st.get("daily_rx_bytes", 0),
-                                tx_bytes=st.get("daily_tx_bytes", 0),
-                                rx_packets=st.get("rx_packets", 0),
-                                tx_packets=st.get("tx_packets", 0),
-                                rx_errors=st.get("rx_errors", 0),
-                                tx_errors=st.get("tx_errors", 0),
-                                peak_rx_mbps=st.get("rx_rate_mbps", 0),
-                                peak_tx_mbps=st.get("tx_rate_mbps", 0),
-                            ))
-                db.commit()
-        except Exception as e:
-            print(f"[network-aggregation] error: {e}", flush=True)
+        nxt = (now + timedelta(minutes=5)).replace(second=0, microsecond=0)
+        await asyncio.sleep(max(1.0, (nxt - now).total_seconds()))
 
 
 # === Per-Server Health Check (v3.25 Phase 2.2) ===
@@ -3790,14 +3823,19 @@ def _collect_agent_metrics():
                 }
                 rates = {}
                 for metric_name, raw_value in raw_values.items():
+                    rate_name = metric_name.removesuffix("_raw")
+                    direct_rate = data.get(f"{rate_name}_rate")
+                    if direct_rate is not None:
+                        rates[rate_name] = max(0, float(direct_rate or 0))
+                        continue
                     last_rec = db.query(MetricHistory).filter(
                         MetricHistory.server_id == target.id,
                         MetricHistory.metric == metric_name,
                     ).order_by(MetricHistory.timestamp.desc()).first()
                     elapsed = (now - last_rec.timestamp).total_seconds() if last_rec else 0
-                    rates[metric_name.removesuffix("_raw")] = (
+                    rates[rate_name] = (
                         max(0, (raw_value - last_rec.value) / elapsed)
-                        if last_rec and last_rec.value is not None and elapsed > 0 else 0
+                        if last_rec and last_rec.value not in (None, 0) and elapsed > 0 else 0
                     )
 
                 metrics_to_store = {
@@ -3874,14 +3912,23 @@ def get_agent_metrics_api(server_id: str):
     _net_tx_rate2 = 0.0
     _disk_read_rate2 = 0.0
     _disk_write_rate2 = 0.0
-    from sqlalchemy import func as _sa_func2
+    _direct_rates2 = {
+        "net_rx_raw": data.get("net_rx_rate"),
+        "net_tx_raw": data.get("net_tx_rate"),
+    }
     with get_db() as _db2:
         for _mn2, _cv2 in [("net_rx_raw", _cur_net_rx2), ("net_tx_raw", _cur_net_tx2), ("disk_read_raw", _cur_disk_read2), ("disk_write_raw", _cur_disk_write2)]:
+            _direct2 = _direct_rates2.get(_mn2)
+            if _direct2 is not None:
+                _rv2 = max(0, float(_direct2 or 0))
+                if _mn2 == "net_rx_raw": _net_rx_rate2 = _rv2
+                elif _mn2 == "net_tx_raw": _net_tx_rate2 = _rv2
+                continue
             _last2 = _db2.query(MetricHistory).filter(
                 MetricHistory.server_id == uuid.UUID(server_id),
                 MetricHistory.metric == _mn2,
             ).order_by(MetricHistory.timestamp.desc()).first()
-            if _last2 and _last2.value:
+            if _last2 and _last2.value not in (None, 0):
                 _elapsed2 = (datetime.utcnow() - _last2.timestamp).total_seconds()
                 if _elapsed2 > 0:
                     _rv2 = max(0, (_cv2 - _last2.value) / _elapsed2)

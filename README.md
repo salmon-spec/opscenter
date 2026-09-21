@@ -24,10 +24,11 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 
 | 项 | 状态 |
 |---|---|
-| 后端测试 | **本地 SQLite 兼容回归 365/365 全绿**；PostgreSQL 全量回归由 CI 发布门禁执行 |
+| 后端测试 | **本地 SQLite 兼容回归 393/393 全绿**；PostgreSQL 全量回归由 CI 发布门禁执行 |
 | API | 增加 6 个 `/api/v2/ai/*` 只读上下文接口；现有管理与监控接口保持兼容 |
-| Agent | v2.6.2 |
+| Agent | v2.6.3 |
 | 版本里程碑 | **v5.1.0**（扩展模块接口、模块管理、Sandbox iframe 托管与阿里云 OSS 只读浏览） |
+| 扩展模块 | OSS 只读浏览 + 模型用量监控（Command Code / GOAT，API Key 加密保存，沙箱 iframe 隔离） |
 | 系统文件管理 | **v4.3 已交付**（本机/SFTP 浏览、编辑、上传下载、改名、可恢复删除） |
 | 系统防火墙 / SSH | **v4.3 已交付**（UFW/Firewalld、防失联保护、SSH 配置/会话/登录日志） |
 | 监控历史 | **v4.4 已交付**（按主机和时间段查询，5 分钟/1 小时分层汇总，CSV 导出，所有主机批量概览与快速切换） |
@@ -42,7 +43,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | 后端 | Python 3 + FastAPI 0.115.6 + SQLAlchemy 2.0 + Pydantic 2 + PyJWT |
 | 数据库 | PostgreSQL 16（`opscenter` 库） |
 | 前端 | Vue 3 SPA（单文件 index.html）+ ECharts + Tailwind CSS；**Vite 5 工程化改造中**（frontend-vite → /v3/ 灰度路径） |
-| Agent | Python 轻量采集器（v2.6.2，轻量系统摘要 / 指标 / 服务发现 / WireGuard / PVE 来宾 Web 服务发现 / 进程管理） |
+| Agent | Python 轻量采集器（v2.6.3，轻量系统摘要 / 指标 / 服务发现 / WireGuard / PVE 来宾 Web 服务发现 / 进程管理） |
 | 部署 | systemd（`opscenter-backend` :9091）+ Caddy 反代（:80）+ venv |
 | CI/CD | Jenkins（Jenkinsfile）+ GitLab CI（.gitlab-ci.yml） |
 
@@ -161,7 +162,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 
 ### 5.9 Agent 管理
 
-- 一键部署 / 升级 / 卸载远程监控 Agent（v2.6.2）
+- 一键部署 / 升级 / 卸载远程监控 Agent（v2.6.3）
 - Agent 状态监控（运行 / 离线 / 未部署），自动采集远程主机指标
 - 新端点：`/api/v1/registry-proxy`（Docker Hub digest 代理，TLS1.2 + IPv4 强制；MFA 安全组放开后生效）
 
@@ -170,6 +171,13 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 - `frontend-vite/` 目录（Vite 5 + Vue 3），承载资源控制台、日志中心、告警与服务广场
 - 构建产物 → `frontend/v3/` 兼容入口，路由级按需加载数据库、容器和系统页面
 - 部署脚本 `deploy/frontend-vite.sh`，正式入口切换由统一发布流程完成
+
+### 5.11 扩展模块（v5.1.0）
+
+- 后端注册模块清单与启停状态；前端在 `sandboxed-iframe` 中托管模块，模块只能通过受控消息桥访问白名单只读 API
+- OSS 文件浏览：按 Bucket / 前缀只读浏览，支持文本、JSON、图片和音频预览与下载
+- 模型用量：读取 Command Code / GOAT 套餐、月度 Credits、5 小时 / 周窗口、账期请求、Token 与成本；API Key 只保存在宿主后端加密配置中，不进入 iframe
+- Command Code 当前没有稳定公开用量 API，模块适配官方 CLI 使用的内部 `/alpha/*` 只读接口；接口变更会以采集异常展示，不做零值伪装
 
 ## 六、API 一览
 
@@ -212,10 +220,10 @@ OpsCenter/
 │   │   ├── discovery.py          # 服务自动发现
 │   │   ├── models.py             # SQLAlchemy 模型（15 表）
 │   │   └── version.py            # 版本号（4.8.5，单一来源）
-│   ├── tests/                    # pytest（344 用例）
+│   ├── tests/                    # pytest（393 用例）
 │   └── requirements.txt
 ├── agent/
-│   ├── opsagent.py               # 远程采集 Agent（v2.6.2）
+│   ├── opsagent.py               # 远程采集 Agent（v2.6.3）
 │   └── scanner.py                # 主机扫描器
 ├── frontend/                     # Vue 3 SPA（index.html 单文件）
 │   ├── index.html                # 主工作台
@@ -278,11 +286,14 @@ cp -r frontend /opt/opscenter/frontend       # Caddy 托管
 | `REPORT_ENABLED` / `REPORT_HOUR_UTC` | 巡检日报开关 / 生成时间（默认 0 = 北京 08:00） |
 | `AUDIT_ENABLED` | 操作审计开关（默认 true） |
 | `DEFAULT_NOTIFY_WEBHOOKS` | 飞书 webhook（日报推送复用） |
+| `COMMAND_CODE_API_KEY` | 可选；Command Code API Key，也可在模块配置页加密保存后覆盖 |
+| `COMMAND_CODE_API_BASE` | 可选；默认 `https://api.commandcode.ai` |
+| `COMMAND_CODE_TIMEOUT_SECONDS` | 可选；Command Code 采集超时，默认 12 秒，范围 3-60 秒 |
 
 ### 8.4 测试
 
 ```bash
-cd backend && pytest    # 当前 365/365 全绿
+cd backend && pytest    # 当前 393/393 全绿
 ```
 
 ## 九、核心能力与亮点
@@ -333,7 +344,7 @@ cd backend && pytest    # 当前 365/365 全绿
 | **v5.0.5** | **AI 只读诊断与自动巡检；统一主机侧栏；终端跨页面保持连接；服务入口收敛为服务广场** | ✅ 已完成 |
 | **v5.0.6** | **终端目标主机改为下拉选择；选择主机后自动激活已有会话，无会话时自动创建并打开终端** | ✅ 已完成 |
 | **v5.0.7** | **终端目标主机改为多开入口；每次选择主机都新建并打开独立会话，同一主机可连续多开** | ✅ 已完成 |
-| **v5.1.0** | **新增扩展模块接口与模块管理启停；外部服务通过 Sandbox iframe 隔离接入；首个阿里云 OSS 只读文件浏览模块支持目录浏览、文本/JSON/图片/音频预览与下载** | ✅ 已完成 |
+| **v5.1.0** | **新增扩展模块接口与模块管理启停；外部服务通过 Sandbox iframe 隔离接入；阿里云 OSS 只读文件浏览与模型用量监控模块** | ✅ 已完成 |
 
 ## 十一、已知限制与遗留事项
 

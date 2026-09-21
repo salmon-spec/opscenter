@@ -96,6 +96,22 @@ def test_api_responses_expose_request_observability_headers():
     assert response.headers["server-timing"].startswith("app;dur=")
 
 
+def test_network_summary_marks_only_host_uplinks():
+    interfaces = [
+        {"interface": "nic0", "rx_rate_mbps": 10, "tx_rate_mbps": 20, "rx_bytes": 1000, "tx_bytes": 2000, "daily_rx_bytes": 100, "daily_tx_bytes": 200, "daily_date": "2026-09-20"},
+        {"interface": "vmbr0", "rx_rate_mbps": 9, "tx_rate_mbps": 19, "rx_bytes": 900, "tx_bytes": 1900, "daily_rx_bytes": 90, "daily_tx_bytes": 190},
+        {"interface": "tap100i0", "rx_rate_mbps": 8, "tx_rate_mbps": 18, "rx_bytes": 800, "tx_bytes": 1800, "daily_rx_bytes": 80, "daily_tx_bytes": 180},
+        {"interface": "wg0", "rx_rate_mbps": 1, "tx_rate_mbps": 2, "rx_bytes": 100, "tx_bytes": 200, "daily_rx_bytes": 10, "daily_tx_bytes": 20},
+    ]
+
+    summary = system_control.summarize_network_interfaces(interfaces)
+
+    assert summary["interfaces"] == ["nic0"]
+    assert summary["daily_date"] == "2026-09-20"
+    assert summary["rx_rate_mbps"] == 10
+    assert summary["daily_tx_bytes"] == 200
+
+
 def test_system_summary_contract_and_illegal_pid(monkeypatch):
     server_id = add_host()
     with SessionLocal() as db:

@@ -4,18 +4,23 @@ The OSS SDK and network are replaced with fakes. These tests only exercise the
 API contract, isolation guard, path validation, and lifecycle persistence.
 """
 
+from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import pytest
 import sys
 from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
+from app import extension_modules as extension_modules_service
 from app import auth
 from app.credential_crypto import decrypt_secret
 from app.database import Base, engine, get_db
 from app.extension_modules import seed_extension_modules
 from app.main import app
-from app.models import ExtensionModule
+from app.models import CommandCodeUsageSnapshot, ExtensionModule
 from app.services import aliyun_oss
+from app.services import command_code
 
 client = TestClient(app)
 BASE = "/api/v2/modules"
@@ -26,11 +31,15 @@ def _fresh_db(monkeypatch):
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     aliyun_oss.aliyun_oss.configure(None)
+    command_code.command_code.configure(None)
+    monkeypatch.setattr(command_code, "COMMAND_CODE_API_KEY", "")
+    monkeypatch.setattr(command_code, "COMMAND_CODE_API_BASE", "https://api.commandcode.ai")
     monkeypatch.setattr(auth, "AUTH_ENABLED", False)
     monkeypatch.setattr(auth, "OPERATOR_TOKEN", "")
     seed_extension_modules()
     yield
     Base.metadata.drop_all(bind=engine)
+    command_code.command_code.configure(None)
 
 
 def _fake_oss(monkeypatch):
@@ -69,6 +78,21 @@ def _fake_oss(monkeypatch):
     monkeypatch.setattr(aliyun_oss.aliyun_oss, "list_objects", _fake_list_objects)
     monkeypatch.setattr(
         aliyun_oss.aliyun_oss,
+        "summary",
+        lambda prefix=None, bucket=None, force=False: {
+                "bucket": bucket or "test-bucket",
+                "prefix": prefix or "voice-workbench/source/",
+                "total_size": 12,
+                "object_count": 1,
+                "direct_object_count": 1,
+                "folders": {},
+                "pages": 1,
+                "cached": False,
+                "scanned_at": "2026-09-21T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        aliyun_oss.aliyun_oss,
         "preview_object",
         lambda key, bucket=None: {
             "key": key, "name": "README.md", "type": "text",
@@ -77,6 +101,64 @@ def _fake_oss(monkeypatch):
             "truncated": False, "message": "",
         },
     )
+
+
+def _fake_command_code(monkeypatch):
+    calls = []
+
+    def _request_json(endpoint, query=None, config=None):
+        calls.append((endpoint, dict(query or {}), dict(config or {})))
+        if endpoint == "/alpha/whoami":
+            return {
+                "success": True,
+                "org": None,
+                "user": {"id": "user-12345678", "userName": "ops-user", "email": "ops@example.com"},
+                "orgLimits": [],
+            }
+        if endpoint == "/alpha/billing/credits":
+            return {
+                "credits": {
+                    "planId": "individual-goat",
+                    "monthlyCredits": 60.166169574,
+                    "purchasedCredits": 0,
+                    "freeCredits": 0,
+                },
+                "windowLimits": {
+                    "limited": True,
+                    "exceeded": None,
+                    "fiveHour": {"used": 1.5, "cap": 14, "resetAt": 1789903865046, "exceeded": False},
+                    "weekly": {"used": 9.8, "cap": 35, "resetAt": 1790230392477, "exceeded": False},
+                },
+            }
+        if endpoint == "/alpha/billing/subscriptions":
+            return {
+                "success": True,
+                "data": {
+                    "planId": "individual-goat",
+                    "status": "active",
+                    "currentPeriodStart": "2026-09-17T06:06:46.000Z",
+                    "currentPeriodEnd": "2026-10-17T06:06:46.000Z",
+                    "cancelAtPeriodEnd": False,
+                },
+            }
+        if endpoint == "/alpha/usage/summary":
+            return {
+                "averageCost": 0.0018815,
+                "completedCount": 5171,
+                "failedCount": 0,
+                "periodBasis": "billing-period",
+                "successRate": 100,
+                "totalCost": 9.729477366,
+                "totalCount": 5171,
+                "totalCredits": 9.729477366,
+                "totalTokens": 284920667,
+                "totalTokensIn": 277062373,
+                "totalTokensOut": 7858294,
+            }
+        raise command_code.CommandCodeUsageError("unexpected endpoint")
+
+    monkeypatch.setattr(command_code.command_code, "_request_json", _request_json)
+    return calls
 
 
 def test_oss_module_config_is_encrypted_masked_and_resettable(monkeypatch):
@@ -93,6 +175,7 @@ def test_oss_module_config_is_encrypted_masked_and_resettable(monkeypatch):
         }
 
     monkeypatch.setattr(aliyun_oss.aliyun_oss, "discover_buckets", _fake_discover)
+
 
     saved = client.post(
         f"{BASE}/oss-browser/config",
@@ -129,6 +212,140 @@ def test_oss_module_config_is_encrypted_masked_and_resettable(monkeypatch):
         assert row.config_ciphertext is None
 
 
+def test_command_code_config_is_encrypted_masked_and_resettable(monkeypatch):
+    _fake_command_code(monkeypatch)
+    saved = client.post(
+        f"{BASE}/command-code-usage/config",
+        json={
+            "api_key": "cmd_live_secret_key_123456",
+            "api_base": "https://api.commandcode.ai",
+            "org_id": "",
+            "refresh_interval_seconds": 90,
+            "timeout_seconds": 10,
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["source"] == "module"
+    assert saved.json()["api_key_masked"] == "cmd_li...3456"
+    assert saved.json()["refresh_interval_seconds"] == 90
+    assert "cmd_live_secret_key_123456" not in saved.text
+
+    with get_db() as db:
+        row = db.query(ExtensionModule).filter(ExtensionModule.key == "command-code-usage").first()
+        assert row.config_ciphertext
+        assert "cmd_live_secret_key_123456" not in row.config_ciphertext
+        assert "cmd_live_secret_key_123456" in decrypt_secret(row.config_ciphertext)
+
+    current = client.get(f"{BASE}/command-code-usage/config")
+    assert current.status_code == 200
+    assert current.json()["configured"] is True
+    assert "cmd_live_secret_key_123456" not in current.text
+
+    reset = client.post(f"{BASE}/command-code-usage/config/reset")
+    assert reset.status_code == 200
+    assert reset.json()["source"] == "environment"
+    assert reset.json()["configured"] is False
+
+
+def test_command_code_usage_normalizes_goat_metrics(monkeypatch):
+    calls = _fake_command_code(monkeypatch)
+    saved = client.post(
+        f"{BASE}/command-code-usage/config",
+        json={"api_key": "cmd_live_secret_key_123456", "timeout_seconds": 10},
+    )
+    assert saved.status_code == 200
+    client.post(f"{BASE}/command-code-usage/start")
+    status = client.get(f"{BASE}/command-code-usage/status", params={"force": True})
+    assert status.status_code == 200
+    health = status.json()["health"]
+    assert health["available"] is True
+    assert health["error"] == ""
+    assert health["plan"]["id"] == "individual-goat"
+    assert health["plan"]["name"] == "GOAT"
+    assert health["plan"]["monthly_credits"] == 70
+    assert health["credits"]["remaining_total"] == 60.166169574
+    assert round(health["credits"]["usage_percent"], 2) == 14.05
+    assert health["windows"]["five_hour"]["cap"] == 14
+    assert health["windows"]["weekly"]["used"] == 9.8
+    assert health["usage"]["total_count"] == 5171
+    assert health["usage"]["total_tokens"] == 284920667
+    assert health["history"]["available"] is True
+    assert health["history"]["windows"]["hour"]["credits"] is None
+    assert health["history"]["windows"]["month"]["credits"] == 9.729477366
+    assert status.json()["module"]["status"] == "running"
+    assert any(endpoint == "/alpha/usage/summary" for endpoint, _, _ in calls)
+
+
+def test_command_code_invalid_key_is_not_persisted(monkeypatch):
+    def _unauthorized(endpoint, query=None, config=None):
+        raise command_code.CommandCodeUsageError("Command Code API Key 无效或已过期")
+
+    monkeypatch.setattr(command_code.command_code, "_request_json", _unauthorized)
+    response = client.post(
+        f"{BASE}/command-code-usage/config",
+        json={"api_key": "invalid-command-code-key"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Command Code API Key 无效或已过期"
+    with get_db() as db:
+        row = db.query(ExtensionModule).filter(ExtensionModule.key == "command-code-usage").first()
+        assert row.config_ciphertext is None
+
+
+def test_command_code_sampling_uses_environment_configuration(monkeypatch):
+    _fake_command_code(monkeypatch)
+    monkeypatch.setattr(command_code, "COMMAND_CODE_API_KEY", "env-command-code-key")
+    with get_db() as db:
+        row = db.query(ExtensionModule).filter(ExtensionModule.key == "command-code-usage").first()
+        row.running = True
+        db.commit()
+        assert extension_modules_service._prepare_command_code_sampling(row) is True
+
+
+def test_command_code_history_uses_snapshot_deltas():
+    scope = "snapshot-test-scope"
+    now = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+    with get_db() as db:
+        db.add(CommandCodeUsageSnapshot(
+            scope_key=scope,
+            captured_at=(now - timedelta(hours=1)).replace(tzinfo=None),
+            period_start="2026-09-17T06:06:46.000Z",
+            total_credits=1.0,
+            total_tokens=1000,
+            total_count=10,
+        ))
+        db.add(CommandCodeUsageSnapshot(
+            scope_key=scope,
+            captured_at=(now - timedelta(minutes=30)).replace(tzinfo=None),
+            period_start="2026-09-17T06:06:46.000Z",
+            total_credits=2.0,
+            total_tokens=2500,
+            total_count=18,
+        ))
+        db.commit()
+
+    result = {
+        "checked_at": now.isoformat().replace("+00:00", "Z"),
+        "plan": {
+            "current_period_start": "2026-09-17T06:06:46.000Z",
+        },
+        "usage": {
+            "total_credits": 3.0,
+            "total_tokens": 4000,
+            "total_count": 30,
+        },
+    }
+    history = command_code.command_code._build_history(result, scope, now=now)
+    hour = history["windows"]["hour"]
+    assert hour["credits"] == 2.0
+    assert hour["requests"] == 20
+    assert hour["tokens"] == 3000
+    assert hour["complete"] is True
+    day = history["windows"]["day"]
+    assert day["complete"] is False
+    assert day["observed_seconds"] == 3600
+
+
 def test_discover_buckets_derives_regional_endpoints(monkeypatch):
     class FakeService:
         def __init__(self, auth, endpoint):
@@ -156,20 +373,29 @@ def test_discover_buckets_derives_regional_endpoints(monkeypatch):
 
 def test_builtin_seed_and_lifecycle():
     items = client.get(BASE).json()["items"]
-    assert [item["key"] for item in items] == ["oss-browser"]
+    assert [item["key"] for item in items] == ["oss-browser", "command-code-usage"]
     module = items[0]
     assert module["source"] == "builtin"
     assert module["running"] is False
     assert module["status"] == "stopped"
     assert module["isolation"] == "sandboxed-iframe"
+    assert items[1]["source"] == "builtin"
+    assert items[1]["name"] == "模型用量"
+    assert items[1]["permissions"] == ["command-code:read"]
+    assert items[1]["manifest"]["readonly"] is True
+    assert items[1]["running"] is False
 
     started = client.post(f"{BASE}/oss-browser/start")
     assert started.status_code == 200
     assert started.json()["running"] is True
     assert started.json()["status"] == "running"
 
+    command_code_started = client.post(f"{BASE}/command-code-usage/start")
+    assert command_code_started.status_code == 200
+    assert command_code_started.json()["running"] is True
+
     running = client.get(BASE, params={"running": True}).json()["items"]
-    assert [item["key"] for item in running] == ["oss-browser"]
+    assert [item["key"] for item in running] == ["oss-browser", "command-code-usage"]
 
     stopped = client.post(f"{BASE}/oss-browser/stop")
     assert stopped.status_code == 200
@@ -223,6 +449,11 @@ def test_oss_status_objects_preview_and_health(monkeypatch):
     assert objects.status_code == 200
     assert objects.json()["items"][0]["key"] == "voice-workbench/source/README.md"
 
+    summary = client.get(f"{BASE}/oss-browser/summary")
+    assert summary.status_code == 200
+    assert summary.json()["total_size"] == 12
+    assert summary.json()["object_count"] == 1
+
     alt_status = client.get(
         f"{BASE}/oss-browser/status", params={"bucket": "alt-bucket"},
     )
@@ -275,6 +506,81 @@ def test_list_objects_accepts_oss_timestamp(monkeypatch):
 
     result = reader.list_objects(prefix="voice-workbench/source/")
     assert result["items"][0]["last_modified"].startswith("2026-")
+
+
+def test_oss_summary_paginates_and_counts_first_level_directories(monkeypatch):
+    reader = aliyun_oss.AliyunOssReader()
+    reader.configure({
+        "access_key_id": "test-ak",
+        "access_key_secret": "test-secret",
+        "buckets": ["test-bucket"],
+        "bucket_endpoints": {"test-bucket": "https://oss.example"},
+        "bucket_prefixes": {"test-bucket": "root/"},
+    })
+    pages = [
+        SimpleNamespace(
+            object_list=[
+                SimpleNamespace(key="root/a.txt", size=10),
+                SimpleNamespace(key="root/b/c.txt", size=20),
+            ],
+            is_truncated=True,
+            next_continuation_token="next",
+        ),
+        SimpleNamespace(
+            object_list=[
+                SimpleNamespace(key="root/d.txt", size=5),
+                SimpleNamespace(key="root/empty/", size=0),
+            ],
+            is_truncated=False,
+            next_continuation_token="",
+        ),
+    ]
+    calls = []
+
+    class FakeClient:
+        def list_objects_v2(self, **kwargs):
+            calls.append(kwargs)
+            return pages[len(calls) - 1]
+
+    monkeypatch.setattr(reader, "_client", lambda bucket=None: FakeClient())
+    result = reader.summary(prefix="root/", bucket="test-bucket")
+    assert result["total_size"] == 35
+    assert result["object_count"] == 3
+    assert result["direct_object_count"] == 2
+    assert result["folders"]["root/b/"]["count"] == 1
+    assert result["folders"]["root/b/"]["size"] == 20
+    assert calls[1]["continuation_token"] == "next"
+    cached = reader.summary(prefix="root/", bucket="test-bucket")
+    assert cached["cached"] is True
+    assert len(calls) == 2
+
+
+def test_oss_summary_does_not_hold_lock_during_network_scan(monkeypatch):
+    reader = aliyun_oss.AliyunOssReader()
+    reader.configure({
+        "access_key_id": "test-ak",
+        "access_key_secret": "test-secret",
+        "buckets": ["test-bucket"],
+        "bucket_endpoints": {"test-bucket": "https://oss.example"},
+        "bucket_prefixes": {},
+    })
+    barrier = threading.Barrier(2, timeout=2)
+
+    class FakeClient:
+        def list_objects_v2(self, prefix=None, **kwargs):
+            barrier.wait()
+            return SimpleNamespace(
+                object_list=[SimpleNamespace(key=f"{prefix}file.txt", size=1)],
+                is_truncated=False,
+                next_continuation_token="",
+            )
+
+    monkeypatch.setattr(reader, "_client", lambda bucket=None: FakeClient())
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(reader.summary, "one/", "test-bucket")
+        second = pool.submit(reader.summary, "two/", "test-bucket")
+        assert first.result(timeout=3)["object_count"] == 1
+        assert second.result(timeout=3)["object_count"] == 1
 
 def test_audio_mime_types_are_explicit():
     reader = aliyun_oss.AliyunOssReader()

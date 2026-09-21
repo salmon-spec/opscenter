@@ -14,6 +14,7 @@ AGENT_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "agent")
 sys.path.insert(0, os.path.abspath(AGENT_DIR))
 
 import opsagent  # noqa: E402
+import scanner  # noqa: E402
 
 
 class _StubHandler:
@@ -45,9 +46,46 @@ class _StubHandler:
         return False
 
 
-def test_agent_version_is_2_6_2():
-    # 2.6.2 keeps lightweight collection free of docker stats.
-    assert opsagent.AGENT_VERSION == "2.6.2"
+def test_agent_version_is_2_6_3():
+    assert opsagent.AGENT_VERSION == "2.6.3"
+
+
+def test_network_selection_skips_bridge_taps_and_overlays():
+    interfaces = {
+        "lo": {"kind": "loopback", "master": ""},
+        "nic0": {"kind": "physical", "master": "vmbr0"},
+        "vmbr0": {"kind": "bridge", "master": ""},
+        "tap100i0": {"kind": "virtual", "master": "vmbr0"},
+        "wg0": {"kind": "virtual", "master": ""},
+    }
+
+    assert scanner.select_host_interfaces(interfaces) == ["nic0"]
+
+
+def test_network_selection_uses_bond_instead_of_slaves():
+    interfaces = {
+        "eth0": {"kind": "physical", "master": "bond0"},
+        "eth1": {"kind": "physical", "master": "bond0"},
+        "bond0": {"kind": "bond", "master": ""},
+    }
+
+    assert scanner.select_host_interfaces(interfaces) == ["bond0"]
+
+
+def test_host_network_summary_uses_only_selected_uplinks():
+    snapshot = {
+        "nic0": {"rx_rate_mbps": 10.0, "tx_rate_mbps": 20.0, "rx_bytes": 1000, "tx_bytes": 2000, "daily_rx_bytes": 100, "daily_tx_bytes": 200, "daily_date": "2026-09-20"},
+        "vmbr0": {"rx_rate_mbps": 9.0, "tx_rate_mbps": 19.0, "rx_bytes": 900, "tx_bytes": 1900, "daily_rx_bytes": 90, "daily_tx_bytes": 190},
+    }
+
+    summary = opsagent._network_summary(snapshot, ["nic0"])
+
+    assert summary["interfaces"] == ["nic0"]
+    assert summary["daily_date"] == "2026-09-20"
+    assert summary["rx_rate_mbps"] == 10.0
+    assert summary["tx_rate_mbps"] == 20.0
+    assert summary["daily_rx_bytes"] == 100
+    assert summary["daily_tx_bytes"] == 200
 
 
 def test_lightweight_metrics_counts_containers_without_docker_stats(monkeypatch):

@@ -8,6 +8,7 @@ message bridge, so they never receive the operator token.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime
@@ -17,12 +18,14 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from pydantic import ValidationError
 
 from app.auth import require_operator
 from app.credential_crypto import decrypt_secret, encrypt_secret
 from app.database import get_db
 from app.models import ExtensionModule
 from app.services.aliyun_oss import OssModuleError, aliyun_oss
+from app.services.command_code import CommandCodeUsageError, command_code
 
 router = APIRouter(prefix="/api/v2/modules", tags=["extension-modules"])
 
@@ -31,10 +34,10 @@ MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 BUILTIN_MODULES = {
     "oss-browser": {
         "name": "OSS 文件浏览",
-        "version": "1.2.0",
+        "version": "1.2.2",
         "description": "只读浏览阿里云 OSS 白名单 Bucket 与前缀内的文件",
         "icon": "▤",
-        "entry_url": "/v3/extension-modules/oss-browser/index.html",
+        "entry_url": "/v3/extension-modules/oss-browser/index.html?v=1.2.2",
         "runtime": "iframe",
         "isolation": "sandboxed-iframe",
         "capabilities": ["list", "preview", "download"],
@@ -45,6 +48,23 @@ BUILTIN_MODULES = {
             "readonly": True,
         },
         "sort_order": 10,
+    },
+    "command-code-usage": {
+        "name": "模型用量",
+        "version": "1.0.2",
+        "description": "只读监控 Command Code / GOAT 的套餐额度、窗口限速和账期用量",
+        "icon": "CC",
+        "entry_url": "/v3/extension-modules/command-code-usage/index.html?v=1.0.2",
+        "runtime": "iframe",
+        "isolation": "sandboxed-iframe",
+        "capabilities": ["usage:read", "billing:read"],
+        "permissions": ["command-code:read"],
+        "manifest": {
+            "api_prefixes": ["/modules/command-code-usage/"],
+            "sandbox": ["allow-scripts"],
+            "readonly": True,
+        },
+        "sort_order": 20,
     },
 }
 
@@ -108,6 +128,30 @@ class OssCredentialUpdate(BaseModel):
         if parsed.username or parsed.password:
             raise ValueError("Endpoint 不能包含账号密码")
         return value.rstrip("/")
+
+
+class CommandCodeCredentialUpdate(BaseModel):
+    api_key: str = Field(..., min_length=8, max_length=1024)
+    api_base: str = Field("https://api.commandcode.ai", max_length=500)
+    org_id: str = Field("", max_length=256)
+    refresh_interval_seconds: int = Field(60, ge=15, le=3600)
+    timeout_seconds: float = Field(12.0, ge=3.0, le=60.0)
+
+    @field_validator("api_key", "org_id")
+    @classmethod
+    def _strip_secret(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("api_base")
+    @classmethod
+    def _valid_api_base(cls, value: str) -> str:
+        value = value.strip().rstrip("/")
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("API Base 必须是 HTTP(S) 地址")
+        if parsed.username or parsed.password:
+            raise ValueError("API Base 不能包含账号密码")
+        return value
 
 
 def seed_extension_modules() -> None:
@@ -192,6 +236,26 @@ def _oss_config_response(row: ExtensionModule) -> dict:
     return result
 
 
+def _apply_command_code_config(row: ExtensionModule) -> None:
+    command_code.configure(_decrypt_module_config(row))
+
+
+def _command_code_config_response(row: ExtensionModule) -> dict:
+    result = command_code.config_summary()
+    result["updated_at"] = _iso(row.config_updated_at)
+    return result
+
+
+def _parse_module_config(module_key: str, data: dict):
+    model = OssCredentialUpdate if module_key == "oss-browser" else CommandCodeCredentialUpdate
+    try:
+        return model.model_validate(data)
+    except ValidationError as exc:
+        errors = exc.errors()
+        message = errors[0].get("msg", "模块配置不合法") if errors else "模块配置不合法"
+        raise HTTPException(status_code=422, detail=str(message)) from exc
+
+
 def _require_running(db, key: str) -> ExtensionModule:
     row = _get_module(db, key)
     if not row.running:
@@ -209,6 +273,27 @@ def _record_health(row: ExtensionModule, result: dict) -> dict:
         row.status = "degraded" if row.running else "stopped"
         row.last_error = str(result.get("error") or "模块健康检查失败")[:500]
     return result
+
+
+def _record_command_code_health(row: ExtensionModule, result: dict) -> dict:
+    available = bool(result.get("available"))
+    partial_error = str(result.get("error") or "").strip()
+    row.last_checked_at = datetime.utcnow()
+    if available and not partial_error:
+        row.status = "running"
+        row.last_error = ""
+    else:
+        row.status = "degraded" if row.running else "stopped"
+        row.last_error = str(partial_error or "模块健康检查失败")[:500]
+    return result
+
+
+def _prepare_command_code_sampling(row: ExtensionModule) -> bool:
+    """Apply the effective module/environment config before a background sample."""
+    if not row.running:
+        return False
+    _apply_command_code_config(row)
+    return command_code.configured()
 
 
 @router.get("")
@@ -296,6 +381,9 @@ def check_module_health(module_key: str, user: object = Depends(require_operator
         if module_key == "oss-browser":
             _apply_oss_config(row)
             result = _record_health(row, aliyun_oss.status(force=True))
+        elif module_key == "command-code-usage":
+            _apply_command_code_config(row)
+            result = _record_command_code_health(row, command_code.status(force=True))
         else:
             result = {
                 "available": bool(row.running),
@@ -316,45 +404,57 @@ def check_module_health(module_key: str, user: object = Depends(require_operator
 def get_oss_config(module_key: str, user: object = Depends(require_operator)):
     with get_db() as db:
         row = _get_module(db, module_key)
-        if module_key != "oss-browser":
-            raise HTTPException(status_code=404, detail="该模块没有配置接口")
-        _apply_oss_config(row)
-        return _oss_config_response(row)
+        if module_key == "oss-browser":
+            _apply_oss_config(row)
+            return _oss_config_response(row)
+        if module_key == "command-code-usage":
+            _apply_command_code_config(row)
+            return _command_code_config_response(row)
+        raise HTTPException(status_code=404, detail="该模块没有配置接口")
 
 
 @router.post("/{module_key}/config")
 def save_oss_config(
     module_key: str,
-    data: OssCredentialUpdate,
+    data: dict,
     user: object = Depends(require_operator),
 ):
+    if module_key not in {"oss-browser", "command-code-usage"}:
+        raise HTTPException(status_code=404, detail="该模块没有配置接口")
+    parsed = _parse_module_config(module_key, data)
     with get_db() as db:
         row = _get_module(db, module_key)
-        if module_key != "oss-browser":
-            raise HTTPException(status_code=404, detail="该模块没有配置接口")
-        try:
-            discovered = aliyun_oss.discover_buckets(
-                data.access_key_id, data.access_key_secret, data.endpoint,
-            )
-        except OssModuleError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if module_key == "oss-browser":
+            try:
+                discovered = aliyun_oss.discover_buckets(
+                    parsed.access_key_id, parsed.access_key_secret, parsed.endpoint,
+                )
+            except OssModuleError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        previous = _decrypt_module_config(row) or {}
-        buckets = discovered["buckets"]
-        default_bucket = str(previous.get("default_bucket") or "").strip()
-        config = {
-            "access_key_id": data.access_key_id,
-            "access_key_secret": data.access_key_secret,
-            "endpoint": discovered["endpoint"],
-            "buckets": buckets,
-            "bucket_endpoints": discovered["bucket_endpoints"],
-            "default_bucket": default_bucket if default_bucket in buckets else buckets[0],
-            "bucket_prefixes": {
-                bucket: prefix
-                for bucket, prefix in (previous.get("bucket_prefixes") or {}).items()
-                if bucket in buckets and isinstance(prefix, str)
-            },
-        }
+            previous = _decrypt_module_config(row) or {}
+            buckets = discovered["buckets"]
+            default_bucket = str(previous.get("default_bucket") or "").strip()
+            config = {
+                "access_key_id": parsed.access_key_id,
+                "access_key_secret": parsed.access_key_secret,
+                "endpoint": discovered["endpoint"],
+                "buckets": buckets,
+                "bucket_endpoints": discovered["bucket_endpoints"],
+                "default_bucket": default_bucket if default_bucket in buckets else buckets[0],
+                "bucket_prefixes": {
+                    bucket: prefix
+                    for bucket, prefix in (previous.get("bucket_prefixes") or {}).items()
+                    if bucket in buckets and isinstance(prefix, str)
+                },
+            }
+        else:
+            config = parsed.model_dump()
+            try:
+                command_code.validate_config(config)
+            except CommandCodeUsageError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         try:
             row.config_ciphertext = encrypt_secret(json.dumps(config, ensure_ascii=False))
         except RuntimeError as exc:
@@ -362,22 +462,33 @@ def save_oss_config(
         row.config_updated_at = datetime.utcnow()
         db.commit()
         db.refresh(row)
-        aliyun_oss.configure(config)
-        return _oss_config_response(row)
+        if module_key == "oss-browser":
+            aliyun_oss.configure(config)
+            return _oss_config_response(row)
+        command_code.configure(config)
+        return _command_code_config_response(row)
 
 
 @router.post("/{module_key}/config/reset")
 def reset_oss_config(module_key: str, user: object = Depends(require_operator)):
     with get_db() as db:
         row = _get_module(db, module_key)
-        if module_key != "oss-browser":
+        if module_key == "oss-browser":
+            service = aliyun_oss
+            response = _oss_config_response
+        elif module_key == "command-code-usage":
+            service = command_code
+            response = _command_code_config_response
+        else:
             raise HTTPException(status_code=404, detail="该模块没有配置接口")
         row.config_ciphertext = None
         row.config_updated_at = None
         db.commit()
         db.refresh(row)
-        aliyun_oss.configure(None)
-        return _oss_config_response(row)
+        service.configure(None)
+        return response(row)
+
+
 
 
 def _oss_guard(row: ExtensionModule):
@@ -395,13 +506,17 @@ def oss_status(
 ):
     with get_db() as db:
         row = _require_running(db, module_key)
-        if module_key != "oss-browser":
+        if module_key == "command-code-usage":
+            _apply_command_code_config(row)
+            result = _record_command_code_health(row, command_code.status(force=force))
+        elif module_key == "oss-browser":
+            _oss_guard(row)
+            try:
+                result = _record_health(row, aliyun_oss.status(force=force, bucket=bucket))
+            except OssModuleError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
             raise HTTPException(status_code=404, detail="该模块没有状态接口")
-        _oss_guard(row)
-        try:
-            result = _record_health(row, aliyun_oss.status(force=force, bucket=bucket))
-        except OssModuleError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
         db.commit()
         return {"module": _module_dict(row, include_manifest=False), "health": result}
 
@@ -422,6 +537,25 @@ def oss_objects(
         _oss_guard(row)
         try:
             return aliyun_oss.list_objects(prefix, marker, limit, bucket)
+        except OssModuleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{module_key}/summary")
+def oss_summary(
+    module_key: str,
+    prefix: Optional[str] = Query(None),
+    bucket: Optional[str] = Query(None),
+    force: bool = Query(False),
+    user: object = Depends(require_operator),
+):
+    with get_db() as db:
+        row = _require_running(db, module_key)
+        if module_key != "oss-browser":
+            raise HTTPException(status_code=404, detail="该模块没有目录统计接口")
+        _oss_guard(row)
+        try:
+            return aliyun_oss.summary(prefix, bucket, force)
         except OssModuleError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -465,3 +599,30 @@ def oss_download(
             media_type=mime,
             headers={"Content-Disposition": aliyun_oss.content_disposition(filename)},
         )
+
+
+async def command_code_usage_loop() -> None:
+    """Sample Command Code cumulative usage every minute while the module is running."""
+    while True:
+        try:
+            with get_db() as db:
+                row = (
+                    db.query(ExtensionModule)
+                    .filter(ExtensionModule.key == "command-code-usage")
+                    .first()
+                )
+                should_sample = bool(row and _prepare_command_code_sampling(row))
+            if should_sample:
+                result = await asyncio.to_thread(command_code.status, force=True)
+                with get_db() as db:
+                    row = (
+                        db.query(ExtensionModule)
+                        .filter(ExtensionModule.key == "command-code-usage")
+                        .first()
+                    )
+                    if row:
+                        _record_command_code_health(row, result)
+                        db.commit()
+        except Exception as exc:
+            print(f"[modules] Command Code sampling skipped: {exc}", flush=True)
+        await asyncio.sleep(60)

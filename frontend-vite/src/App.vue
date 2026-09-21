@@ -190,9 +190,9 @@ onUnmounted(() => {
 .auth-mask{position:fixed;inset:0;z-index:4000;background:rgba(15,23,42,.55);display:grid;place-items:center}.auth-card{width:min(380px,calc(100vw - 32px));padding:26px;background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 24px 70px rgba(15,23,42,.25);display:flex;flex-direction:column;gap:14px}.auth-card h3,.auth-card p{margin:0}.auth-card p{color:var(--muted);font-size:13px}.auth-card label{display:flex;flex-direction:column;gap:6px;font-size:13px}.auth-card input{height:38px;padding:0 10px;border:1px solid var(--border);border-radius:8px}.auth-error{color:var(--danger);font-size:12px}.auth-card button{align-self:stretch}
 .sidebar {
   width: 200px; flex-shrink: 0; background: var(--sidebar); color: var(--sidebar-text);
-  display: flex; flex-direction: column; padding: 16px 10px; transition: width .2s ease, padding .2s ease;
+  min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 16px 10px; transition: width .2s ease, padding .2s ease;
 }
-.logo { position: relative; display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; border-bottom: 1px solid rgba(148,163,184,.15); }
+.logo { position: relative; flex: none; display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; border-bottom: 1px solid rgba(148,163,184,.15); }
 .logo-badge {
   width: 36px; height: 36px; border-radius: 10px; background: var(--brand);
   color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px;
@@ -201,7 +201,7 @@ onUnmounted(() => {
 .logo-ver { font-size: 11px; color: var(--sidebar-text); }
 .sidebar-toggle { margin-left: auto; width: 24px; height: 24px; padding: 0; border: 1px solid rgba(148,163,184,.24); border-radius: 7px; background: rgba(148,163,184,.08); color: var(--sidebar-text); cursor: pointer; font-size: 20px; line-height: 20px; }
 .sidebar-toggle:hover { color: #fff; background: rgba(148,163,184,.18); }
-.nav { flex: 1; margin-top: 14px; display: flex; flex-direction: column; gap: 2px; }
+.nav { flex: 1; min-height: 0; margin-top: 14px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .nav-section { margin: 12px 8px 5px; padding-top: 10px; border-top: 1px solid rgba(148,163,184,.15); color: #64748b; font-size: 10px; font-weight: 700; letter-spacing: .08em; }
 .nav-item {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
@@ -210,7 +210,7 @@ onUnmounted(() => {
 .nav-item:hover { background: rgba(148,163,184,.12); color: var(--sidebar-text); }
 .nav-item.active, .nav-item.active:hover { background: rgba(37,99,235,.22); color: var(--sidebar-active); font-weight: 600; }
 .nav-icon { width: 20px; text-align: center; }
-.sidebar-foot { padding: 12px 8px 4px; border-top: 1px solid rgba(148,163,184,.15); }
+.sidebar-foot { flex: none; padding: 12px 8px 4px; border-top: 1px solid rgba(148,163,184,.15); }
 .host-mini { font-size: 12px; display: flex; align-items: center; gap: 6px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.ok { background: var(--ok); }

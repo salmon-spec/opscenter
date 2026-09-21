@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.6.2 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.6.3 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -16,7 +16,7 @@ import base64
 import hashlib
 from datetime import datetime
 
-AGENT_VERSION = "2.6.2"
+AGENT_VERSION = "2.6.3"
 VERSION = AGENT_VERSION
 TOKEN = ""
 
@@ -30,12 +30,37 @@ _net_daily = {}   # iface -> {rx, tx, date}
 _net_lock = threading.Lock()
 
 
+def _network_summary(snapshot, selected):
+    """Aggregate only host uplinks, excluding bridges, taps and overlays."""
+    selected = [name for name in selected if name in snapshot]
+    rx_mbps = sum(float(snapshot[name].get('rx_rate_mbps') or 0) for name in selected)
+    tx_mbps = sum(float(snapshot[name].get('tx_rate_mbps') or 0) for name in selected)
+    daily_dates = {snapshot[name].get('daily_date') for name in selected if snapshot[name].get('daily_date')}
+    return {
+        'interfaces': selected,
+        'daily_date': daily_dates.pop() if len(daily_dates) == 1 else '',
+        'rx_rate_mbps': round(rx_mbps, 3),
+        'tx_rate_mbps': round(tx_mbps, 3),
+        'rx_bytes_per_sec': round(rx_mbps * 1_000_000 / 8, 3),
+        'tx_bytes_per_sec': round(tx_mbps * 1_000_000 / 8, 3),
+        'rx_bytes': sum(int(snapshot[name].get('rx_bytes') or 0) for name in selected),
+        'tx_bytes': sum(int(snapshot[name].get('tx_bytes') or 0) for name in selected),
+        'daily_rx_bytes': sum(int(snapshot[name].get('daily_rx_bytes') or 0) for name in selected),
+        'daily_tx_bytes': sum(int(snapshot[name].get('daily_tx_bytes') or 0) for name in selected),
+    }
+
+
 def _network_snapshot():
-    """计算各网卡实时速率(Mbps)与今日累计字节，供 /metrics 与 /api/v1/network 使用。"""
+    """Return per-interface rates and the set of host uplink interfaces.
+
+    Rates are Mbps and daily counters are per-interface bytes. Host-level
+    totals are derived only from scanner.select_host_interfaces().
+    """
     global _net_last, _net_daily
     now = time.time()
     today = time.strftime('%Y-%m-%d')
     cur = scanner.collect_network()
+    selected = scanner.select_host_interfaces(cur)
     snap = {}
     with _net_lock:
         for iface, d in cur.items():
@@ -63,8 +88,10 @@ def _network_snapshot():
                 'tx_errors': d['tx_errors'],
                 'daily_rx_bytes': day['rx'],
                 'daily_tx_bytes': day['tx'],
+                'daily_date': day['date'],
+                'is_uplink': iface in selected,
             }
-    return snap
+    return snap, selected
 
 
 # === Scan cache and background thread ===
@@ -448,22 +475,7 @@ def collect_metrics(lightweight=False):
     except Exception:
         m['load1'] = m['load5'] = m['load15'] = 0
 
-    # --- Network ---
-    try:
-        with open('/proc/net/dev') as f:
-            for line in f:
-                if ':' in line and not line.strip().startswith('lo:'):
-                    iface, data = line.split(':')
-                    iface = iface.strip()
-                    if iface.startswith(('eth', 'ens', 'enp', 'wlan', 'en')):
-                        parts = data.split()
-                        m['net_rx_bytes'] = int(parts[0])
-                        m['net_tx_bytes'] = int(parts[8])
-                        m['net_iface'] = iface
-                        break
-    except Exception:
-        m['net_rx_bytes'] = m['net_tx_bytes'] = 0
-        m['net_iface'] = ''
+    # Network totals are populated below from scanner.collect_network().
 
     # --- Uptime ---
     try:
@@ -513,13 +525,23 @@ def collect_metrics(lightweight=False):
     m['agent_version'] = AGENT_VERSION
     m['timestamp'] = time.time()
 
-    # 网络快照（v3.25.1）
+    # Snapshot sends per-interface details plus one host-uplink summary.
     try:
-        m['network'] = _network_snapshot()
+        m['network'], selected = _network_snapshot()
+        m['network_summary'] = _network_summary(m['network'], selected)
         m['network_interfaces'] = [dict({'interface': name}, **values) for name, values in m['network'].items()]
+        m['net_rx_bytes'] = m['network_summary']['rx_bytes']
+        m['net_tx_bytes'] = m['network_summary']['tx_bytes']
+        m['net_rx_rate'] = m['network_summary']['rx_bytes_per_sec']
+        m['net_tx_rate'] = m['network_summary']['tx_bytes_per_sec']
+        m['net_iface'] = ','.join(selected)
     except Exception:
         m['network'] = {}
+        m['network_summary'] = _network_summary({}, [])
         m['network_interfaces'] = []
+        m['net_rx_bytes'] = m['net_tx_bytes'] = 0
+        m['net_rx_rate'] = m['net_tx_rate'] = 0
+        m['net_iface'] = ''
 
     return m
 
@@ -609,8 +631,10 @@ class AgentHandler(http.server.BaseHTTPRequestHandler):
         elif path == '/api/v1/network':
             if not self._check_auth():
                 return
+            network, selected = _network_snapshot()
             self._json_response({
-                'interfaces': _network_snapshot(),
+                'interfaces': network,
+                'summary': _network_summary(network, selected),
                 'timestamp': time.time(),
             })
 

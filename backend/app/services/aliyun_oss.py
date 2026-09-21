@@ -43,6 +43,9 @@ PDF_EXTENSIONS = {".pdf"}
 TEXT_PREVIEW_BYTES = 256 * 1024
 BINARY_PREVIEW_BYTES = 5 * 1024 * 1024
 STATUS_CACHE_SECONDS = 10.0
+SUMMARY_CACHE_SECONDS = 300.0
+SUMMARY_PAGE_SIZE = 1000
+SUMMARY_MAX_PAGES = 1000
 BUCKET_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")
 
 
@@ -57,6 +60,9 @@ class AliyunOssReader:
         self._status_lock = threading.Lock()
         self._status_at: dict[str, float] = {}
         self._status_values: dict[str, dict] = {}
+        self._summary_lock = threading.Lock()
+        self._summary_cache: dict[tuple[str, str], tuple[float, dict]] = {}
+        self._summary_generation = 0
         self._config_lock = threading.Lock()
         self._runtime_config: dict | None = None
 
@@ -74,6 +80,9 @@ class AliyunOssReader:
             self._clients.clear()
             self._status_at.clear()
             self._status_values.clear()
+        with self._summary_lock:
+            self._summary_cache.clear()
+            self._summary_generation += 1
 
     def _credentials(self) -> tuple[str, str]:
         config = self._config_snapshot() or {}
@@ -417,6 +426,82 @@ class AliyunOssReader:
                 self._status_values[safe_bucket] = dict(result)
         return result
 
+    def summary(self, prefix: str | None = None, bucket: str | None = None, force: bool = False) -> dict:
+        """Return recursive object totals and first-level directory counts."""
+        safe_bucket = self.resolve_bucket(bucket)
+        safe_prefix = self.normalize_prefix(prefix, safe_bucket)
+        cache_key = (safe_bucket, safe_prefix)
+        now = time.monotonic()
+        with self._summary_lock:
+            cached = self._summary_cache.get(cache_key)
+            if not force and cached and now - cached[0] < SUMMARY_CACHE_SECONDS:
+                result = dict(cached[1])
+                result["cached"] = True
+                return result
+            generation = self._summary_generation
+        total_size = 0
+        object_count = 0
+        direct_object_count = 0
+        folders: dict[str, dict] = {}
+        token = ""
+        pages = 0
+        try:
+            client = self._client(safe_bucket)
+            while True:
+                page = client.list_objects_v2(
+                    prefix=safe_prefix,
+                    delimiter="",
+                    continuation_token=token,
+                    max_keys=SUMMARY_PAGE_SIZE,
+                )
+                for obj in getattr(page, "object_list", []) or []:
+                    key = str(getattr(obj, "key", "") or "")
+                    if not key.startswith(safe_prefix) or key.endswith("/"):
+                        continue
+                    size = int(getattr(obj, "size", 0) or 0)
+                    relative = key[len(safe_prefix):]
+                    object_count += 1
+                    total_size += size
+                    if "/" not in relative:
+                        direct_object_count += 1
+                        continue
+                    folder_key = f"{safe_prefix}{relative.split('/', 1)[0]}/"
+                    folder = folders.setdefault(folder_key, {
+                        "key": folder_key,
+                        "name": folder_key.rstrip("/").rsplit("/", 1)[-1],
+                        "count": 0,
+                        "size": 0,
+                    })
+                    folder["count"] += 1
+                    folder["size"] += size
+                pages += 1
+                if not bool(getattr(page, "is_truncated", False)):
+                    break
+                token = str(getattr(page, "next_continuation_token", "") or "")
+                if not token:
+                    raise OssModuleError("OSS 分页统计缺少 continuation token")
+                if pages >= SUMMARY_MAX_PAGES:
+                    raise OssModuleError("OSS 对象过多，无法在单次统计上限内完成，请缩小目录范围")
+        except OssModuleError:
+            raise
+        except Exception as exc:
+            raise OssModuleError(self._safe_error(exc)) from exc
+
+        result = {
+            "bucket": safe_bucket,
+            "prefix": safe_prefix,
+            "total_size": total_size,
+            "object_count": object_count,
+            "direct_object_count": direct_object_count,
+            "folders": folders,
+            "pages": pages,
+            "cached": False,
+            "scanned_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        with self._summary_lock:
+            if generation == self._summary_generation:
+                self._summary_cache[cache_key] = (now, dict(result))
+        return result
     def list_objects(
         self,
         prefix: str | None = None,
@@ -445,6 +530,8 @@ class AliyunOssReader:
                 "name": key.rstrip("/").split("/")[-1],
                 "key": key,
                 "size": None,
+                "file_count": None,
+                "total_size": None,
                 "last_modified": None,
                 "storage_class": None,
                 "mime": "",

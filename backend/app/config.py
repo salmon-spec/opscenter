@@ -138,6 +138,11 @@ class Settings(BaseSettings):
     oss_bucket_endpoints: str = ""      # 可选，JSON：{"bucket": "https://oss-cn-....aliyuncs.com"}
     oss_bucket_prefixes: str = ""       # 可选，JSON：{"bucket": "prefix/"}
 
+    # ── Command Code usage extension module (v5.1.0, readonly) ──
+    command_code_api_key: str = ""
+    command_code_api_base: str = "https://api.commandcode.ai"
+    command_code_timeout_seconds: float = 12.0
+
 
 _settings = Settings()
 
@@ -243,6 +248,11 @@ OSS_PREFIX = _settings.oss_prefix.strip().strip("/")
 OSS_BUCKETS = _settings.oss_buckets.strip()
 OSS_BUCKET_ENDPOINTS = _settings.oss_bucket_endpoints.strip()
 OSS_BUCKET_PREFIXES = _settings.oss_bucket_prefixes.strip()
+
+# ── Command Code usage extension module (v5.1.0) ──
+COMMAND_CODE_API_KEY = _settings.command_code_api_key.strip()
+COMMAND_CODE_API_BASE = _settings.command_code_api_base.strip().rstrip("/")
+COMMAND_CODE_TIMEOUT_SECONDS = min(max(_settings.command_code_timeout_seconds, 3.0), 60.0)
 
 # ── App ──
 from app.version import VERSION  # noqa: E402

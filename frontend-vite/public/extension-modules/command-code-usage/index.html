@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>模型用量</title>
+  <style>
+    :root {
+      --bg: #f3f5f8; --panel: #fff; --text: #182230; --muted: #667085;
+      --border: #dfe5ec; --brand: #1769e0; --brand-soft: #eef5ff;
+      --ok: #14804a; --warn: #b45309; --err: #c93333; --violet: #6d47c7;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    .app { min-height: 100%; display: flex; flex-direction: column; }
+    .head { min-height: 65px; flex: none; display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--border); }
+    .head-copy { min-width: 0; }
+    .head h1 { margin: 0; font-size: 18px; }
+    .head p { margin: 3px 0 0; color: var(--muted); font-size: 11.5px; }
+    .head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .status { height: 28px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border-radius: 999px; background: #f2f4f7; color: var(--muted); font-size: 11px; font-weight: 700; }
+    .status i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .status.ok { background: #edf9f2; color: var(--ok); }
+    .status.warn { background: #fff8e7; color: var(--warn); }
+    .status.err { background: #fff0f0; color: var(--err); }
+    .btn { height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 11px; border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--text); font-size: 12px; }
+    .btn:hover { border-color: #9bbcf5; color: var(--brand); }
+    .btn:disabled { opacity: .48; cursor: not-allowed; }
+    .btn.primary { border-color: var(--brand); background: var(--brand); color: #fff; }
+    .btn.primary:hover { background: #0f57bd; color: #fff; }
+    .btn.danger { border-color: #f2c7c7; color: var(--err); }
+    .workspace { flex: 1; padding: 13px 15px 20px; }
+    .notice { display: none; margin-bottom: 10px; padding: 10px 12px; border: 1px solid #f0d38a; border-radius: 8px; background: #fff9eb; color: #8a5a08; white-space: pre-wrap; }
+    .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; margin-bottom: 11px; }
+    .quota-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; margin-bottom: 11px; }
+    .quota-card { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .quota-card.hour { border-top: 3px solid #d97706; }
+    .quota-card.week { border-top: 3px solid #1769e0; }
+    .quota-card.month { border-top: 3px solid #14804a; }
+    .quota-head { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; font-weight: 650; }
+    .quota-head .tag { margin-left: auto; }
+    .quota-main { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; }
+    .quota-main b { font-size: 31px; line-height: 1; letter-spacing: 0; }
+    .quota-main small { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .quota-foot { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; color: var(--muted); font-size: 10.5px; }
+    .usage-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; margin-bottom: 11px; }
+    .usage-card { min-width: 0; padding: 12px 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .usage-card span, .usage-card small { display: block; color: var(--muted); font-size: 10.5px; }
+    .usage-card b { display: block; margin: 5px 0 3px; font-size: 20px; line-height: 1.1; }
+    .usage-card small { min-height: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .metrics { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 9px; margin-bottom: 11px; }
+    .metric { min-width: 0; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+    .metric span, .metric small { display: block; overflow: hidden; color: var(--muted); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+    .metric b { display: block; margin: 5px 0 2px; overflow: hidden; font-size: 17px; line-height: 1.12; text-overflow: ellipsis; white-space: nowrap; }
+    .layout { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; }
+    .panel { min-width: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .panel.wide { grid-column: span 2; }
+    .panel.span-all { grid-column: 1 / -1; }
+    .panel-head { min-height: 52px; display: flex; align-items: center; gap: 10px; padding: 10px 13px; border-bottom: 1px solid var(--border); }
+    .panel-head h2 { margin: 0; font-size: 14px; }
+    .panel-head small { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; }
+    .panel-head .tag { margin-left: auto; flex: none; }
+    .panel-body { padding: 13px; }
+    .hero-value { font-size: 31px; font-weight: 760; line-height: 1.08; letter-spacing: 0; }
+    .hero-value small { margin-left: 5px; color: var(--muted); font-size: 12px; font-weight: 500; }
+    .hero-sub { margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .progress { height: 8px; margin-top: 13px; overflow: hidden; border-radius: 999px; background: #e9edf3; }
+    .progress > i { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--brand); transition: width .25s ease; }
+    .progress.good > i { background: var(--ok); }
+    .progress.warn > i { background: #d99012; }
+    .progress.danger > i { background: var(--err); }
+    .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 13px; }
+    .fact { min-width: 0; padding: 9px 10px; border: 1px solid #e7ebf0; border-radius: 7px; background: #fafbfd; }
+    .fact span, .fact b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fact span { color: var(--muted); font-size: 10px; }
+    .fact b { margin-top: 3px; font-size: 12px; }
+    .window-top { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; }
+    .window-used { font-size: 24px; font-weight: 740; }
+    .window-used small { color: var(--muted); font-size: 11px; font-weight: 500; }
+    .percent { color: var(--muted); font-size: 11px; font-weight: 700; }
+    .reset-line { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; color: var(--muted); font-size: 10.5px; }
+    .tag { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px; background: #f2f4f7; color: #475467; font-size: 10px; font-weight: 700; }
+    .tag.ok { background: #edf9f2; color: var(--ok); }
+    .tag.warn { background: #fff8e7; color: var(--warn); }
+    .tag.err { background: #fff0f0; color: var(--err); }
+    .tag.brand { background: var(--brand-soft); color: var(--brand); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid #edf0f4; text-align: left; font-size: 11.5px; }
+    th { color: var(--muted); font-size: 10.5px; font-weight: 600; }
+    tr:last-child td { border-bottom: 0; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); }
+    .mono { font-family: Consolas, "Courier New", monospace; }
+    .loading { min-height: 320px; display: grid; place-items: center; color: var(--muted); }
+    .empty { padding: 28px 12px; color: var(--muted); text-align: center; }
+    .modal { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; padding: 18px; }
+    .modal.open { display: grid; }
+    .backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, .45); }
+    .dialog { position: relative; width: min(100%, 560px); max-height: min(92vh, 700px); overflow: auto; border: 1px solid var(--border); border-radius: 9px; background: #fff; box-shadow: 0 24px 70px rgba(15, 23, 42, .24); }
+    .dialog-head { min-height: 60px; display: flex; align-items: center; padding: 12px 15px; border-bottom: 1px solid var(--border); }
+    .dialog-head h2 { margin: 0; font-size: 16px; }
+    .close { width: 31px; height: 31px; margin-left: auto; border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--muted); font-size: 18px; line-height: 1; }
+    .dialog-body { padding: 14px 15px; }
+    .config-current { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 13px; }
+    .config-current div { min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: #fafbfd; }
+    .config-current span, .config-current b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .config-current span { color: var(--muted); font-size: 10px; }
+    .config-current b { margin-top: 3px; font-size: 11.5px; }
+    .field { display: block; margin-top: 11px; }
+    .field > span { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 5px; color: #344054; font-size: 11.5px; font-weight: 650; }
+    .field small { color: var(--muted); font-size: 10px; font-weight: 400; }
+    .field input { width: 100%; height: 37px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px; outline: none; color: var(--text); }
+    .field input:focus { border-color: #96baf2; box-shadow: 0 0 0 3px rgba(23, 105, 224, .09); }
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+    .note { min-height: 18px; margin: 10px 0 0; color: var(--muted); font-size: 10.5px; }
+    .note.err { color: var(--err); }
+    .dialog-actions { display: flex; align-items: center; gap: 8px; padding: 12px 15px; border-top: 1px solid var(--border); background: #fafbfd; }
+    .spacer { flex: 1; }
+    @media (max-width: 1120px) {
+      .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .usage-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .layout { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .panel.wide { grid-column: span 2; }
+    }
+    @media (max-width: 720px) {
+      .head { align-items: flex-start; padding: 9px 10px; }
+      .head p, .head-actions .status { display: none; }
+      .workspace { padding: 9px; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .quota-grid, .usage-grid { grid-template-columns: 1fr; }
+      .layout { grid-template-columns: 1fr; }
+      .panel.wide, .panel.span-all { grid-column: auto; }
+      .facts, .config-current { grid-template-columns: 1fr; }
+      .form-grid { grid-template-columns: 1fr; }
+      .dialog-actions { flex-wrap: wrap; }
+      .dialog-actions .spacer { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="head">
+      <div class="head-copy">
+        <h1>模型用量</h1>
+        <p id="subtitle">GOAT 套餐 · 只读监控</p>
+      </div>
+      <div class="head-actions">
+        <span class="status" id="healthStatus"><i></i><span>连接中</span></span>
+        <button class="btn" id="configButton">配置</button>
+        <button class="btn" id="refreshButton">刷新</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <div class="notice" id="notice"></div>
+      <section class="metrics">
+        <div class="metric"><span>套餐</span><b id="planValue">-</b><small id="planStatusValue">等待采集</small></div>
+        <div class="metric"><span>账期请求</span><b id="requestValue">-</b><small id="periodBasisValue">billing period</small></div>
+        <div class="metric"><span>累计成本</span><b id="costValue">-</b><small>Credits</small></div>
+        <div class="metric"><span>平均请求</span><b id="averageValue">-</b><small>Credits / request</small></div>
+        <div class="metric"><span>Token</span><b id="tokenValue">-</b><small id="tokenSplitValue">in / out</small></div>
+        <div class="metric"><span>成功率</span><b id="successValue">-</b><small id="failedValue">失败 0</small></div>
+      </section>
+
+      <div id="dashboard" style="display:none">
+        <section class="quota-grid">
+          <article class="quota-card hour">
+            <div class="quota-head"><span>小时额度</span><span class="tag" id="fiveHourTag">-</span></div>
+            <div class="quota-main"><b id="fiveHourPercentValue">-</b><small id="fiveHourUsedValue">- / -</small></div>
+            <div class="progress" id="fiveHourProgress"><i></i></div>
+            <div class="quota-foot"><span>滚动 5 小时窗口</span><span id="fiveHourResetValue">-</span></div>
+          </article>
+          <article class="quota-card week">
+            <div class="quota-head"><span>周额度</span><span class="tag" id="weeklyTag">-</span></div>
+            <div class="quota-main"><b id="weeklyPercentValue">-</b><small id="weeklyUsedValue">- / -</small></div>
+            <div class="progress" id="weeklyProgress"><i></i></div>
+            <div class="quota-foot"><span>滚动周期</span><span id="weeklyResetValue">-</span></div>
+          </article>
+          <article class="quota-card month">
+            <div class="quota-head"><span>月额度</span><span class="tag brand" id="creditPoolTag">GOAT</span></div>
+            <div class="quota-main"><b id="monthlyPercentValue">-</b><small id="monthlyUsedValue">- / -</small></div>
+            <div class="progress" id="creditProgress"><i></i></div>
+            <div class="quota-foot"><span id="creditRemainingValue">-</span><span id="monthlyResetValue">-</span></div>
+          </article>
+        </section>
+
+        <section class="usage-grid">
+          <article class="usage-card"><span>最近 1 小时使用</span><b id="hourUsageValue">-</b><small id="hourUsageMeta">等待本地快照</small></article>
+          <article class="usage-card"><span>最近 24 小时使用</span><b id="dayUsageValue">-</b><small id="dayUsageMeta">等待本地快照</small></article>
+          <article class="usage-card"><span>最近 7 天使用</span><b id="weekUsageValue">-</b><small id="weekUsageMeta">等待本地快照</small></article>
+          <article class="usage-card"><span>当前账期使用</span><b id="monthUsageValue">-</b><small id="monthUsageMeta">官方账期累计</small></article>
+        </section>
+
+        <div class="layout">
+
+        <section class="panel">
+          <div class="panel-head">
+            <div><h2>账期</h2><small>订阅状态与续费时间</small></div>
+            <span class="tag" id="subscriptionTag">-</span>
+          </div>
+          <div class="panel-body">
+            <table>
+              <tbody>
+                <tr><td class="muted">开始</td><td class="num" id="periodStartValue">-</td></tr>
+                <tr><td class="muted">结束</td><td class="num" id="periodEndValue">-</td></tr>
+                <tr><td class="muted">续费</td><td class="num" id="renewalValue">-</td></tr>
+                <tr><td class="muted">计划 ID</td><td class="num mono" id="planIdValue">-</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div><h2>请求概览</h2><small>账期累计结果</small></div>
+          </div>
+          <div class="panel-body">
+            <table>
+              <tbody>
+                <tr><td class="muted">总请求</td><td class="num" id="totalCountValue">-</td></tr>
+                <tr><td class="muted">完成</td><td class="num" id="completedCountValue">-</td></tr>
+                <tr><td class="muted">失败</td><td class="num" id="failedCountValue">-</td></tr>
+                <tr><td class="muted">总 Credits</td><td class="num" id="totalCreditsValue">-</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div><h2>Token 用量</h2><small>输入与输出累计</small></div>
+          </div>
+          <div class="panel-body">
+            <table>
+              <tbody>
+                <tr><td class="muted">输入</td><td class="num" id="tokensInValue">-</td></tr>
+                <tr><td class="muted">输出</td><td class="num" id="tokensOutValue">-</td></tr>
+                <tr><td class="muted">合计</td><td class="num" id="tokensTotalValue">-</td></tr>
+                <tr><td class="muted">平均 / 请求</td><td class="num" id="tokensAverageValue">-</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel wide">
+          <div class="panel-head">
+            <div><h2>采集信息</h2><small>接口状态与非敏感元数据</small></div>
+            <span class="tag" id="sourceTag">-</span>
+          </div>
+          <div class="panel-body">
+            <table>
+              <tbody>
+                <tr><td class="muted">账号</td><td class="num" id="accountValue">-</td></tr>
+                <tr><td class="muted">API Base</td><td class="num mono" id="apiBaseValue">-</td></tr>
+                <tr><td class="muted">最近采集</td><td class="num" id="checkedAtValue">-</td></tr>
+                <tr><td class="muted">接口延迟</td><td class="num" id="latencyValue">-</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+      </div>
+      <div class="loading" id="loadingState">正在读取模型用量</div>
+    </main>
+  </div>
+
+  <div class="modal" id="configModal" aria-hidden="true">
+    <div class="backdrop" data-close></div>
+    <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="configTitle">
+      <header class="dialog-head">
+        <div><h2 id="configTitle">Command Code 配置</h2></div>
+        <button class="close" type="button" data-close aria-label="关闭">×</button>
+      </header>
+      <div class="dialog-body">
+        <div class="config-current">
+          <div><span>当前来源</span><b id="configSourceValue">-</b></div>
+          <div><span>API Key</span><b id="configKeyValue">-</b></div>
+          <div><span>自动刷新</span><b id="configRefreshValue">-</b></div>
+        </div>
+        <label class="field"><span>API Key <small>仅保存在宿主后端</small></span><input id="apiKeyInput" type="password" autocomplete="new-password" placeholder="输入 Command Code API Key"></label>
+        <label class="field"><span>API Base <small>默认官方接口</small></span><input id="apiBaseInput" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.commandcode.ai"></label>
+        <div class="form-grid">
+          <label class="field"><span>组织 ID <small>可留空自动发现</small></span><input id="orgIdInput" autocomplete="off" spellcheck="false" placeholder="可选"></label>
+          <label class="field"><span>刷新间隔 <small>15-3600 秒</small></span><input id="refreshInput" type="number" min="15" max="3600" step="15" value="60"></label>
+        </div>
+        <label class="field"><span>请求超时 <small>3-60 秒</small></span><input id="timeoutInput" type="number" min="3" max="60" step="1" value="12"></label>
+        <p class="note" id="configNote">API Key 加密保存，保存后不会回显。</p>
+      </div>
+      <footer class="dialog-actions">
+        <button class="btn danger" id="resetConfigButton" type="button">恢复环境配置</button>
+        <span class="spacer"></span>
+        <button class="btn" type="button" data-close>取消</button>
+        <button class="btn primary" id="saveConfigButton" type="button">保存并验证</button>
+      </footer>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      info: {}, config: {}, health: null, loading: false, timer: null,
+    }
+    const pending = new Map()
+    let requestId = 0
+
+    const el = (id) => document.getElementById(id)
+    const moduleKey = () => state.info.key || 'command-code-usage'
+    const endpoint = (name) => `/modules/${moduleKey()}/${name}`
+
+    function request(path, query = {}, method = 'GET', body = undefined, timeoutMs = 20000) {
+      const id = `req-${Date.now()}-${++requestId}`
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          reject(new Error('模块接口请求超时'))
+        }, timeoutMs)
+        pending.set(id, { resolve, reject, timer })
+        window.parent.postMessage({ type: 'ops-module-api-request', id, path, query, method, body, timeoutMs }, '*')
+      })
+    }
+
+    function number(value) {
+      const parsed = Number(value)
+      return Number.isFinite(parsed) ? parsed : 0
+    }
+
+    function credits(value) {
+      return `$${number(value).toFixed(2)}`
+    }
+
+    function creditValue(value) {
+      return value === null || value === undefined ? '-' : credits(value)
+    }
+
+    function duration(value) {
+      const seconds = number(value)
+      if (seconds >= 86400) return `${Math.floor(seconds / 86400)} 天`
+      if (seconds >= 3600) return `${Math.floor(seconds / 3600)} 小时`
+      return `${Math.max(0, Math.floor(seconds / 60))} 分钟`
+    }
+
+    function integer(value) {
+      return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(number(value))
+    }
+
+    function tokens(value) {
+      const size = number(value)
+      if (size >= 1e9) return `${(size / 1e9).toFixed(2)}B`
+      if (size >= 1e6) return `${(size / 1e6).toFixed(1)}M`
+      if (size >= 1e3) return `${(size / 1e3).toFixed(1)}K`
+      return integer(size)
+    }
+
+    function formatDate(value) {
+      if (!value) return '-'
+      const date = new Date(value)
+      if (Number.isNaN(date.getTime())) return String(value)
+      const pad = (part) => String(part).padStart(2, '0')
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+    }
+
+    function daysUntil(value) {
+      if (!value) return null
+      const time = new Date(value).getTime()
+      if (Number.isNaN(time)) return null
+      return Math.max(0, Math.ceil((time - Date.now()) / 86400000))
+    }
+
+    function setText(id, value) {
+      el(id).textContent = value === null || value === undefined || value === '' ? '-' : String(value)
+    }
+
+    function setTag(id, text, kind = '') {
+      const node = el(id)
+      node.textContent = text || '-'
+      node.className = `tag${kind ? ` ${kind}` : ''}`
+    }
+
+    function progressClass(percent) {
+      if (percent >= 90) return 'progress danger'
+      if (percent >= 70) return 'progress warn'
+      return 'progress good'
+    }
+
+    function setProgress(id, percent) {
+      const node = el(id)
+      const safe = Math.max(0, Math.min(100, number(percent)))
+      node.className = progressClass(safe)
+      node.querySelector('i').style.width = `${safe}%`
+    }
+
+    function setStatus(kind, text) {
+      const node = el('healthStatus')
+      node.className = `status ${kind || ''}`.trim()
+      node.querySelector('span').textContent = text
+    }
+
+    function setNotice(message, kind = 'warn') {
+      const node = el('notice')
+      node.textContent = message || ''
+      node.style.display = message ? 'block' : 'none'
+      if (kind === 'err') {
+        node.style.background = '#fff0f0'; node.style.borderColor = '#f0c2c2'; node.style.color = '#a52a2a'
+      } else if (kind === 'ok') {
+        node.style.background = '#effaf3'; node.style.borderColor = '#bde7cc'; node.style.color = '#116b3d'
+      } else {
+        node.style.background = '#fff9eb'; node.style.borderColor = '#f0d38a'; node.style.color = '#8a5a08'
+      }
+    }
+
+    function setConfigNote(message, kind = '') {
+      const node = el('configNote')
+      node.textContent = message || 'API Key 加密保存，保存后不会回显。'
+      node.className = `note${kind ? ` ${kind}` : ''}`
+    }
+
+    function renderConfig() {
+      const config = state.config || {}
+      setText('configSourceValue', config.source === 'module' ? '模块配置' : (config.source === 'environment' ? '系统环境' : '-'))
+      setText('configKeyValue', config.api_key_masked || '未配置')
+      setText('configRefreshValue', config.refresh_interval_seconds ? `${config.refresh_interval_seconds} 秒` : '-')
+      el('resetConfigButton').disabled = config.source !== 'module'
+      if (config.api_base) el('apiBaseInput').placeholder = config.api_base
+      if (config.org_id) el('orgIdInput').placeholder = config.org_id
+      if (config.refresh_interval_seconds) el('refreshInput').value = config.refresh_interval_seconds
+      if (config.timeout_seconds) el('timeoutInput').value = config.timeout_seconds
+    }
+
+    async function loadConfig() {
+      try {
+        state.config = await request(endpoint('config'))
+      } catch (error) {
+        state.config = { error: error.message }
+        setConfigNote(error.message, 'err')
+      }
+      renderConfig()
+      scheduleRefresh()
+    }
+
+    function renderUsageWindow(key, elementPrefix, history) {
+      const item = history?.windows?.[key] || {}
+      const hasCredits = item.credits !== null && item.credits !== undefined
+      setText(`${elementPrefix}UsageValue`, hasCredits ? credits(item.credits) : '采集中')
+      const meta = []
+      if (item.requests !== null && item.requests !== undefined) meta.push(`${integer(item.requests)} 请求`)
+      if (item.tokens !== null && item.tokens !== undefined) meta.push(`${tokens(item.tokens)} Tokens`)
+      if (key === 'month') {
+        if (item.since) meta.push('官方账期累计')
+      } else if (item.complete) {
+        meta.push('完整覆盖')
+      } else if (item.observed_seconds) {
+        meta.push(`已观测 ${duration(item.observed_seconds)}`)
+      } else {
+        meta.push('等待下一次采样')
+      }
+      setText(`${elementPrefix}UsageMeta`, meta.join(' · '))
+    }
+
+    function renderHealth(health) {
+      const plan = health.plan || {}
+      const credit = health.credits || {}
+      const usage = health.usage || {}
+      const windows = health.windows || {}
+      const fiveHour = windows.five_hour || {}
+      const weekly = windows.weekly || {}
+      const account = health.account || {}
+      const subscribed = String(plan.status || '').toLowerCase()
+      const planName = plan.name || plan.id || '未知套餐'
+
+      setText('planValue', planName)
+      setText('planStatusValue', subscribed || '状态未知')
+      setText('requestValue', integer(usage.total_count))
+      setText('periodBasisValue', usage.period_basis || 'billing period')
+      setText('costValue', credits(usage.total_cost))
+      setText('averageValue', credits(usage.average_cost))
+      setText('tokenValue', tokens(usage.total_tokens))
+      setText('tokenSplitValue', `${tokens(usage.total_tokens_in)} in / ${tokens(usage.total_tokens_out)} out`)
+      setText('successValue', `${number(usage.success_rate).toFixed(number(usage.success_rate) % 1 ? 2 : 0)}%`)
+      setText('failedValue', `失败 ${integer(usage.failed_count)}`)
+
+      const monthlyPercent = number(credit.usage_percent)
+      setText('monthlyPercentValue', `${monthlyPercent.toFixed(1)}%`)
+      setText('monthlyUsedValue', `${creditValue(credit.total_spent)} / ${creditValue(credit.total_pool)}`)
+      setText('creditRemainingValue', `剩余 ${creditValue(credit.remaining_total)}`)
+      setText('monthlyResetValue', plan.current_period_end ? `重置 ${formatDate(plan.current_period_end)}` : '-')
+      setProgress('creditProgress', monthlyPercent)
+      setTag('creditPoolTag', planName, 'brand')
+
+      setTag('subscriptionTag', subscribed || '-', subscribed === 'active' ? 'ok' : 'warn')
+      setText('periodStartValue', formatDate(plan.current_period_start))
+      setText('periodEndValue', formatDate(plan.current_period_end))
+      const remainingDays = daysUntil(plan.current_period_end)
+      setText('renewalValue', remainingDays === null ? '-' : `${remainingDays} 天`)
+      setText('planIdValue', plan.id || '-')
+
+      const fivePercent = number(fiveHour.percent)
+      setText('fiveHourPercentValue', `${fivePercent.toFixed(1)}%`)
+      setText('fiveHourUsedValue', `${creditValue(fiveHour.used)} / ${creditValue(fiveHour.cap)}`)
+      setProgress('fiveHourProgress', fivePercent)
+      setTag('fiveHourTag', fiveHour.exceeded ? '已超限' : (windows.limited ? '限速中' : '未启用'), fiveHour.exceeded ? 'err' : 'ok')
+      setText('fiveHourResetValue', formatDate(fiveHour.reset_at))
+
+      const weeklyPercent = number(weekly.percent)
+      setText('weeklyPercentValue', `${weeklyPercent.toFixed(1)}%`)
+      setText('weeklyUsedValue', `${creditValue(weekly.used)} / ${creditValue(weekly.cap)}`)
+      setProgress('weeklyProgress', weeklyPercent)
+      setTag('weeklyTag', weekly.exceeded ? '已超限' : (windows.limited ? '限速中' : '未启用'), weekly.exceeded ? 'err' : 'ok')
+      setText('weeklyResetValue', formatDate(weekly.reset_at))
+
+      renderUsageWindow('hour', 'hour', health.history)
+      renderUsageWindow('day', 'day', health.history)
+      renderUsageWindow('week', 'week', health.history)
+      renderUsageWindow('month', 'month', health.history)
+
+      setText('totalCountValue', integer(usage.total_count))
+      setText('completedCountValue', integer(usage.completed_count))
+      setText('failedCountValue', integer(usage.failed_count))
+      setText('totalCreditsValue', credits(usage.total_credits))
+      setText('tokensInValue', tokens(usage.total_tokens_in))
+      setText('tokensOutValue', tokens(usage.total_tokens_out))
+      setText('tokensTotalValue', tokens(usage.total_tokens))
+      const averageTokens = usage.total_count > 0 ? usage.total_tokens / usage.total_count : 0
+      setText('tokensAverageValue', tokens(averageTokens))
+      setTag('sourceTag', health.source === 'module' ? '模块配置' : '环境变量', health.source === 'module' ? 'brand' : '')
+      setText('accountValue', account.email_masked || account.user_name || '-')
+      setText('apiBaseValue', health.api_base || '-')
+      setText('checkedAtValue', formatDate(health.checked_at))
+      setText('latencyValue', health.latency_ms === null || health.latency_ms === undefined ? '-' : `${number(health.latency_ms).toFixed(0)} ms`)
+    }
+
+    function applyHealth(health) {
+      if (!health) return
+      state.health = health
+      const hasData = el('dashboard').style.display !== 'none'
+      const available = Boolean(health.available)
+      const partial = available && Boolean(health.error)
+      if (available) {
+        renderHealth(health)
+        el('loadingState').style.display = 'none'
+        el('dashboard').style.display = ''
+      }
+      if (!available) {
+        setStatus('err', health.configured ? '采集异常' : '未配置')
+        if (!hasData) {
+          el('loadingState').textContent = health.configured ? '暂无可展示数据' : 'Command Code 尚未配置'
+          el('loadingState').style.display = 'grid'
+        }
+        setNotice(health.error || '模型用量采集失败', 'err')
+      } else if (partial) {
+        setStatus('warn', '部分异常')
+        setNotice(health.error, 'warn')
+      } else {
+        setStatus('ok', '采集正常')
+        setNotice('')
+      }
+    }
+
+    async function loadHealth(force = false) {
+      if (state.loading) return
+      state.loading = true
+      el('refreshButton').disabled = true
+      setStatus('', '采集中')
+      try {
+        const result = await request(endpoint('status'), { force: force || undefined }, 'GET', undefined, 30000)
+        applyHealth(result.health || {})
+      } catch (error) {
+        setStatus('err', '模块异常')
+        setNotice(error.message, 'err')
+        el('loadingState').style.display = el('dashboard').style.display ? 'none' : 'grid'
+      } finally {
+        state.loading = false
+        el('refreshButton').disabled = false
+      }
+    }
+
+    function clearRefreshTimer() {
+      if (state.timer) clearTimeout(state.timer)
+      state.timer = null
+    }
+
+    function scheduleRefresh() {
+      clearRefreshTimer()
+      const seconds = Math.max(15, number(state.config.refresh_interval_seconds) || 60)
+      state.timer = setTimeout(async () => {
+        await loadHealth(false)
+        scheduleRefresh()
+      }, seconds * 1000)
+    }
+
+    function openConfig() {
+      el('apiKeyInput').value = ''
+      if (state.config.api_base) el('apiBaseInput').value = state.config.api_base
+      if (state.config.org_id) el('orgIdInput').value = state.config.org_id
+      setConfigNote('')
+      renderConfig()
+      el('configModal').classList.add('open')
+      el('configModal').setAttribute('aria-hidden', 'false')
+      setTimeout(() => el('apiKeyInput').focus(), 0)
+    }
+
+    function closeConfig() {
+      el('apiKeyInput').value = ''
+      el('configModal').classList.remove('open')
+      el('configModal').setAttribute('aria-hidden', 'true')
+    }
+
+    async function saveConfig() {
+      const apiKey = el('apiKeyInput').value.trim()
+      if (!apiKey) {
+        setConfigNote('API Key 必须填写。', 'err')
+        return
+      }
+      el('saveConfigButton').disabled = true
+      setConfigNote('正在验证 API Key 并采集用量...')
+      try {
+        state.config = await request(endpoint('config'), {}, 'POST', {
+          api_key: apiKey,
+          api_base: el('apiBaseInput').value.trim() || 'https://api.commandcode.ai',
+          org_id: el('orgIdInput').value.trim(),
+          refresh_interval_seconds: Number(el('refreshInput').value) || 60,
+          timeout_seconds: Number(el('timeoutInput').value) || 12,
+        }, 35000)
+        closeConfig()
+        setNotice('Command Code 配置已更新。', 'ok')
+        await loadHealth(true)
+        scheduleRefresh()
+      } catch (error) {
+        setConfigNote(error.message, 'err')
+      } finally {
+        el('saveConfigButton').disabled = false
+      }
+    }
+
+    async function resetConfig() {
+      if (!window.confirm('清除模块内保存的 Command Code API Key，并回退到系统环境配置？')) return
+      el('resetConfigButton').disabled = true
+      setConfigNote('正在恢复环境配置...')
+      try {
+        state.config = await request(endpoint('config/reset'), {}, 'POST', {}, 20000)
+        closeConfig()
+        setNotice('已恢复环境配置。', 'ok')
+        await loadHealth(true)
+        scheduleRefresh()
+      } catch (error) {
+        setConfigNote(error.message, 'err')
+      } finally {
+        renderConfig()
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      if (event.source !== window.parent) return
+      const data = event.data || {}
+      if (data.type === 'ops-module-info') {
+        state.info = data.module || {}
+        setText('subtitle', `${state.info.name || '模型用量'} · v${state.info.version || '1.0.0'} · 只读监控`)
+        loadConfig()
+        loadHealth(true)
+      } else if (data.type === 'ops-module-api-response') {
+        const task = pending.get(data.id)
+        if (!task) return
+        pending.delete(data.id)
+        clearTimeout(task.timer)
+        if (data.ok) task.resolve(data.data)
+        else task.reject(new Error(data.data?.message || '模块请求失败'))
+      }
+    })
+
+    el('refreshButton').addEventListener('click', () => loadHealth(true))
+    el('configButton').addEventListener('click', openConfig)
+    el('saveConfigButton').addEventListener('click', saveConfig)
+    el('resetConfigButton').addEventListener('click', resetConfig)
+    el('configModal').addEventListener('click', (event) => {
+      if (event.target.closest('[data-close]')) closeConfig()
+    })
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && el('configModal').classList.contains('open')) closeConfig()
+    })
+
+    const announceReady = () => window.parent.postMessage({ type: 'ops-module-ready' }, '*')
+    announceReady()
+    const readyTimer = setInterval(() => {
+      if (state.info.key) { clearInterval(readyTimer); return }
+      announceReady()
+    }, 400)
+    setTimeout(() => clearInterval(readyTimer), 15000)
+  </script>
+</body>
+</html>

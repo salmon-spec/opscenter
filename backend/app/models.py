@@ -599,3 +599,26 @@ class ExtensionModule(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class CommandCodeUsageSnapshot(Base):
+    """Persistent cumulative Command Code usage samples for local history."""
+    __tablename__ = "command_code_usage_snapshots"
+    __table_args__ = (
+        Index("ix_command_code_usage_snapshot_lookup", "scope_key", "captured_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scope_key = Column(String(64), nullable=False, index=True)
+    captured_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    plan_id = Column(String(80), nullable=True)
+    period_start = Column(String(40), nullable=True)
+    total_credits = Column(Float, nullable=True)
+    total_cost = Column(Float, nullable=True)
+    total_tokens = Column(BigInteger, nullable=True)
+    total_tokens_in = Column(BigInteger, nullable=True)
+    total_tokens_out = Column(BigInteger, nullable=True)
+    total_count = Column(Integer, nullable=True)
+    completed_count = Column(Integer, nullable=True)
+    failed_count = Column(Integer, nullable=True)
+    monthly_remaining = Column(Float, nullable=True)
+    five_hour_used = Column(Float, nullable=True)
+    weekly_used = Column(Float, nullable=True)
