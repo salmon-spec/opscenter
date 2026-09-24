@@ -30,6 +30,7 @@ const KubernetesOperations = () => import('./views/kubernetes/Operations.vue')
 const Hosts = () => import('./views/Hosts.vue')
 // v5.0.0 数据服务（K3s 中间件纳管）：组件文件名=路由 name=KeepAlive include 名
 const DataServicesOverview = () => import('./views/dataservices/DataServicesOverview.vue')
+const DataServicesConfig = () => import('./views/dataservices/DataServicesConfig.vue')
 const DataServicesRedis = () => import('./views/dataservices/DataServicesRedis.vue')
 const DataServicesRabbitMQ = () => import('./views/dataservices/DataServicesRabbitMQ.vue')
 const DataServicesKafka = () => import('./views/dataservices/DataServicesKafka.vue')
@@ -66,6 +67,7 @@ const routes = [
   { path: '/extensions/:moduleKey', name: 'ExtensionHost', component: ExtensionHost, meta: { title: '扩展模块', hostScope: 'none', clusterScope: 'none' } },
   // v5.0.0 数据服务（中间件纳管与只读浏览）
   { path: '/data-services', name: 'DataServicesOverview', component: DataServicesOverview, meta: { title: '数据服务', hostScope: 'none', clusterScope: 'none' } },
+  { path: '/data-services/config', name: 'DataServicesConfig', component: DataServicesConfig, meta: { title: '数据服务配置', hostScope: 'none', clusterScope: 'none' } },
   { path: '/data-services/redis', name: 'DataServicesRedis', component: DataServicesRedis, meta: { title: 'Redis 缓存', hostScope: 'none', clusterScope: 'none' } },
   { path: '/data-services/rabbitmq', name: 'DataServicesRabbitMQ', component: DataServicesRabbitMQ, meta: { title: 'RabbitMQ', hostScope: 'none', clusterScope: 'none' } },
   { path: '/data-services/kafka', name: 'DataServicesKafka', component: DataServicesKafka, meta: { title: 'Kafka', hostScope: 'none', clusterScope: 'none' } },

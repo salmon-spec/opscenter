@@ -35,33 +35,65 @@
           <span>⚠ 部分数据源异常：</span><span class="partial-item">{{ partialText }}</span>
         </div>
 
-        <section class="card">
-          <div class="card-head"><h3>Jobs（{{ jobs.length }}）</h3></div>
+        <div class="filters">
+          <select v-model="filters.kind" class="select">
+            <option value="all">资源：全部</option>
+            <option value="jobs">Jobs</option>
+            <option value="cronjobs">CronJobs</option>
+            <option value="events">Events</option>
+          </select>
+          <select v-model="filters.namespace" class="select">
+            <option value="">命名空间：全部</option>
+            <option v-for="ns in namespaceOptions" :key="ns" :value="ns">{{ ns }}</option>
+          </select>
+          <input v-model="filters.keyword" class="input kw" placeholder="搜索名称、命名空间、状态、对象、原因或消息" />
+          <span class="muted tiny">Job {{ filteredJobs.length }} · CronJob {{ filteredCronjobs.length }} · Event {{ filteredEvents.length }}</span>
+        </div>
+
+        <section v-if="showKind('jobs')" class="card">
+          <div class="card-head">
+            <h3>Jobs（{{ filteredJobs.length }} / {{ jobs.length }}）</h3>
+            <select v-model="filters.jobStatus" class="select select-sm">
+              <option value="">状态：全部</option>
+              <option value="running">运行中</option>
+              <option value="succeeded">成功</option>
+              <option value="failed">失败</option>
+              <option value="pending">等待中</option>
+            </select>
+          </div>
           <div class="table-scroll" v-if="jobs.length">
             <table class="table">
               <thead><tr><th>名称</th><th>命名空间</th><th>状态</th><th>完成度</th><th>耗时</th><th>Age</th></tr></thead>
               <tbody>
-                <tr v-for="(j, i) in jobs" :key="`${j.namespace || ''}/${j.name || i}`">
+                <tr v-for="(j, i) in filteredJobs" :key="`${j.namespace || ''}/${j.name || i}`">
                   <td><b>{{ j.name || '—' }}</b></td>
                   <td>{{ j.namespace || '—' }}</td>
-                  <td><span class="tag" :class="jobClass(j.status)">{{ jobLabel(j.status) }}</span></td>
+                  <td><span class="tag" :class="jobClass(j)">{{ jobLabel(j) }}</span></td>
                   <td class="mono">{{ completionsText(j) }}</td>
                   <td>{{ j.duration ? fmtDuration(j.duration) : '—' }}</td>
                   <td class="nowrap">{{ fmtAge(j.age) }}</td>
                 </tr>
+                <tr v-if="!filteredJobs.length"><td colspan="6" class="empty-inline">当前条件下没有 Job</td></tr>
               </tbody>
             </table>
           </div>
           <div v-else class="empty-inline">暂无 Job</div>
         </section>
 
-        <section class="card">
-          <div class="card-head"><h3>CronJobs（{{ cronjobs.length }}）</h3></div>
+        <section v-if="showKind('cronjobs')" class="card">
+          <div class="card-head">
+            <h3>CronJobs（{{ filteredCronjobs.length }} / {{ cronjobs.length }}）</h3>
+            <select v-model="filters.cronStatus" class="select select-sm">
+              <option value="">状态：全部</option>
+              <option value="active">启用中</option>
+              <option value="suspended">已停用</option>
+            </select>
+          </div>
           <div class="table-scroll" v-if="cronjobs.length">
             <table class="table">
               <thead><tr><th>名称</th><th>命名空间</th><th>调度</th><th>状态</th><th>上次调度</th><th>活跃</th></tr></thead>
               <tbody>
-                <tr v-for="(cj, i) in cronjobs" :key="`${cj.namespace || ''}/${cj.name || i}`" :class="{ dim: isSuspended(cj) }">
+                <tr v-for="(cj, i) in filteredCronjobs" :key="`${cj.namespace || ''}/${cj.name || i}`" :class="{ dim: isSuspended(cj) }">
                   <td><b>{{ cj.name || '—' }}</b></td>
                   <td>{{ cj.namespace || '—' }}</td>
                   <td class="mono">{{ cj.schedule || '—' }}</td>
@@ -69,18 +101,20 @@
                   <td class="tiny nowrap">{{ cj.last_schedule ? fmtTime(cj.last_schedule) : '从未' }}</td>
                   <td>{{ Number(cj.active ?? 0) }}</td>
                 </tr>
+                <tr v-if="!filteredCronjobs.length"><td colspan="6" class="empty-inline">当前条件下没有 CronJob</td></tr>
               </tbody>
             </table>
           </div>
           <div v-else class="empty-inline">暂无 CronJob</div>
         </section>
 
-        <section class="card">
+        <section v-if="showKind('events')" class="card">
           <div class="card-head">
-            <h3>Events（{{ events.length }}）</h3>
+            <h3>Events（{{ filteredEvents.length }} / {{ events.length }}）</h3>
             <div class="seg">
-              <button class="btn btn-sm" :class="{ 'seg-on': eventFilter === '' }" @click="setEventFilter('')">全部</button>
+              <button class="btn btn-sm" :class="{ 'seg-on': eventFilter === 'all' }" @click="setEventFilter('all')">全部</button>
               <button class="btn btn-sm" :class="{ 'seg-on': eventFilter === 'Warning' }" @click="setEventFilter('Warning')">Warning</button>
+              <button class="btn btn-sm" :class="{ 'seg-on': eventFilter === 'Normal' }" @click="setEventFilter('Normal')">Normal</button>
             </div>
           </div>
           <div v-if="eventsLoading" class="loading" style="padding:18px"><span class="spinner"></span>正在读取事件…</div>
@@ -88,7 +122,7 @@
             <table class="table">
               <thead><tr><th>时间</th><th>类型</th><th>命名空间</th><th>对象</th><th>原因</th><th>消息</th></tr></thead>
               <tbody>
-                <tr v-for="(ev, i) in events" :key="i">
+                <tr v-for="(ev, i) in filteredEvents" :key="i">
                   <td class="mono tiny nowrap">{{ evTime(ev) }}</td>
                   <td><span class="tag" :class="String(evType(ev)).toLowerCase() === 'warning' ? 'tag-warn' : 'tag-slate'">{{ evType(ev) }}</span></td>
                   <td>{{ evNs(ev) }}</td>
@@ -96,6 +130,7 @@
                   <td class="tiny">{{ ev.reason || '—' }}</td>
                   <td class="tiny ev-msg">{{ evMsg(ev) }}</td>
                 </tr>
+                <tr v-if="!filteredEvents.length"><td colspan="6" class="empty-inline">当前条件下没有事件</td></tr>
               </tbody>
             </table>
           </div>
@@ -125,7 +160,8 @@ const POLL_MS = 15000
 const jobs = ref([])
 const cronjobs = ref([])
 const events = ref([])
-const eventFilter = ref('')
+const eventFilter = ref('all')
+const filters = reactive({ kind: 'all', namespace: '', keyword: '', jobStatus: '', cronStatus: '' })
 const eventsLoading = ref(false)
 const meta = reactive({ ts: 0, cached: false, cacheAge: 0, partialErrors: [] })
 const fatal = ref('')
@@ -155,6 +191,44 @@ const subText = computed(() => {
   if (!c) return 'Job、CronJob 与 Kubernetes 事件'
   return `${c.name}${c.version ? ' · ' + c.version : ''} · Job / CronJob / Events`
 })
+
+const namespaceOptions = computed(() => [...new Set([
+  ...jobs.value.map((item) => item.namespace),
+  ...cronjobs.value.map((item) => item.namespace),
+  ...events.value.map((item) => evNs(item) === '—' ? '' : evNs(item)),
+].filter(Boolean))].sort())
+
+const filteredJobs = computed(() => {
+  const keyword = filters.keyword.trim().toLowerCase()
+  return jobs.value.filter((item) => {
+    if (filters.namespace && item.namespace !== filters.namespace) return false
+    if (filters.jobStatus && jobState(item) !== filters.jobStatus) return false
+    return !keyword || [item.name, item.namespace, jobLabel(item), completionsText(item), fmtDuration(item.duration)]
+      .filter(Boolean).join(' ').toLowerCase().includes(keyword)
+  })
+})
+
+const filteredCronjobs = computed(() => {
+  const keyword = filters.keyword.trim().toLowerCase()
+  return cronjobs.value.filter((item) => {
+    if (filters.namespace && item.namespace !== filters.namespace) return false
+    if (filters.cronStatus && cronState(item) !== filters.cronStatus) return false
+    return !keyword || [item.name, item.namespace, item.schedule, isSuspended(item) ? '已停用' : '启用中', item.active]
+      .filter((v) => v !== null && v !== undefined).join(' ').toLowerCase().includes(keyword)
+  })
+})
+
+const filteredEvents = computed(() => {
+  const keyword = filters.keyword.trim().toLowerCase()
+  return events.value.filter((item) => {
+    const namespace = evNs(item)
+    if (filters.namespace && namespace !== filters.namespace) return false
+    return !keyword || [evType(item), namespace, evObj(item), item.reason, evMsg(item)]
+      .filter(Boolean).join(' ').toLowerCase().includes(keyword)
+  })
+})
+
+function showKind(kind) { return filters.kind === 'all' || filters.kind === kind }
 
 async function initClusters(force = false) {
   clusterErr.value = ''
@@ -258,15 +332,27 @@ function ensureFresh() {
   if (!fresh) load()
 }
 
-function jobLabel(status) {
-  const s = String(status || '').toLowerCase()
+function jobState(job) {
+  const raw = typeof job === 'string' ? job : job?.status
+  const s = String(raw || '').toLowerCase()
+  if (s === 'succeeded' || s === 'complete' || s === 'completed') return 'succeeded'
+  if (s === 'failed') return 'failed'
+  if (s === 'running' || s === 'active') return 'running'
+  if (Number(job?.active ?? 0) > 0) return 'running'
+  if (Number(job?.failed ?? 0) > 0) return 'failed'
+  if (Number(job?.succeeded ?? 0) > 0) return 'succeeded'
+  return s || 'pending'
+}
+function jobLabel(job) {
+  const s = jobState(job)
   if (s === 'succeeded' || s === 'complete' || s === 'completed') return '成功'
   if (s === 'failed') return '失败'
   if (s === 'running' || s === 'active') return '运行中'
-  return status || '—'
+  if (s === 'pending') return '等待中'
+  return s || '—'
 }
-function jobClass(status) {
-  const s = String(status || '').toLowerCase()
+function jobClass(job) {
+  const s = jobState(job)
   if (s === 'succeeded' || s === 'complete' || s === 'completed') return 'tag-ok'
   if (s === 'failed') return 'tag-err'
   if (s === 'running' || s === 'active') return 'tag-ok'
@@ -274,11 +360,17 @@ function jobClass(status) {
 }
 function completionsText(j) {
   const c = j?.completions
-  if (c === null || c === undefined) return '—'
-  if (typeof c === 'object') return `${c.succeeded ?? c.ready ?? 0}/${c.desired ?? '?'}`
-  return String(c)
+  if (c !== null && c !== undefined) {
+    if (typeof c === 'object') return `${c.succeeded ?? c.ready ?? 0}/${c.desired ?? '?'}`
+    return String(c)
+  }
+  if (j?.succeeded !== undefined || j?.failed !== undefined || j?.active !== undefined) {
+    return `${Number(j.succeeded ?? 0)} 成功 / ${Number(j.failed ?? 0)} 失败 / ${Number(j.active ?? 0)} 活跃`
+  }
+  return '—'
 }
 function isSuspended(cj) { return cj?.suspend === true || cj?.suspended === true }
+function cronState(cj) { return isSuspended(cj) ? 'suspended' : 'active' }
 function fmtDuration(sec) {
   const n = Number(sec)
   if (!n || n < 0) return '—'
@@ -316,15 +408,30 @@ function evType(ev) { return ev?.type || '—' }
 
 function restoreUi() {
   const saved = getTabState(workbench.state.activeKey) || {}
-  if (typeof saved.eventFilter === 'string') eventFilter.value = saved.eventFilter
+  const f = saved.filters || {}
+  if (typeof f.kind === 'string') filters.kind = f.kind
+  if (typeof f.namespace === 'string') filters.namespace = f.namespace
+  if (typeof f.keyword === 'string') filters.keyword = f.keyword
+  if (typeof f.jobStatus === 'string') filters.jobStatus = f.jobStatus
+  if (typeof f.cronStatus === 'string') filters.cronStatus = f.cronStatus
+  if (saved.eventFilter === '' || saved.eventFilter === 'all') eventFilter.value = 'all'
+  else if (saved.eventFilter === 'Warning' || saved.eventFilter === 'Normal') eventFilter.value = saved.eventFilter
   if (saved.scrollY !== undefined) {
     nextTick(() => { const el = document.querySelector('.content'); if (el) el.scrollTop = saved.scrollY })
   }
 }
 function saveUi() {
   const el = document.querySelector('.content')
-  setTabState(workbench.state.activeKey, { eventFilter: eventFilter.value, scrollY: el ? el.scrollTop : 0 })
+  setTabState(workbench.state.activeKey, {
+    filters: { kind: filters.kind, namespace: filters.namespace, keyword: filters.keyword, jobStatus: filters.jobStatus, cronStatus: filters.cronStatus },
+    eventFilter: eventFilter.value,
+    scrollY: el ? el.scrollTop : 0,
+  })
 }
+
+watch(filters, () => {
+  if (tabAlive) saveUi()
+}, { deep: true })
 
 watch(selectedClusterId, (id) => {
   if (!tabAlive) return
@@ -379,7 +486,11 @@ onUnmounted(() => {
 .guide-icon { font-size: 40px; }
 .k8s-error { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .k8s-error .big { font-weight: 700; color: var(--err); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.filters .select, .filters .input { width: auto; }
+.filters .kw { min-width: 280px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.card-head .select { width: auto; }
 .card-head h3 { margin: 0; font-size: 14px; }
 .seg { display: flex; gap: 0; }
 .seg .btn { border-radius: 0; }

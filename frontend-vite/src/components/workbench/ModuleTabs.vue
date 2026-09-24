@@ -19,6 +19,7 @@ const modules = [
     { key: 'overview', label: '实例总览', path: '/data-services', items: [{ label: '实例总览', path: '/data-services' }] },
     { key: 'cache', label: '缓存与消息', path: '/data-services/redis', items: [{ label: 'Redis', path: '/data-services/redis' }, { label: 'RabbitMQ', path: '/data-services/rabbitmq' }, { label: 'Kafka', path: '/data-services/kafka' }, { label: 'ZooKeeper', path: '/data-services/zookeeper' }] },
     { key: 'registry', label: '配置与存储', path: '/data-services/nacos', items: [{ label: 'Nacos', path: '/data-services/nacos' }, { label: 'MinIO', path: '/data-services/minio' }, { label: 'MongoDB', path: '/data-services/mongodb' }] },
+    { key: 'settings', label: '连接配置', path: '/data-services/config', items: [{ label: '连接配置', path: '/data-services/config' }] },
   ] },
   { paths: ['/system/', '/docker', '/database'], groups: [
     { key: 'monitor', label: '主机监控', path: '/system/monitor', items: [{ label: '主机监控', path: '/system/monitor' }] },

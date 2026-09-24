@@ -427,6 +427,7 @@ class FakeProducer:
 class FakeAdmin:
     def __init__(self):
         self.topics_meta = None
+        self.describe_meta = None
         self.groups = []
         self.descriptions = []
         self.list_topics_calls = []
@@ -442,7 +443,7 @@ class FakeAdmin:
         return self.topics_meta
 
     def describe_topics(self, timeout=None):
-        return self.topics_meta
+        return self.describe_meta if self.describe_meta is not None else self.topics_meta
 
     def list_consumer_groups(self, timeout=None):
         if self.fail_groups:
@@ -570,6 +571,26 @@ def test_event_bus_topics_fail_open(monkeypatch):
     monkeypatch.setattr(config, "KAFKA_BOOTSTRAP", "")
     monkeypatch.setattr(eb, "_admin", None)
     assert eb.event_bus.topics() == []
+
+
+def test_event_bus_monitor_metrics_accepts_describe_topic_dict(monkeypatch):
+    admin = FakeAdmin()
+    admin.topics_meta = ["opscenter.events"]
+    admin.describe_meta = {
+        "opscenter.events": {
+            "partitions": {
+                0: {"partition": 0, "replicas": [1, 2], "isr": [1], "leader": 1},
+                1: {"partition": 1, "replicas": [1], "isr": [1], "leader": -1},
+            },
+        },
+    }
+    _configured_kafka(monkeypatch, admin=admin)
+
+    metrics = {item["key"]: item["value"] for item in eb.event_bus.monitor_metrics()}
+    assert metrics["kafka_topics_total"] == 1
+    assert metrics["kafka_partitions_total"] == 2
+    assert metrics["kafka_under_replicated_partitions"] == 1
+    assert metrics["kafka_offline_partitions"] == 1
 
 
 def test_event_bus_consumer_groups_merge(monkeypatch):

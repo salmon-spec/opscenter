@@ -46,12 +46,26 @@ _RELEASE_LUA = (
 _TOKEN = uuid.uuid4().hex
 
 
-def _endpoint() -> str:
-    """从 REDIS_URL 提取 host:port/db；无法解析返回空串。绝不包含密码。"""
-    if not REDIS_URL:
+def _profile_url(profile: dict | None = None) -> str:
+    """v5.3.0 多实例：profile 为空时沿用模块级环境配置。"""
+    if profile is None:
+        return REDIS_URL
+    return str(profile.get("url") or "")
+
+
+def _profile_enabled(profile: dict | None = None) -> bool:
+    if profile is None:
+        return bool(MW_ENABLED)
+    return bool(profile.get("enabled", True))
+
+
+def _endpoint(profile: dict | None = None) -> str:
+    """从连接 URL 提取 host:port/db；无法解析返回空串。绝不包含密码。"""
+    url = _profile_url(profile)
+    if not url:
         return ""
     try:
-        parts = urlsplit(REDIS_URL)
+        parts = urlsplit(url)
         host = parts.hostname or ""
         port = parts.port or 6379
     except ValueError:
@@ -62,13 +76,14 @@ def _endpoint() -> str:
     return f"{host}:{port}/{db}"
 
 
-def _mask_error(exc: Any) -> str:
-    """错误信息脱敏：将 REDIS_URL 中的密码替换为 ***。"""
+def _mask_error(exc: Any, profile: dict | None = None) -> str:
+    """错误信息脱敏：将连接 URL 中的密码替换为 ***。"""
     message = str(exc or "")
-    if not message or not REDIS_URL:
+    url = _profile_url(profile)
+    if not message or not url:
         return message
     try:
-        password = urlsplit(REDIS_URL).password
+        password = urlsplit(url).password
     except ValueError:
         password = None
     if password:
@@ -85,16 +100,32 @@ class RedisStore:
         self._client_lock = threading.Lock()
         self._status_cache: dict | None = None
         self._status_at = 0.0
+        # v5.3.0 多实例：额外监控目标的客户端按 URL 分桶，互不干扰。
+        self._extra_clients: dict[str, Any] = {}
 
     # ── 内部辅助 ──
 
-    def _configured(self) -> bool:
-        return bool(MW_ENABLED) and bool(REDIS_URL)
+    def _configured(self, profile: dict | None = None) -> bool:
+        return _profile_enabled(profile) and bool(_profile_url(profile))
 
-    def _ensure_client(self) -> Any:
+    def _ensure_client(self, profile: dict | None = None) -> Any:
         """惰性构造客户端；未配置返回 None。from_url 仅构造参数，不产生网络 I/O。"""
-        if not self._configured():
+        if not self._configured(profile):
             return None
+        url = _profile_url(profile)
+        if profile is not None:
+            with self._client_lock:
+                client = self._extra_clients.get(url)
+                if client is None:
+                    client = redis.Redis.from_url(
+                        url,
+                        decode_responses=True,
+                        socket_timeout=MW_PROBE_TIMEOUT,
+                        socket_connect_timeout=MW_PROBE_TIMEOUT,
+                        health_check_interval=30,
+                    )
+                    self._extra_clients[url] = client
+                return client
         if self._client is None:
             with self._client_lock:
                 if self._client is None:
@@ -107,6 +138,19 @@ class RedisStore:
                     )
         return self._client
 
+    def evict_instance_client(self, profile: dict | None) -> None:
+        """删除额外实例时释放对应客户端（主实例不受影响）。"""
+        if profile is None:
+            return
+        url = _profile_url(profile)
+        with self._client_lock:
+            client = self._extra_clients.pop(url, None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
     @staticmethod
     def _version(client: Any) -> str:
         try:
@@ -115,39 +159,41 @@ class RedisStore:
         except Exception:
             return ""
 
-    def _shell(self) -> dict:
+    def _shell(self, profile: dict | None = None) -> dict:
         return {
             "kind": "redis",
-            "configured": self._configured(),
+            "configured": self._configured(profile),
             "available": False,
             "latency_ms": None,
             "error": "",
-            "detail": {"endpoint": _endpoint(), "version": ""},
+            "detail": {"endpoint": _endpoint(profile), "version": ""},
         }
 
     # ── 状态 ──
 
-    def available(self) -> bool:
-        """最近一次探测是否可用（未配置/不可达=False）；带 10s 缓存。"""
-        return self._configured() and bool(self.status().get("available"))
+    def available(self, profile: dict | None = None) -> bool:
+        """最近一次探测是否可用（未配置/不可达=False）；主实例带 10s 缓存。"""
+        return self._configured(profile) and bool(self.status(profile).get("available"))
 
-    def status(self) -> dict:
-        """标准化状态（见模块 docstring）；永不抛异常。"""
-        if self._status_cache is not None and (time.monotonic() - self._status_at) < _STATUS_TTL:
+    def status(self, profile: dict | None = None) -> dict:
+        """标准化状态（见模块 docstring）；永不抛异常。额外实例不走共享缓存。"""
+        if (profile is None and self._status_cache is not None
+                and (time.monotonic() - self._status_at) < _STATUS_TTL):
             return self._status_cache
-        status = self._shell()
+        status = self._shell(profile)
         if status["configured"]:
             try:
-                client = self._ensure_client()
+                client = self._ensure_client(profile)
                 started = time.perf_counter()
                 client.ping()
                 status["latency_ms"] = round((time.perf_counter() - started) * 1000, 2)
                 status["available"] = True
                 status["detail"]["version"] = self._version(client)
             except Exception as exc:
-                status["error"] = _mask_error(exc)
-        self._status_cache = status
-        self._status_at = time.monotonic()
+                status["error"] = _mask_error(exc, profile)
+        if profile is None:
+            self._status_cache = status
+            self._status_at = time.monotonic()
         return status
 
     # ── 基础 KV ──
@@ -262,9 +308,9 @@ class RedisStore:
 
     # ── 只读浏览 ──
 
-    def info(self, section: str | None = None) -> dict:
+    def info(self, section: str | None = None, profile: dict | None = None) -> dict:
         try:
-            client = self._ensure_client()
+            client = self._ensure_client(profile)
             if client is None:
                 return {}
             data = client.info(section) if section else client.info()
@@ -272,9 +318,9 @@ class RedisStore:
         except Exception:
             return {}
 
-    def dbsize(self) -> int:
+    def dbsize(self, profile: dict | None = None) -> int:
         try:
-            client = self._ensure_client()
+            client = self._ensure_client(profile)
             if client is None:
                 return 0
             return int(client.dbsize() or 0)
@@ -306,6 +352,92 @@ class RedisStore:
             return {"key": key, "type": kind, "ttl": int(ttl)}
         except Exception:
             return {}
+
+    def monitor_metrics(self, profile: dict | None = None) -> list[dict]:
+        """Return bounded, low-cardinality Redis metrics for the monitor API.
+
+        v5.3.0：传入 profile 时采集该额外实例，尺寸标签带 ``instance_id``。
+        """
+        client = self._ensure_client(profile)
+        if client is None:
+            return []
+        info = self.info(profile=profile)
+        if not isinstance(info, dict):
+            return []
+        endpoint = _endpoint(profile) or "redis"
+        rows: list[dict] = []
+
+        def add(key: str, label: str, value: Any, unit: str = "count",
+                dimensions: dict | None = None, source: str = "INFO") -> None:
+            if value is None or value == "":
+                return
+            rows.append({"key": key, "label": label, "value": value, "unit": unit,
+                         "dimensions": dimensions or {"instance": endpoint}, "source": source})
+
+        used = info.get("used_memory")
+        maximum = info.get("maxmemory")
+        hits = info.get("keyspace_hits")
+        misses = info.get("keyspace_misses")
+        add("redis_memory_used_bytes", "内存使用量", used, "B")
+        add("redis_memory_peak_bytes", "内存峰值", info.get("used_memory_peak"), "B")
+        add("redis_memory_fragmentation_ratio", "内存碎片率", info.get("mem_fragmentation_ratio"), "ratio")
+        usage = None
+        try:
+            if maximum and float(maximum) > 0 and used is not None:
+                usage = round(float(used) * 100 / float(maximum), 2)
+        except (TypeError, ValueError):
+            usage = None
+        add("redis_memory_usage_percent", "内存水位", usage, "%")
+        add("redis_connected_clients", "客户端连接数", info.get("connected_clients"))
+        add("redis_blocked_clients", "阻塞客户端", info.get("blocked_clients"))
+        add("redis_instantaneous_ops_per_sec", "命令速率", info.get("instantaneous_ops_per_sec"), "ops/s")
+        add("redis_instantaneous_input_kbps", "入站速率", info.get("instantaneous_input_kbps"), "KB/s")
+        add("redis_instantaneous_output_kbps", "出站速率", info.get("instantaneous_output_kbps"), "KB/s")
+        add("redis_expired_keys_total", "过期 Key 累计", info.get("expired_keys"))
+        add("redis_evicted_keys_total", "淘汰 Key 累计", info.get("evicted_keys"))
+        add("redis_rejected_connections_total", "拒绝连接累计", info.get("rejected_connections"))
+        if hits is not None and misses is not None:
+            try:
+                total = float(hits) + float(misses)
+                if total > 0:
+                    add("redis_cache_hit_rate_percent", "缓存命中率", round(float(hits) * 100 / total, 2), "%")
+            except (TypeError, ValueError):
+                pass
+        add("redis_role_master", "主节点", 1 if info.get("role") == "master" else 0, "bool")
+        add("redis_connected_slaves", "从节点连接数", info.get("connected_slaves"))
+        add("redis_rdb_last_save_age_seconds", "最近 RDB 保存时长", info.get("rdb_last_bgsave_time_sec"), "s")
+        add("redis_aof_enabled", "AOF 已启用", info.get("aof_enabled"), "bool")
+
+        keyspace = info.get("keyspace") if isinstance(info.get("keyspace"), dict) else {}
+        total_keys = 0
+        for db_name, stats in sorted(keyspace.items()):
+            if not isinstance(stats, dict):
+                continue
+            key_count = stats.get("keys", 0)
+            try:
+                total_keys += int(key_count or 0)
+            except (TypeError, ValueError):
+                pass
+            dims = {"instance": endpoint, "database": str(db_name)}
+            add("redis_db_keys", "DB Key 数", key_count, "count", dims)
+            add("redis_db_expires", "DB 过期 Key 数", stats.get("expires"), "count", dims)
+        add("redis_keys_total", "Key 总数", total_keys)
+
+        commands = info.get("commandstats") if isinstance(info.get("commandstats"), dict) else {}
+        parsed_commands = []
+        for name, raw in commands.items():
+            if not isinstance(raw, dict):
+                continue
+            try:
+                parsed_commands.append((int(raw.get("calls") or 0), name, raw))
+            except (TypeError, ValueError):
+                continue
+        for calls, name, raw in sorted(parsed_commands, reverse=True)[:12]:
+            dims = {"instance": endpoint, "command": str(name).split("_", 1)[-1]}
+            add("redis_command_calls_total", "命令调用累计", calls, "count", dims, "COMMANDSTATS")
+            add("redis_command_usec_per_call", "命令平均耗时", raw.get("usec_per_call"), "us", dims,
+                "COMMANDSTATS")
+        return rows
 
     def raw(self) -> Any:
         """底层 redis.Redis | None（只读页面兜底用，不暴露给前端）。"""

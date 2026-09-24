@@ -409,7 +409,7 @@ def _workload_row(kind: str, item: dict, pods: list) -> dict:
 def _pod_usage(client, namespace: str, pod_name: str, errors: list) -> Optional[dict]:
     """metrics.k8s.io 的单 Pod 容器用量（尽力而为，失败返回 None 不伪造 0）。"""
     try:
-        items = client.pod_metrics(namespace)
+        items = _unwrap(client.pod_metrics(namespace))
     except k8c.K8sError as exc:
         if exc.status == 404:
             source_status_note("metrics", "unavailable")

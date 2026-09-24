@@ -171,7 +171,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import echarts from '../../utils/echarts'
-import { api, fmtTime, toast } from '../../api'
+import { api, fmtBytes, fmtTime, toast } from '../../api'
 import { useHostContext } from '../../hostContext'
 import AgentUpgradePanel from './AgentUpgradePanel.vue'
 import {
@@ -464,6 +464,21 @@ function activateSection(id) {
   if (id === 'alerts' && !alertLoaded.value) loadAlerts()
 }
 
+function formatTrendValue(name, value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '—'
+  if (name.startsWith('网络')) return `${fmtBytes(number * 1024)}/s`
+  return `${number.toFixed(2)}%`
+}
+
+function trendTooltipFormatter(params) {
+  const rows = Array.isArray(params) ? params : [params]
+  if (!rows.length) return ''
+  const rawTime = Array.isArray(rows[0].value) ? rows[0].value[0] : rows[0].axisValue
+  const time = Number.isFinite(Number(rawTime)) ? new Date(Number(rawTime)).toLocaleString('zh-CN', { hour12: false }) : String(rows[0].axisValueLabel || '')
+  return [time, ...rows.map((item) => { const raw = Array.isArray(item.value) ? item.value[1] : item.value; return `${item.marker}${item.seriesName}：${formatTrendValue(item.seriesName, raw)}` })].join('<br/>')
+}
+
 async function ensureChart() {
   await nextTick()
   if (!chartEl.value) return
@@ -472,11 +487,14 @@ async function ensureChart() {
     chart.setOption({
       backgroundColor: 'transparent',
       textStyle: { color: '#64748b' },
-      tooltip: { trigger: 'axis' },
+      tooltip: { trigger: 'axis', formatter: trendTooltipFormatter },
       legend: { textStyle: { color: '#64748b' }, top: 0, type: 'scroll' },
-      grid: { left: 48, right: 16, top: 34, bottom: 24 },
+      grid: { left: 64, right: 70, top: 34, bottom: 24 },
       xAxis: { type: 'time', axisLine: { lineStyle: { color: '#cbd5e1' } }, axisLabel: { color: '#64748b' } },
-      yAxis: { type: 'value', axisLabel: { color: '#64748b' }, splitLine: { lineStyle: { color: 'rgba(100, 116, 139, .14)' } } },
+      yAxis: [
+        { type: 'value', axisLabel: { color: '#64748b', formatter: (value) => `${value}%` }, splitLine: { lineStyle: { color: 'rgba(100, 116, 139, .14)' } } },
+        { type: 'value', axisLabel: { color: '#64748b', formatter: (value) => `${fmtBytes(Number(value) * 1024)}/s` }, splitLine: { show: false } },
+      ],
       series: [],
     })
   }
@@ -499,7 +517,7 @@ function renderTrend() {
     const points = data.series?.[key] || []
     if (points.length) {
       series.push({
-        name: key.toUpperCase(), type: 'line', smooth: true, showSymbol: false,
+        name: `${key.toUpperCase()} (%)`, type: 'line', smooth: true, showSymbol: false, yAxisIndex: 0,
         itemStyle: { color: colors[key] },
         data: points.map((p) => [p.t * 1000, Number(Number(p.v).toFixed(2))]),
       })
@@ -509,14 +527,14 @@ function renderTrend() {
   const netOut = data.series?.network?.out || []
   if (netIn.length) {
     series.push({
-      name: '网络入 KB/s', type: 'line', smooth: true, showSymbol: false,
+      name: '网络入 (B/s)', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 1,
       itemStyle: { color: '#0ea5e9' }, areaStyle: { opacity: .12 },
       data: netIn.map((p) => [p.t * 1000, Number((p.v / 1024).toFixed(2))]),
     })
   }
   if (netOut.length) {
     series.push({
-      name: '网络出 KB/s', type: 'line', smooth: true, showSymbol: false,
+      name: '网络出 (B/s)', type: 'line', smooth: true, showSymbol: false, yAxisIndex: 1,
       itemStyle: { color: '#8b5cf6' },
       data: netOut.map((p) => [p.t * 1000, Number((p.v / 1024).toFixed(2))]),
     })

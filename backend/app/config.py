@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     # Must be overridden in production; deliberately independent from JWT rotation.
     credential_key: str = ""
     auth_enabled: bool = Field(False, validation_alias=AliasChoices("OPS_AUTH_ENABLED", "AUTH_ENABLED"))
+    monitor_allow_anonymous: bool = Field(False, validation_alias=AliasChoices("OPS_MONITOR_ALLOW_ANONYMOUS", "MONITOR_ALLOW_ANONYMOUS"))
     cors_origins: str = ""
     preview_mode: bool = False
     containerized: bool = False
@@ -122,6 +123,9 @@ class Settings(BaseSettings):
     zookeeper_hosts: str = ""            # ZOOKEEPER_HOSTS=zookeeper.middleware.svc.cluster.local:2181
     mw_leader_enabled: bool = False      # MW_LEADER_ENABLED=true 时 MQ worker/周期任务经 Redis 租约选主
     mw_probe_timeout: float = 4.0        # 状态探测/命令超时（秒）
+    mw_metrics_enabled: bool = False     # MW_METRICS_ENABLED=true 时采集中间件多维指标历史
+    mw_metrics_interval_seconds: int = 60  # 中间件指标采样周期
+    mw_metrics_retention_days: int = 7   # 原始指标保留天数
 
     # ── 运维共享令牌（v5.0.0 高危端点兜底） ──
     # OPERATOR_TOKEN 非空时，新数据服务/高危端点要求 Bearer 携带该令牌；
@@ -159,6 +163,7 @@ ADMIN_USER = _settings.admin_user
 ADMIN_PASSWORD = _settings.admin_password
 CREDENTIAL_KEY = _settings.credential_key
 OPS_AUTH_ENABLED = _settings.auth_enabled
+MONITOR_ALLOW_ANONYMOUS = _settings.monitor_allow_anonymous
 CORS_ORIGINS = [item.strip() for item in _settings.cors_origins.split(",") if item.strip()]
 PREVIEW_MODE = _settings.preview_mode
 CONTAINERIZED = _settings.containerized
@@ -237,6 +242,9 @@ MINIO_ENABLED = _settings.minio_enabled
 ZOOKEEPER_HOSTS = _settings.zookeeper_hosts
 MW_LEADER_ENABLED = _settings.mw_leader_enabled
 MW_PROBE_TIMEOUT = _settings.mw_probe_timeout
+MW_METRICS_ENABLED = _settings.mw_metrics_enabled
+MW_METRICS_INTERVAL_SECONDS = max(15, int(_settings.mw_metrics_interval_seconds or 60))
+MW_METRICS_RETENTION_DAYS = max(1, int(_settings.mw_metrics_retention_days or 7))
 OPERATOR_TOKEN = _settings.operator_token
 
 # ── Aliyun OSS extension module (v5.1.0) ──

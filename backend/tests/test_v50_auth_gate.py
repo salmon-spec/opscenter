@@ -17,7 +17,12 @@ from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.testclient import TestClient
 
 import app.auth as auth
-from app.auth import check_operator_token, get_current_user, require_operator
+from app.auth import (
+    check_operator_token,
+    get_current_user,
+    require_configured_operator,
+    require_operator,
+)
 from app.database import Base, engine
 from app.main import app
 
@@ -57,6 +62,29 @@ def test_configured_operator_token_enforced(monkeypatch):
     with pytest.raises(HTTPException):
         get_current_user(None)
     assert get_current_user(credentials) is not None
+
+
+def test_configured_operator_dependency_fails_closed(monkeypatch):
+    monkeypatch.setattr(auth, "MONITOR_ALLOW_ANONYMOUS", False)
+    monkeypatch.setattr(auth, "OPERATOR_TOKEN", "")
+    monkeypatch.setattr(auth, "AUTH_ENABLED", False)
+    with pytest.raises(HTTPException) as excinfo:
+        require_configured_operator(None)
+    assert excinfo.value.status_code == 503
+
+    monkeypatch.setattr(auth, "OPERATOR_TOKEN", "s3cret")
+    with pytest.raises(HTTPException) as excinfo:
+        require_configured_operator(None)
+    assert excinfo.value.status_code == 401
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="s3cret")
+    assert require_configured_operator(credentials) is not None
+
+
+def test_monitor_anonymous_override_allows_loginless_test_environment(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_ENABLED", False)
+    monkeypatch.setattr(auth, "OPERATOR_TOKEN", "")
+    monkeypatch.setattr(auth, "MONITOR_ALLOW_ANONYMOUS", True)
+    assert require_configured_operator(None).username == "admin"
 
 
 def test_auth_enabled_requires_credentials(monkeypatch):

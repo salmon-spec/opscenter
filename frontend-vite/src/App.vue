@@ -50,21 +50,11 @@
       <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">{{ t.msg }}</div>
     </div>
     <HostManagerDrawer :visible="hostDrawer" @close="hostDrawer=false" />
-    <div v-if="loginVisible" class="auth-mask">
-      <form class="auth-card" @submit.prevent="submitLogin">
-        <h3>登录运维工作台</h3>
-        <p>当前环境已启用访问保护。</p>
-        <label>账号<input v-model.trim="loginForm.username" autocomplete="username" autofocus /></label>
-        <label>密码或运维令牌<input v-model="loginForm.password" type="password" autocomplete="current-password" /></label>
-        <div v-if="loginError" class="auth-error">{{ loginError }}</div>
-        <button class="btn btn-primary" type="submit" :disabled="loginBusy">{{ loginBusy ? '登录中…' : '登录' }}</button>
-      </form>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import router from './router'
 import HostManagerDrawer from './components/HostManagerDrawer.vue'
@@ -74,7 +64,7 @@ import ModuleTabs from './components/workbench/ModuleTabs.vue'
 import { useHostContext } from './hostContext'
 import workbench from './workbench/tabs'
 import packageInfo from '../package.json'
-import { api, setAccessToken } from './api'
+import { api } from './api'
 
 const route = useRoute()
 const appVersion = packageInfo.version
@@ -83,21 +73,6 @@ const isStandalone = computed(() => !!route.meta.standalone)
 workbench.init(router)
 const { hosts, refreshHosts } = useHostContext()
 const hostDrawer=ref(false)
-const loginVisible=ref(false)
-const loginBusy=ref(false)
-const loginError=ref('')
-const loginForm=reactive({ username:'admin', password:'' })
-function requireLogin(){ loginVisible.value=true; loginError.value='' }
-async function submitLogin(){
-  if(!loginForm.username||!loginForm.password)return
-  loginBusy.value=true;loginError.value=''
-  try{
-    const result=await api.post('/auth/login',loginForm)
-    setAccessToken(result.access_token)
-    window.location.reload()
-  }catch(error){loginError.value=error.message}
-  finally{loginBusy.value=false}
-}
 const SIDEBAR_KEY = 'ops-sidebar-collapsed'
 const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_KEY) === '1')
 function toggleSidebar() {
@@ -172,7 +147,6 @@ onMounted(() => {
   tick()
   clockTimer = setInterval(tick, 1000)
   window.addEventListener('ops-toast', onToast)
-  window.addEventListener('ops-auth-required', requireLogin)
   window.addEventListener('ops-modules-changed', loadModules)
   loadHosts()
   loadModules()
@@ -181,13 +155,11 @@ onUnmounted(() => {
   clearInterval(clockTimer)
   window.removeEventListener('ops-modules-changed', loadModules)
   window.removeEventListener('ops-toast', onToast)
-  window.removeEventListener('ops-auth-required', requireLogin)
 })
 </script>
 
 <style scoped>
 .shell { display: flex; height: 100vh; overflow: hidden; }
-.auth-mask{position:fixed;inset:0;z-index:4000;background:rgba(15,23,42,.55);display:grid;place-items:center}.auth-card{width:min(380px,calc(100vw - 32px));padding:26px;background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 24px 70px rgba(15,23,42,.25);display:flex;flex-direction:column;gap:14px}.auth-card h3,.auth-card p{margin:0}.auth-card p{color:var(--muted);font-size:13px}.auth-card label{display:flex;flex-direction:column;gap:6px;font-size:13px}.auth-card input{height:38px;padding:0 10px;border:1px solid var(--border);border-radius:8px}.auth-error{color:var(--danger);font-size:12px}.auth-card button{align-self:stretch}
 .sidebar {
   width: 200px; flex-shrink: 0; background: var(--sidebar); color: var(--sidebar-text);
   min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 16px 10px; transition: width .2s ease, padding .2s ease;

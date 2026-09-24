@@ -13,9 +13,11 @@ MINIO_BUCKET、MINIO_SECURE、MINIO_ENABLED（put 需要 true；只读浏览不�
 from __future__ import annotations
 
 import io
+import itertools
 import logging
 import threading
 import time
+from typing import Any
 from datetime import timedelta
 
 from app.config import (
@@ -159,7 +161,7 @@ class ObjectStore:
         except Exception:
             return []
 
-    def list_buckets(self) -> list[dict]:
+    def list_buckets(self, *, strict: bool = False) -> list[dict]:
         client = self._backend()
         if client is None:
             return []
@@ -169,7 +171,57 @@ class ObjectStore:
                 "creation_date": b.creation_date.isoformat() if b.creation_date else None,
             } for b in client.list_buckets()]
         except Exception:
+            if strict:
+                raise
             return []
+
+    def monitor_metrics(self) -> dict:
+        client = self._backend()
+        if client is None:
+            return {"metrics": [], "errors": []}
+        errors: list[str] = []
+        try:
+            buckets = self.list_buckets(strict=True)
+        except Exception as exc:
+            return {"metrics": [], "errors": [f"buckets: {exc}"]}
+        rows: list[dict] = []
+
+        def add(key: str, label: str, value: Any, unit: str = "count",
+                dimensions: dict | None = None, source: str = "minio") -> None:
+            if value is None:
+                return
+            rows.append({"key": key, "label": label, "value": value, "unit": unit,
+                         "dimensions": dimensions or {}, "source": source})
+
+        add("minio_buckets_total", "Bucket 数", len(buckets))
+        total_objects = total_bytes = 0
+        max_object_bytes = 0
+        sampled_buckets = 0
+        for bucket in buckets[:10]:
+            name = str(bucket.get("name") or "")
+            if not name:
+                continue
+            try:
+                objects = list(itertools.islice(client.list_objects(name, recursive=True), 5000))
+            except Exception as exc:
+                errors.append(f"bucket {name}: {exc}")
+                continue
+            sampled_buckets += 1
+            sampled = objects
+            bucket_bytes = sum(int(getattr(item, "size", 0) or 0) for item in sampled)
+            bucket_max = max([int(getattr(item, "size", 0) or 0) for item in sampled] or [0])
+            dims = {"bucket": name}
+            add("minio_bucket_object_count_sampled", "Bucket 对象数（采样）", len(sampled), "count", dims)
+            add("minio_bucket_size_bytes_sampled", "Bucket 容量（采样）", bucket_bytes, "B", dims)
+            add("minio_bucket_largest_object_bytes", "最大对象大小", bucket_max, "B", dims)
+            total_objects += len(sampled)
+            total_bytes += bucket_bytes
+            max_object_bytes = max(max_object_bytes, bucket_max)
+        if sampled_buckets:
+            add("minio_object_count_sampled", "对象数（采样）", total_objects)
+            add("minio_size_bytes_sampled", "容量（采样）", total_bytes, "B")
+            add("minio_largest_object_bytes", "最大对象大小", max_object_bytes, "B")
+        return {"metrics": rows, "errors": errors}
 
     def presigned_get(self, object_name: str, expires_seconds: int = 3600,
                       bucket: str | None = None) -> str | None:

@@ -21,6 +21,8 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
+from app.config import MONITOR_ALLOW_ANONYMOUS
+
 
 # === 配置 ===
 SECRET_KEY = os.getenv("OPS_JWT_SECRET", "").strip()
@@ -200,6 +202,35 @@ def require_operator(
     """
     if AUTH_ENABLED:
         return get_current_user(credentials)
+    token = credentials.credentials if credentials else None
+    if not check_operator_token(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少或无效的运维令牌",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return _virtual_admin()
+
+
+def require_configured_operator(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> object:
+    """Fail closed for new read-only monitoring endpoints.
+
+    Unlike require_operator, an entirely unconfigured deployment receives 503
+    instead of an anonymous virtual administrator.
+    """
+    if AUTH_ENABLED:
+        if not SECRET_KEY:
+            raise HTTPException(status_code=503, detail="OPS_JWT_SECRET 未配置，监控接口不可用")
+        return get_current_user(credentials)
+    if MONITOR_ALLOW_ANONYMOUS:
+        return _virtual_admin()
+    if not OPERATOR_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="监控接口未配置认证，请配置 OPERATOR_TOKEN 或启用 OPS_AUTH_ENABLED",
+        )
     token = credentials.credentials if credentials else None
     if not check_operator_token(token):
         raise HTTPException(

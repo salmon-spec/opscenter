@@ -7,6 +7,7 @@
       </div>
       <div class="head-actions">
         <span v-if="stampText" class="muted stamp">数据 {{ stampText }}<span v-if="stale" class="stale">数据陈旧</span></span>
+        <button class="btn btn-sm" @click="openConfig">连接配置</button>
         <button class="btn btn-sm" :disabled="loading" @click="reload">{{ loading ? '加载中…' : '↻ 刷新' }}</button>
         <button class="btn btn-sm btn-primary" :disabled="probingAll || !services.length" @click="probeAll">
           {{ probingAll ? '探测中…' : '全部探测' }}
@@ -28,6 +29,8 @@
       <div v-if="fatal && hasData" class="partial">
         <span>⚠ 刷新失败：</span><span class="partial-item">{{ fatal }}（当前显示上次数据）</span>
       </div>
+
+      <DataServiceMonitorOverview ref="monitorOverview" />
 
       <div v-if="services.length" class="ds-grid">
         <div
@@ -81,6 +84,7 @@ import workbench, { useTabActive, setTabState, getTabState } from '../../workben
 import { toast } from '../../api'
 import { dsApi, DS_KINDS, unwrap, apiErrorText } from '../../api/dataservices'
 import DsStatusTag from './DsStatusTag.vue'
+import DataServiceMonitorOverview from './DataServiceMonitorOverview.vue'
 
 const router = useRouter()
 const { isActive } = useTabActive('DataServicesOverview')
@@ -98,6 +102,7 @@ const probingAll = ref(false)
 const probing = reactive({})
 const nowTick = ref(Date.now())
 const rootEl = ref(null)
+const monitorOverview = ref(null)
 
 let controller = null
 let probeController = null
@@ -192,7 +197,10 @@ async function load() {
   }
 }
 
-function reload() { load() }
+function reload() {
+  load()
+  monitorOverview.value?.reload?.()
+}
 
 async function probeAll() {
   if (probingAll.value || !services.value.length) return
@@ -225,6 +233,7 @@ async function probeAll() {
     }
     if (!signal.aborted) {
       nowTick.value = Date.now()
+      monitorOverview.value?.reload?.()
       toast(`全部探测完成：可用 ${ok} · 异常 ${bad}`, bad ? 'err' : 'ok')
     }
   } finally {
@@ -252,6 +261,10 @@ function stopPolling() {
 function ensureFresh() {
   const fresh = loadedOnce && meta.ts > 0 && nowTick.value / 1000 - meta.ts <= FRESH_S
   if (!fresh) load()
+}
+
+function openConfig() {
+  router.push('/data-services/config')
 }
 
 function openKind(kind) {

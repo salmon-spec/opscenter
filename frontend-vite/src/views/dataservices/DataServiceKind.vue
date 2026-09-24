@@ -6,6 +6,12 @@
         <p class="view-sub">{{ kindDesc }} · 只读纳管</p>
       </div>
       <div class="head-actions">
+        <select v-if="(instances || []).length" v-model="selectedInstance" class="select instance-select" title="选择监控实例">
+          <option value="primary">主实例 · 系统集成</option>
+          <option v-for="inst in instances" :key="inst.id" :value="inst.id">
+            {{ inst.name }}{{ inst.monitor_enabled ? '' : '（已停用）' }}
+          </option>
+        </select>
         <span class="tag" :class="statusClass" :title="statusMessage">{{ statusInfo.label }}</span>
         <span v-if="latencyText" class="muted tiny nowrap">{{ latencyText }}</span>
         <span v-if="endpointText" class="muted tiny mono endpoint" :title="endpointText">{{ endpointText }}</span>
@@ -25,8 +31,13 @@
         <span>⚠ 部分数据源异常：</span><span class="partial-item">{{ partialText }}</span>
       </div>
 
+      <div v-if="selectedInstance !== 'primary'" class="extra-notice">
+        当前查看额外监控实例，仅提供指标与趋势；Keys、队列、Topic 等浏览能力仍作用于主实例。
+      </div>
+      <DataServiceMonitor :kind="kind" :instance="selectedInstance" />
+
       <!-- Redis: keyspace 概览 + Key 浏览 -->
-      <template v-if="kind === 'redis'">
+      <template v-if="selectedInstance === 'primary' && kind === 'redis'">
         <section class="card">
           <div class="card-head">
             <h3>Keyspace 概览</h3>
@@ -83,7 +94,7 @@
       </template>
 
       <!-- RabbitMQ: queues -->
-      <section v-else-if="kind === 'rabbitmq'" class="card">
+      <section v-else-if="selectedInstance === 'primary' && kind === 'rabbitmq'" class="card">
         <div class="card-head"><h3>Queues（{{ queues.length }}）</h3></div>
         <div v-if="queues.length" class="table-scroll">
           <table class="table">
@@ -104,7 +115,7 @@
       </section>
 
       <!-- Kafka: Topics / Consumer Groups -->
-      <section v-else-if="kind === 'kafka'" class="card">
+      <section v-else-if="selectedInstance === 'primary' && kind === 'kafka'" class="card">
         <div class="card-head">
           <h3>Kafka</h3>
           <div class="seg">
@@ -146,7 +157,7 @@
       </section>
 
       <!-- ZooKeeper: path + children -->
-      <section v-else-if="kind === 'zookeeper'" class="card">
+      <section v-else-if="selectedInstance === 'primary' && kind === 'zookeeper'" class="card">
         <div class="card-head"><h3>ZNode 浏览 <span class="mono tiny">{{ zkPath }}</span></h3><span class="muted tiny">点击有子节点的行进入下一层</span></div>
         <div class="filters">
           <input v-model="zkInput" class="input kw" placeholder="/path，如 /dubbo" @keyup.enter="goZk" />
@@ -174,7 +185,7 @@
       </section>
 
       <!-- Nacos: services / configs -->
-      <section v-else-if="kind === 'nacos'" class="card">
+      <section v-else-if="selectedInstance === 'primary' && kind === 'nacos'" class="card">
         <div class="card-head">
           <h3>Nacos</h3>
           <div class="seg">
@@ -220,7 +231,7 @@
       </section>
 
       <!-- MinIO: buckets / objects -->
-      <section v-else-if="kind === 'minio'" class="card">
+      <section v-else-if="selectedInstance === 'primary' && kind === 'minio'" class="card">
         <div class="card-head">
           <h3>{{ minioBucket ? `Objects · ${minioBucket}` : `Buckets（${buckets.length}）` }}</h3>
           <button v-if="minioBucket" class="btn btn-sm" :disabled="loading" @click="backBuckets">← 返回 Buckets</button>
@@ -257,7 +268,7 @@
       </section>
 
       <!-- MongoDB: databases / collections -->
-      <section v-else-if="kind === 'mongodb'" class="card">
+      <section v-else-if="selectedInstance === 'primary' && kind === 'mongodb'" class="card">
         <div class="card-head">
           <h3>{{ mongoDbName ? `Collections · ${mongoDbName}` : `Databases（${databases.length}）` }}</h3>
           <button v-if="mongoDbName" class="btn btn-sm" :disabled="loading" @click="backDbs">← 返回 Databases</button>
@@ -305,6 +316,7 @@ import { dsApi, unwrap, mergeMeta, apiErrorText, DS_KINDS } from '../../api/data
 import { fmtBytes, fmtTime } from '../../api'
 import StatBar from '../../components/StatBar.vue'
 import EmptyState from '../../components/EmptyState.vue'
+import DataServiceMonitor from './DataServiceMonitorV2.vue'
 
 const props = defineProps({
   kind: { type: String, required: true },
@@ -356,6 +368,8 @@ const minioBucket = ref('')
 const objects = ref([])
 
 const databases = ref([])
+const instances = ref([])
+const selectedInstance = ref('primary')
 const mongoDbName = ref('')
 const collections = ref([])
 
@@ -583,23 +597,34 @@ async function loadAll() {
   primaryCtrl = ctrl
   loading.value = true
   try {
-    const [sr, ir] = await Promise.allSettled([
-      dsApi.status(k, { signal: ctrl.signal, timeoutMs: 15000 }),
-      fetchPrimary(k, ctrl.signal),
+    const [sr, ir, xr] = await Promise.allSettled([
+      dsApi.instances({ kind: k }, { signal: ctrl.signal, timeoutMs: 10000 }),
+      dsApi.status(k, { instance: selectedInstance.value },
+        { signal: ctrl.signal, timeoutMs: 15000 }),
+      selectedInstance.value === 'primary' ? fetchPrimary(k, ctrl.signal) : Promise.resolve(null),
     ])
     if (seq !== loadSeq || kind.value !== k) return
+    if (sr.status === 'fulfilled') {
+      instances.value = Array.isArray(sr.value?.items) ? sr.value.items : []
+      if (selectedInstance.value !== 'primary'
+          && !instances.value.some((item) => item.id === selectedInstance.value)) {
+        selectedInstance.value = 'primary'
+        return
+      }
+    }
     const errs = []
     const metas = []
-    if (sr.status === 'fulfilled') {
-      const u = unwrap(sr.value)
+    const statusResult = xr
+    if (statusResult.status === 'fulfilled') {
+      const u = unwrap(statusResult.value)
       status.value = u.data
       metas.push(u.meta)
-    } else if (sr.reason?.name !== 'AbortError') {
-      errs.push(`状态读取失败：${apiErrorText(sr.reason)}`)
+    } else if (statusResult.reason?.name !== 'AbortError') {
+      errs.push(`状态读取失败：${apiErrorText(statusResult.reason)}`)
     }
-    if (ir.status === 'fulfilled') {
+    if (ir.status === 'fulfilled' && ir.value) {
       metas.push(ir.value)
-    } else if (ir.reason?.name !== 'AbortError') {
+    } else if (ir.status === 'rejected' && ir.reason?.name !== 'AbortError') {
       errs.push(`列表读取失败：${apiErrorText(ir.reason)}`)
     }
     const m = mergeMeta(metas)
@@ -607,7 +632,7 @@ async function loadAll() {
     meta.cached = m.cached
     meta.cacheAge = m.cacheAge
     meta.partialErrors = [...m.partialErrors, ...errs]
-    fatal.value = sr.status === 'rejected' && ir.status === 'rejected' ? errs.join('；') : ''
+    fatal.value = statusResult.status === 'rejected' && ir.status === 'rejected' ? errs.join('；') : ''
     loadedOnce.value = true
     nowTick.value = Date.now()
   } finally {
@@ -623,7 +648,9 @@ async function loadStatusOnly() {
   const ctrl = new AbortController()
   statusCtrl = ctrl
   try {
-    const u = unwrap(await dsApi.status(k, { signal: ctrl.signal, timeoutMs: 15000 }))
+    const u = unwrap(await dsApi.status(k, { instance: selectedInstance.value }, {
+      signal: ctrl.signal, timeoutMs: 15000,
+    }))
     if (kind.value !== k) return
     status.value = u.data
     if (u.meta.ts) meta.ts = u.meta.ts
@@ -796,6 +823,8 @@ function resetState() {
   minioBucket.value = ''
   objects.value = []
   databases.value = []
+  instances.value = []
+  selectedInstance.value = 'primary'
   mongoDbName.value = ''
   collections.value = []
   meta.ts = 0
@@ -809,6 +838,10 @@ function resetState() {
 
 watch(kind, () => {
   resetState()
+  if (tabAlive && isActive.value) loadAll()
+})
+
+watch(selectedInstance, () => {
   if (tabAlive && isActive.value) loadAll()
 })
 watch(isActive, (v) => {
@@ -847,6 +880,8 @@ onUnmounted(() => {
 <style scoped>
 .ds { display: flex; flex-direction: column; gap: 12px; }
 .head-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.instance-select { height: 30px; max-width: 240px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); }
+.extra-notice { padding: 8px 12px; border: 1px solid #bfdbfe; border-radius: 8px; background: #f0f7ff; color: #1e40af; font-size: 12px; }
 .endpoint { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stamp { font-size: 12px; }
 .stale { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }

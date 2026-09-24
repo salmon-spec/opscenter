@@ -35,16 +35,23 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/backend.Dockerfile
-    image: opscenter/backend:5.1.0-test
+    image: opscenter/backend:5.3.1-test
+    env_file:
+      - ./ai-ops.env
     environment:
       DATABASE_URL: postgresql+psycopg://opscenter:${OPS_TEST_POSTGRES_PASSWORD:?set OPS_TEST_POSTGRES_PASSWORD}@db:5432/opscenter
       CONTAINERIZED: "true"
       LOCAL_AGENT_HOST: host.docker.internal
       LOKI_URL: http://loki:3100
+      OPERATOR_TOKEN: ""
+      OPS_MONITOR_ALLOW_ANONYMOUS: "true"
       GROUPS_JSON_PATH: /opt/opscenter/frontend/groups.json
       K8S_API_URL: https://k8s-master-01:6443
       K8S_TOKEN_FILE: /run/k8s-test/token
       K8S_CA_PATH: /run/k8s-test/ca.crt
+      MW_METRICS_ENABLED: "true"
+      MW_METRICS_INTERVAL_SECONDS: "60"
+      MW_METRICS_RETENTION_DAYS: "7"
     volumes:
       - ./k8s/token:/run/k8s-test/token:ro
       - ./k8s/ca.crt:/run/k8s-test/ca.crt:ro
@@ -70,7 +77,7 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/frontend.Dockerfile
-    image: opscenter/frontend:5.1.0-test
+    image: opscenter/frontend:5.3.1-test
     depends_on:
       - backend
     ports:

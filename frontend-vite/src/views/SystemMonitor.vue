@@ -41,7 +41,15 @@ const { isActive } = useTabActive('SystemMonitor')
 const summary=ref(null),loading=ref(false),error=ref(''),chartEl=ref(null),history=ref({}),historyLoading=ref(false),historyResolution=ref('-'),historyPointCount=ref(0)
 const hostOverview=ref([]),overviewLoading=ref(false)
 const ranges=[{key:'1h',label:'1小时',hours:1},{key:'6h',label:'6小时',hours:6},{key:'24h',label:'24小时',hours:24},{key:'7d',label:'7天',hours:168},{key:'30d',label:'30天',hours:720},{key:'90d',label:'90天',hours:2160},{key:'1y',label:'1年',hours:8760},{key:'custom',label:'自定义'}]
-const metricOptions=[{key:'cpu',label:'CPU',color:'#2563eb'},{key:'memory',label:'内存',color:'#7c3aed'},{key:'disk',label:'磁盘',color:'#ea580c'},{key:'load1',label:'负载',color:'#059669'},{key:'net_rx',label:'网络接收',color:'#0891b2'},{key:'net_tx',label:'网络发送',color:'#db2777'}]
+const metricOptions=[
+  {key:'cpu',label:'CPU',color:'#2563eb',unit:'%',axis:'percent'},
+  {key:'memory',label:'内存',color:'#7c3aed',unit:'%',axis:'percent'},
+  {key:'disk',label:'磁盘',color:'#ea580c',unit:'%',axis:'percent'},
+  {key:'load1',label:'负载',color:'#059669',unit:'',axis:'load'},
+  {key:'net_rx',label:'网络接收',color:'#0891b2',unit:'B/s',axis:'rate'},
+  {key:'net_tx',label:'网络发送',color:'#db2777',unit:'B/s',axis:'rate'},
+]
+const axisOrder=['percent','rate','load']
 const rangeKey=ref('1h'),selectedMetrics=ref(['cpu','memory','disk']),customStart=ref(''),customEnd=ref('')
 let timer=null, controller=null, historyController=null, chart=null
 const m=computed(()=>summary.value?.metrics||{})
@@ -74,10 +82,23 @@ async function loadHistory(){
     if(hostId!==selectedHostId.value)return;history.value=data.series||{};hostOverview.value=overview.hosts||[];historyResolution.value=({raw:'原始数据','5m':'5分钟聚合','1h':'1小时聚合'})[data.resolution]||data.resolution;historyPointCount.value=data.point_count||0;renderChart()
   }catch(e){if(e.name!=='AbortError'&&hostId===selectedHostId.value)error.value=e.message}finally{if(historyController===activeController){historyLoading.value=false;overviewLoading.value=false}}
 }
+function trendAxis(axis,index,activeAxes){
+  const position=axis==='percent'?'left':'right'
+  const rightIndex=activeAxes.filter(item=>item!=='percent').indexOf(axis)
+  const label={color:'#64748b'}
+  if(axis==='percent')label.formatter=value=>`${value}%`
+  if(axis==='rate')label.formatter=value=>`${fmtBytes(value)}/s`
+  return{type:'value',scale:true,position,offset:axis==='percent'?0:rightIndex*64,name:axis==='percent'?'使用率 (%)':axis==='rate'?'网络速率':'系统负载',nameTextStyle:{color:'#64748b'},axisLabel:label,axisLine:{show:true,lineStyle:{color:'#cbd5e1'}},splitLine:{show:index===0,lineStyle:{color:'rgba(100,116,139,.14)'}}}
+}
 function renderChart(){
   if(!chartEl.value)return;chart ||= echarts.init(chartEl.value)
-  const series=selectedMetrics.value.map(key=>{const meta=metricOptions.find(item=>item.key===key);return{name:meta?.label||key,type:'line',showSymbol:false,sampling:'lttb',lineStyle:{width:1.8,color:meta?.color},itemStyle:{color:meta?.color},data:(history.value[key]||[]).map(([t,v])=>[new Date(t*1000),v])}})
-  chart.setOption({tooltip:{trigger:'axis'},legend:{data:series.map(item=>item.name)},grid:{left:52,right:18,top:42,bottom:38},dataZoom:[{type:'inside'}],xAxis:{type:'time'},yAxis:{type:'value',scale:true},series},true)
+  const active=selectedMetrics.value.map(key=>metricOptions.find(item=>item.key===key)).filter(Boolean)
+  const activeAxes=axisOrder.filter(axis=>active.some(meta=>meta.axis===axis))
+  const metricKeyByName=new Map()
+  const series=active.map(meta=>{const name=`${meta.label}${meta.unit?`（${meta.unit}）`:''}`;metricKeyByName.set(name,meta.key);return{name,type:'line',showSymbol:false,sampling:'lttb',yAxisIndex:activeAxes.indexOf(meta.axis),lineStyle:{width:1.8,color:meta.color},itemStyle:{color:meta.color},data:(history.value[meta.key]||[]).map(([t,v])=>[new Date(t*1000),v])}})
+  const tooltipFormatter=params=>{const rows=Array.isArray(params)?params:[params];if(!rows.length)return'';const rawTime=Array.isArray(rows[0].value)?rows[0].value[0]:rows[0].axisValue;const time=Number.isFinite(Number(rawTime))?new Date(Number(rawTime)).toLocaleString('zh-CN',{hour12:false}):String(rows[0].axisValueLabel||'');return[time,...rows.map(item=>{const raw=Array.isArray(item.value)?item.value[1]:item.value;return`${item.marker}${item.seriesName}：${formatMetricValue(metricKeyByName.get(item.seriesName),raw)}`})].join('<br/>')}
+  const rightAxisCount=activeAxes.filter(axis=>axis!=='percent').length
+  chart.setOption({tooltip:{trigger:'axis',formatter:tooltipFormatter},legend:{data:series.map(item=>item.name)},grid:{left:activeAxes.includes('percent')?64:24,right:24+rightAxisCount*64,top:42,bottom:38},dataZoom:[{type:'inside'}],xAxis:{type:'time'},yAxis:activeAxes.map((axis,index)=>trendAxis(axis,index,activeAxes)),series},true)
 }
 const metricRecords=computed(()=>Object.entries(history.value).flatMap(([metric,rows])=>(rows||[]).map(([timestamp,avg,min,max,count])=>({metric,timestamp,avg,min,max,count}))).sort((a,b)=>b.timestamp-a.timestamp).slice(0,1000))
 function metricLabel(key){return metricOptions.find(item=>item.key===key)?.label||key}

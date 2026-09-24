@@ -26,9 +26,12 @@ logger = logging.getLogger("opscenter.event_bus")
 
 try:  # v5.0.0 依赖已安装；导入失败时全部方法 fail-open
     from kafka import KafkaProducer
+    from kafka import KafkaConsumer, TopicPartition
     from kafka.admin import KafkaAdminClient
 except Exception:  # pragma: no cover - 依赖缺失兜底
     KafkaProducer = None  # type: ignore[assignment]
+    KafkaConsumer = None  # type: ignore[assignment]
+    TopicPartition = None  # type: ignore[assignment]
     KafkaAdminClient = None  # type: ignore[assignment]
 
 _CACHE_TTL = 10.0
@@ -349,6 +352,142 @@ class EventBus:
                     if topic:
                         topics.add(topic)
             entry["topics"] = sorted(topics)
+
+    def consumer_group_lags(self, limit: int = 100) -> list[dict]:
+        """Best-effort committed/end offset lag for consumer groups."""
+        admin = _get_admin()
+        if admin is None or KafkaConsumer is None or TopicPartition is None:
+            return []
+        try:
+            groups = self.consumer_groups(limit=limit)
+            committed: dict = {}
+            partitions: set = set()
+            for group in groups:
+                group_id = str(group.get("group") or "")
+                if not group_id:
+                    continue
+                try:
+                    result = _call(admin.list_consumer_group_offsets, group_id,
+                                   timeout=config.MW_PROBE_TIMEOUT)
+                except Exception:
+                    continue
+                items = result.items() if isinstance(result, dict) else (result or [])
+                for partition, offset_meta in items:
+                    offset = (offset_meta.get("offset") if isinstance(offset_meta, dict)
+                              else getattr(offset_meta, "offset", None))
+                    if offset is None or not isinstance(partition, TopicPartition):
+                        continue
+                    committed[(group_id, partition.topic, int(partition.partition))] = int(offset)
+                    partitions.add(partition)
+            if not partitions:
+                return []
+            consumer = KafkaConsumer(
+                bootstrap_servers=_bootstrap_servers(),
+                request_timeout_ms=max(1000, int(float(config.MW_PROBE_TIMEOUT or 4.0) * 1000)),
+                consumer_timeout_ms=max(1000, int(float(config.MW_PROBE_TIMEOUT or 4.0) * 1000)),
+                enable_auto_commit=False,
+            )
+            try:
+                ends = consumer.end_offsets(list(partitions))
+            finally:
+                consumer.close()
+            rows: list[dict] = []
+            for (group_id, topic, partition), committed_offset in committed.items():
+                key = next((item for item in partitions
+                            if item.topic == topic and int(item.partition) == partition), None)
+                end_offset = ends.get(key) if key is not None else None
+                if end_offset is None:
+                    continue
+                rows.append({
+                    "group": group_id, "topic": topic, "partition": partition,
+                    "current_offset": committed_offset, "log_end_offset": int(end_offset),
+                    "lag": max(0, int(end_offset) - committed_offset),
+                })
+            return rows
+        except Exception:
+            return []
+
+    def monitor_metrics(self) -> list[dict]:
+        admin = _get_admin()
+        if admin is None:
+            return []
+        rows: list[dict] = []
+
+        def add(key: str, label: str, value: Any, unit: str = "count",
+                dimensions: dict | None = None, source: str = "admin") -> None:
+            if value is None:
+                return
+            rows.append({"key": key, "label": label, "value": value, "unit": unit,
+                         "dimensions": dimensions or {}, "source": source})
+
+        try:
+            cluster = _call(admin.describe_cluster, timeout=config.MW_PROBE_TIMEOUT) or {}
+            brokers = cluster.get("brokers") if isinstance(cluster, dict) else getattr(cluster, "brokers", None)
+            add("kafka_brokers_total", "Broker 数", len(brokers or []))
+            controller = cluster.get("controller") if isinstance(cluster, dict) else getattr(cluster, "controller", None)
+            if controller is not None:
+                add("kafka_controller_id", "Controller ID",
+                    controller.get("id") if isinstance(controller, dict) else getattr(controller, "id", None))
+        except Exception:
+            pass
+
+        topics = self.topics(limit=1000)
+        add("kafka_topics_total", "Topic 数", len(topics))
+        partition_total = sum(int(item.get("partitions") or 0) for item in topics)
+        add("kafka_partitions_total", "分区总数", partition_total)
+        for topic in topics[:200]:
+            dims = {"topic": str(topic.get("name") or "")}
+            add("kafka_topic_partitions", "Topic 分区数", topic.get("partitions"), "count", dims)
+            add("kafka_topic_replicas", "Topic 副本数", topic.get("replicas"), "count", dims)
+
+        try:
+            described = _call(admin.describe_topics, timeout=config.MW_PROBE_TIMEOUT) or []
+            if isinstance(described, dict):
+                if isinstance(described.get("topics"), dict):
+                    described = described["topics"]
+                if isinstance(described, dict):
+                    if {"topic", "name", "partitions"} & set(described):
+                        described = [described]
+                    else:
+                        described = [
+                            dict(meta, topic=name) if isinstance(meta, dict)
+                            else {"topic": name, "partitions": getattr(meta, "partitions", None)}
+                            for name, meta in described.items()
+                        ]
+            elif not isinstance(described, (list, tuple)):
+                described = [described]
+            under = offline = 0
+            for item in described:
+                parts = item.get("partitions") if isinstance(item, dict) else getattr(item, "partitions", None)
+                if isinstance(parts, dict):
+                    parts = parts.values()
+                for partition in parts or []:
+                    replicas = partition.get("replicas") if isinstance(partition, dict) else getattr(partition, "replicas", None)
+                    isr = partition.get("isr") if isinstance(partition, dict) else getattr(partition, "isr", None)
+                    leader = partition.get("leader") if isinstance(partition, dict) else getattr(partition, "leader", None)
+                    if len(isr or []) < len(replicas or []):
+                        under += 1
+                    if leader is None or int(leader) < 0:
+                        offline += 1
+            add("kafka_under_replicated_partitions", "UnderReplicated 分区", under)
+            add("kafka_offline_partitions", "离线分区", offline)
+        except Exception:
+            pass
+
+        groups = self.consumer_groups(limit=1000)
+        add("kafka_consumer_groups_total", "消费组数", len(groups))
+        add("kafka_consumer_members_total", "消费者成员数",
+            sum(int(group.get("members") or 0) for group in groups))
+        lags = self.consumer_group_lags(limit=100)
+        add("kafka_consumer_lag_total", "消费 Lag 合计", sum(int(item.get("lag") or 0) for item in lags))
+        for item in sorted(lags, key=lambda row: int(row.get("lag") or 0), reverse=True)[:200]:
+            dims = {
+                "group": str(item.get("group") or ""),
+                "topic": str(item.get("topic") or ""),
+                "partition": str(item.get("partition") or ""),
+            }
+            add("kafka_partition_consumer_lag", "分区消费 Lag", item.get("lag"), "count", dims, "offsets")
+        return rows
 
     def close(self) -> None:
         global _producer, _admin

@@ -70,11 +70,24 @@
 
         <section class="card">
           <div class="card-head"><h3>节点（{{ nodes.length }}）</h3><span class="muted tiny">点击行查看节点详情</span></div>
+          <div class="filters">
+            <select v-model="filters.status" class="select">
+              <option value="">状态：全部</option>
+              <option value="ready">Ready</option>
+              <option value="not_ready">NotReady</option>
+            </select>
+            <select v-model="filters.role" class="select">
+              <option value="">角色：全部</option>
+              <option v-for="role in roleOptions" :key="role" :value="role">{{ role }}</option>
+            </select>
+            <input v-model="filters.keyword" class="input kw" placeholder="搜索节点名称或角色" />
+            <span class="muted tiny">显示 {{ filteredNodes.length }} / {{ nodes.length }}</span>
+          </div>
           <div class="table-scroll">
             <table class="table">
               <thead><tr><th>节点</th><th>角色</th><th>状态</th><th>资源压力</th><th>用量（CPU / 内存）</th><th>Allocatable</th><th>Capacity</th></tr></thead>
               <tbody>
-                <tr v-for="n in nodes" :key="n.name" class="row-click" @click="openNodeDrawer(n)">
+                <tr v-for="n in filteredNodes" :key="n.name" class="row-click" @click="openNodeDrawer(n)">
                   <td><b>{{ n.name }}</b></td>
                   <td>{{ rolesText(n) }}</td>
                   <td><span class="tag" :class="n.ready ? 'tag-ok' : 'tag-err'">{{ n.ready ? 'Ready' : 'NotReady' }}</span></td>
@@ -83,7 +96,7 @@
                   <td class="mono tiny">{{ kvText(n.allocatable) }}</td>
                   <td class="mono tiny">{{ kvText(n.capacity) }}</td>
                 </tr>
-                <tr v-if="!nodes.length"><td colspan="7" class="empty-inline">暂无节点数据</td></tr>
+                <tr v-if="!filteredNodes.length"><td colspan="7" class="empty-inline">当前条件下没有节点</td></tr>
               </tbody>
             </table>
           </div>
@@ -196,6 +209,7 @@ const fatal = ref('')
 const loading = ref(false)
 const clusterErr = ref('')
 const nowTick = ref(Date.now())
+const filters = reactive({ keyword: '', status: '', role: '' })
 const drawer = reactive({ open: false, node: null, pods: [], loading: false, err: '' })
 
 let controller = null
@@ -226,6 +240,17 @@ const recentEvents = computed(() => (Array.isArray(s.value.events?.recent) ? s.v
 const netpol = computed(() => s.value.netpol || {})
 const pvcStat = computed(() => s.value.storage?.pvc || {})
 const restartTop = computed(() => (Array.isArray(s.value.pods?.restart_top) ? s.value.pods.restart_top : []).slice(0, 5))
+const roleOptions = computed(() => [...new Set(nodes.value.flatMap((n) => Array.isArray(n.roles) ? n.roles : []).filter(Boolean))].sort())
+const filteredNodes = computed(() => {
+  const keyword = filters.keyword.trim().toLowerCase()
+  return nodes.value.filter((n) => {
+    if (filters.status === 'ready' && !n.ready) return false
+    if (filters.status === 'not_ready' && n.ready) return false
+    if (filters.role && !(Array.isArray(n.roles) ? n.roles : []).includes(filters.role)) return false
+    if (keyword && !`${n.name || ''} ${(Array.isArray(n.roles) ? n.roles : []).join(' ')}`.toLowerCase().includes(keyword)) return false
+    return true
+  })
+})
 const nodeConditions = computed(() => {
   const c = drawer.node?.conditions
   return Array.isArray(c) ? c : []
@@ -370,14 +395,22 @@ function evMsg(ev) { return ev?.message || ev?.msg || ev?.note || ev?.reason || 
 
 function restoreUi() {
   const saved = getTabState(workbench.state.activeKey) || {}
+  const f = saved.filters || {}
+  if (typeof f.keyword === 'string') filters.keyword = f.keyword
+  if (typeof f.status === 'string') filters.status = f.status
+  if (typeof f.role === 'string') filters.role = f.role
   if (saved.scrollY !== undefined) {
     nextTick(() => { const el = document.querySelector('.content'); if (el) el.scrollTop = saved.scrollY })
   }
 }
 function saveUi() {
   const el = document.querySelector('.content')
-  setTabState(workbench.state.activeKey, { scrollY: el ? el.scrollTop : 0 })
+  setTabState(workbench.state.activeKey, { filters: { keyword: filters.keyword, status: filters.status, role: filters.role }, scrollY: el ? el.scrollTop : 0 })
 }
+
+watch(filters, () => {
+  if (tabAlive) saveUi()
+}, { deep: true })
 
 watch(selectedClusterId, (id) => {
   if (!tabAlive) return
@@ -431,6 +464,9 @@ onUnmounted(() => {
 .guide-icon { font-size: 40px; }
 .k8s-error { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .k8s-error .big { font-weight: 700; color: var(--err); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.filters .select, .filters .input { width: auto; }
+.filters .kw { min-width: 220px; }
 .mgrid { display: grid; grid-template-columns: repeat(6, minmax(150px, 1fr)); gap: 12px; }
 .mcard { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); padding: 12px 14px; display: flex; flex-direction: column; gap: 4px; }
 .mcard > span { font-size: 12px; color: var(--muted); }

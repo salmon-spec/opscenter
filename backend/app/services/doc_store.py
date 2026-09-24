@@ -263,6 +263,93 @@ class DocStore:
             result.append({"name": name, "count": count, "size": size})
         return result
 
+    def monitor_metrics(self) -> list[dict]:
+        client = _get_client()
+        if client is None:
+            return []
+        rows: list[dict] = []
+
+        def add(key: str, label: str, value: Any, unit: str = "count",
+                dimensions: dict | None = None, source: str = "serverStatus") -> None:
+            if value is None:
+                return
+            rows.append({"key": key, "label": label, "value": value, "unit": unit,
+                         "dimensions": dimensions or {}, "source": source})
+
+        def number(value: Any) -> float | None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        status = {}
+        try:
+            status = client.admin.command("serverStatus") or {}
+        except Exception:
+            status = {}
+        connections = status.get("connections") if isinstance(status.get("connections"), dict) else {}
+        memory = status.get("mem") if isinstance(status.get("mem"), dict) else {}
+        network = status.get("network") if isinstance(status.get("network"), dict) else {}
+        opcounters = status.get("opcounters") if isinstance(status.get("opcounters"), dict) else {}
+        add("mongodb_current_connections", "当前连接数", connections.get("current"))
+        add("mongodb_available_connections", "可用连接数", connections.get("available"))
+        add("mongodb_active_connections", "活跃连接数", connections.get("active"))
+        add("mongodb_memory_resident_bytes", "常驻内存", memory.get("resident"), "MB")
+        add("mongodb_memory_virtual_bytes", "虚拟内存", memory.get("virtual"), "MB")
+        add("mongodb_network_bytes_in", "网络入站累计", network.get("bytesIn"), "B")
+        add("mongodb_network_bytes_out", "网络出站累计", network.get("bytesOut"), "B")
+        for key, label in (("insert", "Insert 累计"), ("query", "Query 累计"),
+                           ("update", "Update 累计"), ("delete", "Delete 累计"),
+                           ("getmore", "GetMore 累计"), ("command", "Command 累计")):
+            add(f"mongodb_op_{key}_total", label, opcounters.get(key))
+
+        try:
+            repl = client.admin.command("replSetGetStatus") or {}
+            members = repl.get("members") if isinstance(repl.get("members"), list) else []
+            healthy = 0
+            max_lag = 0
+            for member in members:
+                if not isinstance(member, dict):
+                    continue
+                if int(member.get("health") or 0) == 1:
+                    healthy += 1
+                lag = number(member.get("replicationLag"))
+                if lag is not None:
+                    max_lag = max(max_lag, int(lag))
+                dims = {"node": str(member.get("name") or member.get("_id") or "")}
+                add("mongodb_member_health", "成员健康", member.get("health"), "bool", dims, "replSetGetStatus")
+                add("mongodb_member_state", "成员状态码", member.get("stateStr") and member.get("state"),
+                    "count", dims, "replSetGetStatus")
+                add("mongodb_member_replication_lag_seconds", "复制延迟", lag, "s", dims,
+                    "replSetGetStatus")
+            add("mongodb_replica_members_total", "副本集成员数", len(members))
+            add("mongodb_replica_healthy_members", "健康成员数", healthy)
+            add("mongodb_replication_lag_seconds", "最大复制延迟", max_lag, "s")
+        except Exception:
+            pass
+
+        databases = self.list_databases()
+        add("mongodb_databases_total", "数据库数", len(databases))
+        add("mongodb_size_on_disk_bytes", "数据库总容量",
+            sum(int(item.get("size_on_disk") or 0) for item in databases), "B")
+        for database in databases[:100]:
+            name = str(database.get("name") or "")
+            if not name:
+                continue
+            dims = {"database": name}
+            add("mongodb_database_size_bytes", "数据库容量", database.get("size_on_disk"), "B", dims)
+            add("mongodb_database_collections", "集合数", database.get("collections"), "count", dims)
+
+        collections = self.list_collections(config.MONGO_DB, limit=200)
+        for collection in collections[:200]:
+            name = str(collection.get("name") or "")
+            if not name:
+                continue
+            dims = {"database": config.MONGO_DB, "collection": name}
+            add("mongodb_collection_documents", "文档数", collection.get("count"), "count", dims)
+            add("mongodb_collection_size_bytes", "集合大小", collection.get("size"), "B", dims)
+        return rows
+
     def close(self) -> None:
         global _client
         client, _client = _client, None

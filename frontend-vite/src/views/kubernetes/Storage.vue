@@ -38,13 +38,31 @@
           <span>⚠ 存储风险：</span><span class="partial-item">{{ warnText }}</span>
         </div>
 
-        <section class="card">
-          <div class="card-head"><h3>PersistentVolumeClaim（{{ pvcs.length }}）</h3></div>
+        <div class="filters">
+          <select v-model="filters.kind" class="select">
+            <option value="all">资源：全部</option>
+            <option value="pvc">PersistentVolumeClaim</option>
+            <option value="pv">PersistentVolume</option>
+          </select>
+          <select v-model="filters.namespace" class="select">
+            <option value="">命名空间：全部</option>
+            <option v-for="ns in namespaceOptions" :key="ns" :value="ns">{{ ns }}</option>
+          </select>
+          <select v-model="filters.status" class="select">
+            <option value="">状态：全部</option>
+            <option v-for="status in statusOptions" :key="status" :value="status">{{ status }}</option>
+          </select>
+          <input v-model="filters.keyword" class="input kw" placeholder="搜索名称、StorageClass 或绑定卷" />
+          <span class="muted tiny">PVC {{ filteredPvcs.length }} · PV {{ filteredPvs.length }}</span>
+        </div>
+
+        <section v-if="showKind('pvc')" class="card">
+          <div class="card-head"><h3>PersistentVolumeClaim（{{ filteredPvcs.length }}）</h3></div>
           <div class="table-scroll">
             <table class="table">
               <thead><tr><th>名称</th><th>命名空间</th><th>状态</th><th>容量</th><th>StorageClass</th><th>访问模式</th><th>绑定卷</th><th>Age</th></tr></thead>
               <tbody>
-                <tr v-for="(p, i) in pvcs" :key="`${p.namespace || ''}/${p.name || i}`">
+                <tr v-for="(p, i) in filteredPvcs" :key="`${p.namespace || ''}/${p.name || i}`">
                   <td><b>{{ p.name || '—' }}</b></td>
                   <td>{{ p.namespace || '—' }}</td>
                   <td><span class="tag" :class="pvcPhaseClass(p.phase)">{{ pvcPhaseLabel(p.phase) }}</span></td>
@@ -54,19 +72,19 @@
                   <td class="mono tiny">{{ p.volume_name || p.volume || '—' }}</td>
                   <td class="nowrap">{{ fmtAge(p.age) }}</td>
                 </tr>
-                <tr v-if="!pvcs.length"><td colspan="8" class="empty-inline">暂无 PVC</td></tr>
+                <tr v-if="!filteredPvcs.length"><td colspan="8" class="empty-inline">当前条件下没有 PVC</td></tr>
               </tbody>
             </table>
           </div>
         </section>
 
-        <section class="card">
-          <div class="card-head"><h3>PersistentVolume（{{ pvs.length }}）</h3></div>
+        <section v-if="showKind('pv')" class="card">
+          <div class="card-head"><h3>PersistentVolume（{{ filteredPvs.length }}）</h3></div>
           <div class="table-scroll">
             <table class="table">
               <thead><tr><th>名称</th><th>状态</th><th>容量</th><th>回收策略</th><th>StorageClass</th><th>绑定 Claim</th><th>Age</th></tr></thead>
               <tbody>
-                <tr v-for="(pv, i) in pvs" :key="pv.name || i">
+                <tr v-for="(pv, i) in filteredPvs" :key="pv.name || i">
                   <td><b>{{ pv.name || '—' }}</b></td>
                   <td><span class="tag" :class="pvPhaseClass(pv.phase)">{{ pvPhaseLabel(pv.phase) }}</span></td>
                   <td>{{ pv.capacity || '—' }}</td>
@@ -75,7 +93,7 @@
                   <td class="tiny">{{ claimText(pv) }}</td>
                   <td class="nowrap">{{ fmtAge(pv.age) }}</td>
                 </tr>
-                <tr v-if="!pvs.length"><td colspan="7" class="empty-inline">暂无 PV</td></tr>
+                <tr v-if="!filteredPvs.length"><td colspan="7" class="empty-inline">当前条件下没有 PV</td></tr>
               </tbody>
             </table>
           </div>
@@ -107,6 +125,7 @@ const fatal = ref('')
 const loading = ref(false)
 const clusterErr = ref('')
 const nowTick = ref(Date.now())
+const filters = reactive({ kind: 'all', namespace: '', status: '', keyword: '' })
 
 let controller = null
 let pollTimer = null
@@ -139,6 +158,31 @@ const subText = computed(() => {
   if (!c) return 'PersistentVolumeClaim 与 PersistentVolume'
   return `${c.name}${c.version ? ' · ' + c.version : ''} · PVC / PV`
 })
+
+const namespaceOptions = computed(() => [...new Set([
+  ...pvcs.value.map((item) => item.namespace),
+  ...pvs.value.map((item) => item.claim_namespace || item.claimNamespace),
+].filter(Boolean))].sort())
+const statusOptions = computed(() => [...new Set([
+  ...pvcs.value.map((item) => item.phase),
+  ...pvs.value.map((item) => item.phase),
+].filter(Boolean))].sort())
+
+function filterStorageRows(rows, isPvc) {
+  const keyword = filters.keyword.trim().toLowerCase()
+  return rows.filter((item) => {
+    const namespace = isPvc ? item.namespace : (item.claim_namespace || item.claimNamespace || '')
+    if (filters.namespace && namespace !== filters.namespace) return false
+    if (filters.status && String(item.phase || '').toLowerCase() !== filters.status.toLowerCase()) return false
+    const text = [item.name, namespace, item.phase, item.capacity, item.storage_class, item.storageClass,
+      item.volume_name, item.volume, isPvc ? accessModes(item) : claimText(item), item.reclaim_policy].filter(Boolean).join(' ').toLowerCase()
+    return !keyword || text.includes(keyword)
+  })
+}
+
+const filteredPvcs = computed(() => filterStorageRows(pvcs.value, true))
+const filteredPvs = computed(() => filterStorageRows(pvs.value, false))
+function showKind(kind) { return filters.kind === 'all' || filters.kind === kind }
 
 async function initClusters(force = false) {
   clusterErr.value = ''
@@ -262,14 +306,23 @@ function fmtAge(v) {
 
 function restoreUi() {
   const saved = getTabState(workbench.state.activeKey) || {}
+  const f = saved.filters || {}
+  if (typeof f.kind === 'string') filters.kind = f.kind
+  if (typeof f.namespace === 'string') filters.namespace = f.namespace
+  if (typeof f.status === 'string') filters.status = f.status
+  if (typeof f.keyword === 'string') filters.keyword = f.keyword
   if (saved.scrollY !== undefined) {
     nextTick(() => { const el = document.querySelector('.content'); if (el) el.scrollTop = saved.scrollY })
   }
 }
 function saveUi() {
   const el = document.querySelector('.content')
-  setTabState(workbench.state.activeKey, { scrollY: el ? el.scrollTop : 0 })
+  setTabState(workbench.state.activeKey, { filters: { kind: filters.kind, namespace: filters.namespace, status: filters.status, keyword: filters.keyword }, scrollY: el ? el.scrollTop : 0 })
 }
+
+watch(filters, () => {
+  if (tabAlive) saveUi()
+}, { deep: true })
 
 watch(selectedClusterId, (id) => {
   if (!tabAlive) return
@@ -323,6 +376,9 @@ onUnmounted(() => {
 .guide-icon { font-size: 40px; }
 .k8s-error { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .k8s-error .big { font-weight: 700; color: var(--err); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.filters .select, .filters .input { width: auto; }
+.filters .kw { min-width: 240px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .card-head h3 { margin: 0; font-size: 14px; }
 .table-scroll { overflow: auto; }

@@ -170,6 +170,11 @@ def _mock_handler(request: httpx.Request) -> httpx.Response:
             {"metadata": {"name": "k8s-infra-01"}, "usage": {"cpu": "900m", "memory": "6442450944"}}]})
     if path == "/apis/metrics.k8s.io/v1beta1/pods":
         return httpx.Response(200, json={"items": []})
+    if path.startswith("/apis/metrics.k8s.io/v1beta1/namespaces/") and path.endswith("/pods"):
+        return httpx.Response(200, json={"items": [
+            {"metadata": {"name": "backend-1", "namespace": "opscenter"},
+             "containers": [{"name": "backend", "usage": {"cpu": "50m", "memory": "67108864"}}]},
+        ]})
     if path.startswith("/apis/apps/v1/namespaces/") and "replicasets" in path:
         return httpx.Response(200, json={"items": [
             {"metadata": {"name": "backend-abc", "namespace": "opscenter",
@@ -318,6 +323,7 @@ def test_pod_detail_owner_and_probes(k8s_env):
     assert data["owner"]["kind"] == "Deployment" and data["owner"]["name"] == "backend"
     assert data["containers"][0]["name"] == "backend"
     assert data["phase"] == "Running"
+    assert data["containers"][0]["usage"] == {"cpu": "0.05", "memory": "64.0Mi"}
 
 
 def test_pod_logs_constraints(k8s_env):

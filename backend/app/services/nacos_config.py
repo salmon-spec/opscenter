@@ -199,10 +199,12 @@ class NacosConfig:
         except Exception:
             return {"total": 0, "configs": []}
 
-    def list_services(self) -> list[dict]:
+    def list_services(self, *, strict: bool = False, errors: list[str] | None = None) -> list[dict]:
         try:
             resp = self._get("/nacos/v1/ns/service/list", {"pageNo": 1, "pageSize": 100})
             if resp is None or resp.status_code != 200:
+                if strict:
+                    raise RuntimeError(f"service list HTTP {getattr(resp, 'status_code', 'unavailable')}")
                 return []
             body = resp.json() or {}
             names = body.get("doms") or []
@@ -213,15 +215,64 @@ class NacosConfig:
                 try:
                     inst = self._get("/nacos/v1/ns/instance/list", {"serviceName": svc["name"]})
                     if inst is None or inst.status_code != 200:
+                        if strict:
+                            svc["instance_count"] = None
+                            svc["healthy_count"] = None
+                            if errors is not None:
+                                errors.append(f"service {svc['name']}: instance list unavailable")
                         continue
                     hosts = (inst.json() or {}).get("hosts") or []
                     svc["instance_count"] = len(hosts)
                     svc["healthy_count"] = sum(1 for h in hosts if h.get("enabled", True) and h.get("healthy", False))
                 except Exception:
+                    if strict:
+                        svc["instance_count"] = None
+                        svc["healthy_count"] = None
+                        if errors is not None:
+                            errors.append(f"service {svc['name']}: instance query failed")
                     continue
             return services
         except Exception:
+            if strict:
+                raise
             return []
+
+    def monitor_metrics(self) -> dict:
+        errors: list[str] = []
+        try:
+            services = self.list_services(strict=True, errors=errors)
+        except Exception as exc:
+            return {"metrics": [], "errors": [f"services: {exc}"]}
+        configs = self.list_configs(page=1, size=1)
+        rows: list[dict] = []
+
+        def add(key: str, label: str, value: Any, unit: str = "count",
+                dimensions: dict | None = None, source: str = "openapi") -> None:
+            if value is None:
+                return
+            rows.append({"key": key, "label": label, "value": value, "unit": unit,
+                         "dimensions": dimensions or {}, "source": source})
+
+        known = [item for item in services if item.get("instance_count") is not None
+                 and item.get("healthy_count") is not None]
+        instance_count = sum(int(item.get("instance_count") or 0) for item in known)
+        healthy_count = sum(int(item.get("healthy_count") or 0) for item in known)
+        add("nacos_services_total", "服务数", len(services))
+        if len(known) == len(services):
+            add("nacos_instances_total", "实例数", instance_count)
+            add("nacos_healthy_instances", "健康实例数", healthy_count)
+            add("nacos_unhealthy_instances", "异常实例数", max(0, instance_count - healthy_count))
+        add("nacos_configs_total", "配置数",
+            configs.get("total") if isinstance(configs, dict) else None)
+
+        for service in services[:200]:
+            name = str(service.get("name") or "")
+            if not name:
+                continue
+            dims = {"service": name, "group": str(service.get("group") or NACOS_GROUP)}
+            add("nacos_service_instances", "服务实例数", service.get("instance_count"), "count", dims)
+            add("nacos_service_healthy_instances", "服务健康实例数", service.get("healthy_count"), "count", dims)
+        return {"metrics": rows, "errors": errors}
 
     def get_overlay(self) -> dict:
         raw = self.get_config()

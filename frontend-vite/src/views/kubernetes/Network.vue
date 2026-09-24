@@ -35,13 +35,28 @@
           <span>⚠ 部分数据源异常：</span><span class="partial-item">{{ partialText }}</span>
         </div>
 
-        <section class="card">
-          <div class="card-head"><h3>Services（{{ services.length }}）</h3></div>
+        <div class="filters">
+          <select v-model="filters.kind" class="select">
+            <option value="all">资源：全部</option>
+            <option value="services">Services</option>
+            <option value="ingresses">Ingresses</option>
+            <option value="netpol">NetworkPolicy</option>
+          </select>
+          <select v-model="filters.namespace" class="select">
+            <option value="">命名空间：全部</option>
+            <option v-for="ns in namespaceOptions" :key="ns" :value="ns">{{ ns }}</option>
+          </select>
+          <input v-model="filters.keyword" class="input kw" placeholder="搜索名称、类型、IP 或 Host" />
+          <span class="muted tiny">Service {{ filteredServices.length }} · Ingress {{ filteredIngresses.length }} · NetPol {{ filteredNetpol.length }}</span>
+        </div>
+
+        <section v-if="showKind('services')" class="card">
+          <div class="card-head"><h3>Services（{{ filteredServices.length }}）</h3></div>
           <div class="table-scroll">
             <table class="table">
               <thead><tr><th>名称</th><th>命名空间</th><th>类型</th><th>Cluster IP</th><th>外部 IP</th><th>端口</th><th>端点</th><th>Age</th></tr></thead>
               <tbody>
-                <tr v-for="(sv, i) in services" :key="`${sv.namespace || ''}/${sv.name || i}`">
+                <tr v-for="(sv, i) in filteredServices" :key="`${sv.namespace || ''}/${sv.name || i}`">
                   <td><b>{{ sv.name || '—' }}</b></td>
                   <td>{{ sv.namespace || '—' }}</td>
                   <td><span class="tag">{{ sv.type || '—' }}</span></td>
@@ -55,19 +70,19 @@
                   </td>
                   <td class="nowrap">{{ fmtAge(sv.age) }}</td>
                 </tr>
-                <tr v-if="!services.length"><td colspan="8" class="empty-inline">暂无 Service</td></tr>
+                <tr v-if="!filteredServices.length"><td colspan="8" class="empty-inline">当前条件下没有 Service</td></tr>
               </tbody>
             </table>
           </div>
         </section>
 
-        <section class="card">
-          <div class="card-head"><h3>Ingresses（{{ ingresses.length }}）</h3></div>
+        <section v-if="showKind('ingresses')" class="card">
+          <div class="card-head"><h3>Ingresses（{{ filteredIngresses.length }}）</h3></div>
           <div class="table-scroll">
             <table class="table">
               <thead><tr><th>名称</th><th>命名空间</th><th>Hosts</th><th>规则</th><th>TLS</th><th>Age</th></tr></thead>
               <tbody>
-                <tr v-for="(ing, i) in ingresses" :key="`${ing.namespace || ''}/${ing.name || i}`">
+                <tr v-for="(ing, i) in filteredIngresses" :key="`${ing.namespace || ''}/${ing.name || i}`">
                   <td><b>{{ ing.name || '—' }}</b></td>
                   <td>{{ ing.namespace || '—' }}</td>
                   <td class="tiny">{{ hostsText(ing) }}</td>
@@ -75,19 +90,19 @@
                   <td class="tiny">{{ tlsText(ing) }}</td>
                   <td class="nowrap">{{ fmtAge(ing.age) }}</td>
                 </tr>
-                <tr v-if="!ingresses.length"><td colspan="6" class="empty-inline">暂无 Ingress</td></tr>
+                <tr v-if="!filteredIngresses.length"><td colspan="6" class="empty-inline">当前条件下没有 Ingress</td></tr>
               </tbody>
             </table>
           </div>
         </section>
 
-        <section class="card">
-          <div class="card-head"><h3>NetworkPolicy（{{ netpolInfo.total ?? netpolInfo.items.length }}）</h3></div>
-          <div class="table-scroll" v-if="netpolInfo.items.length">
+        <section v-if="showKind('netpol')" class="card">
+          <div class="card-head"><h3>NetworkPolicy（{{ filteredNetpol.length }}）</h3></div>
+          <div class="table-scroll" v-if="filteredNetpol.length">
             <table class="table">
               <thead><tr><th>名称</th><th>命名空间</th><th>类型</th><th>Age</th></tr></thead>
               <tbody>
-                <tr v-for="(p, i) in netpolInfo.items" :key="`${p.namespace || ''}/${p.name || i}`">
+                <tr v-for="(p, i) in filteredNetpol" :key="`${p.namespace || ''}/${p.name || i}`">
                   <td><b>{{ p.name || '—' }}</b></td>
                   <td>{{ p.namespace || '—' }}</td>
                   <td>{{ npKind(p) }}</td>
@@ -96,7 +111,7 @@
               </tbody>
             </table>
           </div>
-          <div v-else class="empty-inline">暂无 NetworkPolicy</div>
+          <div v-else class="empty-inline">当前条件下没有 NetworkPolicy</div>
         </section>
       </template>
     </template>
@@ -126,6 +141,7 @@ const fatal = ref('')
 const loading = ref(false)
 const clusterErr = ref('')
 const nowTick = ref(Date.now())
+const filters = reactive({ kind: 'all', namespace: '', keyword: '' })
 
 let controller = null
 let pollTimer = null
@@ -148,6 +164,25 @@ const subText = computed(() => {
   if (!c) return 'Service、Ingress 与 NetworkPolicy'
   return `${c.name}${c.version ? ' · ' + c.version : ''} · Service / Ingress / NetworkPolicy`
 })
+
+const namespaceOptions = computed(() => [...new Set([
+  ...services.value.map((item) => item.namespace),
+  ...ingresses.value.map((item) => item.namespace),
+  ...netpolInfo.items.map((item) => item.namespace),
+].filter(Boolean))].sort())
+
+function filterRows(rows, textOf) {
+  const keyword = filters.keyword.trim().toLowerCase()
+  return rows.filter((item) => {
+    if (filters.namespace && item.namespace !== filters.namespace) return false
+    return !keyword || textOf(item).toLowerCase().includes(keyword)
+  })
+}
+
+const filteredServices = computed(() => filterRows(services.value, (item) => [item.name, item.namespace, item.type, item.cluster_ip, externalIps(item), portsText(item)].filter(Boolean).join(' ')))
+const filteredIngresses = computed(() => filterRows(ingresses.value, (item) => [item.name, item.namespace, hostsText(item), rulesText(item), tlsText(item)].filter(Boolean).join(' ')))
+const filteredNetpol = computed(() => filterRows(netpolInfo.items, (item) => [item.name, item.namespace, npKind(item)].filter(Boolean).join(' ')))
+function showKind(kind) { return filters.kind === 'all' || filters.kind === kind }
 
 async function initClusters(force = false) {
   clusterErr.value = ''
@@ -269,14 +304,22 @@ function fmtAge(v) {
 
 function restoreUi() {
   const saved = getTabState(workbench.state.activeKey) || {}
+  const f = saved.filters || {}
+  if (typeof f.kind === 'string') filters.kind = f.kind
+  if (typeof f.namespace === 'string') filters.namespace = f.namespace
+  if (typeof f.keyword === 'string') filters.keyword = f.keyword
   if (saved.scrollY !== undefined) {
     nextTick(() => { const el = document.querySelector('.content'); if (el) el.scrollTop = saved.scrollY })
   }
 }
 function saveUi() {
   const el = document.querySelector('.content')
-  setTabState(workbench.state.activeKey, { scrollY: el ? el.scrollTop : 0 })
+  setTabState(workbench.state.activeKey, { filters: { kind: filters.kind, namespace: filters.namespace, keyword: filters.keyword }, scrollY: el ? el.scrollTop : 0 })
 }
+
+watch(filters, () => {
+  if (tabAlive) saveUi()
+}, { deep: true })
 
 watch(selectedClusterId, (id) => {
   if (!tabAlive) return
@@ -331,6 +374,9 @@ onUnmounted(() => {
 .guide-icon { font-size: 40px; }
 .k8s-error { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .k8s-error .big { font-weight: 700; color: var(--err); }
+.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.filters .select, .filters .input { width: auto; }
+.filters .kw { min-width: 230px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .card-head h3 { margin: 0; font-size: 14px; }
 .table-scroll { overflow: auto; }

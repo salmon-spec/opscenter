@@ -54,6 +54,15 @@ from app.agent_tasks import AGENT_TASKS
 # === v5.0.0 中间件接入（K3s middleware ns） ===
 from app.auth import MutationAuthMiddleware, get_current_user, require_operator, router as auth_router
 from app.data_services import router as data_services_router
+from app.data_service_config import (
+    apply_persisted_configs,
+    router as data_service_config_router,
+)
+from app.data_service_instances import router as data_service_instances_router
+from app.data_service_monitor import (
+    middleware_metrics_loop,
+    router as data_service_monitor_router,
+)
 from app.extension_modules import (
     command_code_usage_loop,
     router as extension_modules_router,
@@ -333,6 +342,12 @@ app.include_router(k8s_monitor_router)
 app.include_router(server_details_router)
 # v5.0.0 数据服务（Redis/MQ/Kafka/ZK/Nacos/MinIO/MongoDB 纳管 + 只读浏览）
 app.include_router(data_services_router)
+# v5.2.3 数据服务连接配置（加密保存，保存后热生效）
+app.include_router(data_service_config_router)
+# v5.3.0 同类多实例（主实例 + 额外只读监控实例）
+app.include_router(data_service_instances_router)
+# v5.2.2 数据服务监控与多维指标（历史采样默认关闭）
+app.include_router(data_service_monitor_router)
 # v5.1.0 外部服务模块化接口（模块管理 + sandbox iframe 托管 + OSS 只读浏览）
 app.include_router(extension_modules_router)
 
@@ -1344,6 +1359,10 @@ async def startup():
             _ensure_new_columns()
             _migrate_legacy_service_credentials()
             try:
+                apply_persisted_configs()
+            except Exception as exc:
+                print(f"[data-services] config apply skipped: {exc}", flush=True)
+            try:
                 seed_extension_modules()
             except Exception as exc:
                 print(f"[modules] seed skipped: {exc}", flush=True)
@@ -1449,6 +1468,7 @@ async def startup():
     _start_periodic("report", report_loop)    # v3.28 R2 日报（REPORT_ENABLED=false 关闭）
     _start_periodic("retention", retention_loop)   # 每天 01:00 清理过期数据
     _start_periodic("command-code-usage", command_code_usage_loop)
+    _start_periodic("middleware-metrics", middleware_metrics_loop)
     seed_default_rules()
     seed_cert_rule()
     seed_backup_rule()                    # 幂等 seed 默认规则（仅空表时写入）

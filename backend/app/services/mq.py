@@ -70,6 +70,28 @@ def _sanitize(value: Any, limit: int = 500) -> str:
     return text[:limit]
 
 
+def _oldest_message_age_seconds(item: dict) -> float | int | None:
+    """Return the age of the queue head when RabbitMQ exposes its timestamp."""
+    try:
+        messages = int(item.get("messages") or 0)
+    except (TypeError, ValueError):
+        messages = 0
+    if messages <= 0:
+        return 0
+    raw = item.get("head_message_timestamp")
+    if raw in (None, ""):
+        return None
+    try:
+        timestamp = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if timestamp <= 0:
+        return None
+    if timestamp > 10_000_000_000:
+        timestamp /= 1000.0
+    return round(max(0.0, time.time() - timestamp), 3)
+
+
 def _open_connection(url: str):
     """构造 BlockingConnection（惰性；测试可 monkeypatch 本函数）。"""
     params = pika.URLParameters(url)
@@ -432,34 +454,124 @@ class TaskQueue:
             return ""
         return f"http://{host}:15672" if host else ""
 
-    def queues(self) -> list[dict]:
+    def _management_json(self, path: str, *, raise_on_error: bool = False) -> Any:
         try:
             base = self._management_base()
             if not base:
-                return []
+                return None
             response = httpx.get(
-                base + "/api/queues",
+                base + path,
                 auth=self._basic_auth(),
                 timeout=float(MW_PROBE_TIMEOUT or 4.0),
             )
             response.raise_for_status()
-            data = response.json()
-            items = data if isinstance(data, list) else []
-            queues: list[dict] = []
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                queues.append({
-                    "name": item.get("name", ""),
-                    "messages": item.get("messages", 0),
-                    "messages_ready": item.get("messages_ready", 0),
-                    "messages_unacknowledged": item.get("messages_unacknowledged", 0),
-                    "consumers": item.get("consumers", 0),
-                    "state": item.get("state", ""),
-                })
-            return queues
+            return response.json()
         except Exception:
-            return []
+            if raise_on_error:
+                raise
+            return None
+
+    def queues(self, *, strict: bool = False) -> list[dict]:
+        data = self._management_json("/api/queues", raise_on_error=strict)
+        items = data if isinstance(data, list) else []
+        queues: list[dict] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            stats = item.get("message_stats") if isinstance(item.get("message_stats"), dict) else {}
+            queues.append({
+                "name": item.get("name", ""),
+                "vhost": item.get("vhost", ""),
+                "node": item.get("node", ""),
+                "messages": item.get("messages", 0),
+                "messages_ready": item.get("messages_ready", 0),
+                "messages_unacknowledged": item.get("messages_unacknowledged", 0),
+                "message_bytes": item.get("message_bytes", 0),
+                "consumers": item.get("consumers", 0),
+                "consumer_utilisation": item.get("consumer_utilisation"),
+                "memory": item.get("memory", 0),
+                "state": item.get("state", ""),
+                "type": item.get("type", ""),
+                "publish_rate": stats.get("publish_details", {}).get("rate", 0)
+                    if isinstance(stats.get("publish_details"), dict) else 0,
+                "deliver_rate": stats.get("deliver_get_details", {}).get("rate", 0)
+                    if isinstance(stats.get("deliver_get_details"), dict) else 0,
+                "ack_rate": stats.get("ack_details", {}).get("rate", 0)
+                    if isinstance(stats.get("ack_details"), dict) else 0,
+                "oldest_message_age_seconds": _oldest_message_age_seconds(item),
+            })
+        return queues
+
+    def monitor_metrics(self) -> dict:
+        errors: list[str] = []
+        try:
+            queues = self.queues(strict=True)
+        except Exception as exc:
+            queues = []
+            errors.append(f"queues: {exc}")
+        try:
+            overview = self._management_json("/api/overview", raise_on_error=True) or {}
+        except Exception as exc:
+            overview = {}
+            errors.append(f"overview: {exc}")
+        totals = overview.get("object_totals") if isinstance(overview.get("object_totals"), dict) else {}
+        queue_totals = overview.get("queue_totals") if isinstance(overview.get("queue_totals"), dict) else {}
+        message_stats = overview.get("message_stats") if isinstance(overview.get("message_stats"), dict) else {}
+        listeners = overview.get("listeners") if isinstance(overview.get("listeners"), list) else []
+        rows: list[dict] = []
+
+        def add(key: str, label: str, value: Any, unit: str = "count",
+                dimensions: dict | None = None, source: str = "management") -> None:
+            if value is None:
+                return
+            rows.append({"key": key, "label": label, "value": value, "unit": unit,
+                         "dimensions": dimensions or {}, "source": source})
+
+        if overview:
+            add("rabbitmq_connections_total", "连接数", totals.get("connections"))
+            add("rabbitmq_channels_total", "Channel 数", totals.get("channels"))
+            add("rabbitmq_queues_total", "队列数", totals.get("queues"))
+            add("rabbitmq_exchanges_total", "交换机数", totals.get("exchanges"))
+            add("rabbitmq_consumers_total", "消费者数", totals.get("consumers"))
+            add("rabbitmq_messages_total", "消息总数", queue_totals.get("messages"))
+            add("rabbitmq_messages_ready", "Ready 消息", queue_totals.get("messages_ready"))
+            add("rabbitmq_messages_unacked", "Unacked 消息", queue_totals.get("messages_unacknowledged"))
+            for key, label in (("publish", "发布速率"), ("ack", "Ack 速率"),
+                               ("deliver_get", "投递速率"), ("confirm", "确认速率")):
+                detail = message_stats.get(f"{key}_details")
+                if isinstance(detail, dict):
+                    add(f"rabbitmq_{key}_rate", label, detail.get("rate"), "ops/s")
+            add("rabbitmq_listeners_total", "监听器数", len(listeners))
+
+        total_messages = total_ready = total_unacked = total_consumers = 0
+        for queue in queues[:200]:
+            name = str(queue.get("name") or "")
+            if not name:
+                continue
+            dims = {"queue": name}
+            if queue.get("vhost"):
+                dims["namespace"] = str(queue.get("vhost"))
+            if queue.get("node"):
+                dims["node"] = str(queue.get("node"))
+            for item in ("messages", "messages_ready", "messages_unacknowledged", "consumers",
+                         "message_bytes", "memory", "publish_rate", "deliver_rate", "ack_rate", "oldest_message_age_seconds"):
+                value = queue.get(item)
+                unit = "B" if item in {"message_bytes", "memory"} else "count"
+                if item.endswith("_rate"):
+                    unit = "ops/s"
+                if item == "oldest_message_age_seconds":
+                    unit = "s"
+                add(f"rabbitmq_queue_{item}", f"队列 {item}", value, unit, dims)
+            total_messages += int(queue.get("messages") or 0)
+            total_ready += int(queue.get("messages_ready") or 0)
+            total_unacked += int(queue.get("messages_unacknowledged") or 0)
+            total_consumers += int(queue.get("consumers") or 0)
+        if queues:
+            add("rabbitmq_queue_messages_total", "队列消息合计", total_messages)
+            add("rabbitmq_queue_ready_total", "队列 Ready 合计", total_ready)
+            add("rabbitmq_queue_unacked_total", "队列 Unacked 合计", total_unacked)
+            add("rabbitmq_queue_consumers_total", "队列消费者合计", total_consumers)
+        return {"metrics": rows, "errors": errors}
 
 
 task_queue = TaskQueue()

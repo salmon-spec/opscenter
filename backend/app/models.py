@@ -348,6 +348,61 @@ Index(
 )
 
 
+class MiddlewareMetricSample(Base):
+    """Low-cardinality middleware metric samples for data-service monitoring (v5.2.2)."""
+    __tablename__ = "middleware_metric_samples"
+    __table_args__ = (
+        UniqueConstraint(
+            "kind", "metric_key", "dimension_key", "resolution", "sampled_at",
+            name="uq_middleware_metric_sample",
+        ),
+        Index("ix_middleware_metric_lookup", "kind", "metric_key", "resolution", "sampled_at"),
+        Index("ix_middleware_metric_dimension", "kind", "dimension_key", "sampled_at"),
+    )
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    kind = Column(String(32), nullable=False, index=True)
+    metric_key = Column(String(80), nullable=False)
+    value = Column(Float, nullable=False)
+    unit = Column(String(20), nullable=False, default="count")
+    dimensions = Column(JSONB, default=dict)
+    dimension_key = Column(String(512), nullable=False, default="")
+    sampled_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    resolution = Column(String(8), nullable=False, default="raw")
+    quality = Column(String(16), nullable=False, default="ok")
+    source = Column(String(80), nullable=False, default="")
+
+
+class DataServiceConfig(Base):
+    """Encrypted per-kind middleware connection profile (v5.2.3)."""
+    __tablename__ = "data_service_configs"
+
+    kind = Column(String(32), primary_key=True)
+    config_ciphertext = Column(Text, nullable=True)
+    config_updated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DataServiceInstance(Base):
+    """Additional monitoring target for a middleware kind (v5.3.0).
+
+    The per-kind profile in ``data_service_configs`` stays the *primary*
+    instance and keeps driving the in-process integration clients; rows here
+    are extra endpoints that are collected for monitoring only.
+    """
+    __tablename__ = "data_service_instances"
+    __table_args__ = (
+        UniqueConstraint("kind", "name", name="uq_data_service_instance_name"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    kind = Column(String(32), nullable=False, index=True)
+    name = Column(String(80), nullable=False)
+    monitor_enabled = Column(Boolean, nullable=False, default=True)
+    config_ciphertext = Column(Text, nullable=True)
+    config_updated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class MetricRollup(Base):
     """Long-term metric buckets generated from high-frequency samples."""
     __tablename__ = "metric_rollups"

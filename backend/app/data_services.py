@@ -33,6 +33,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from app import data_service_instances as monitor_instances
 from app.auth import require_operator
 from app.config import MW_PROBE_TIMEOUT
 from app.services.doc_store import doc_store
@@ -202,10 +203,34 @@ def data_services_overview(_operator: object = Depends(require_operator)) -> dic
 
 
 @router.get("/{kind}/status")
-def data_service_status(kind: str, _operator: object = Depends(require_operator)) -> dict:
+def data_service_status(
+    kind: str,
+    instance: str = "",
+    _operator: object = Depends(require_operator),
+) -> dict:
     obj = _service_for(kind)
     if obj is None:
         raise HTTPException(status_code=404, detail=f"未知数据服务: {kind}")
+    if str(instance or "").strip() not in ("", "primary"):
+        values, meta = monitor_instances.resolve_target(kind, instance)
+        collected = monitor_instances.collect_instance(kind, values, meta)
+        errors = [f"{kind}: {item}" for item in collected.get("errors") or []]
+        card = {
+            "kind": kind,
+            "name": monitor_instances._NAMES.get(kind, kind),
+            "instance_id": str(meta.get("id")),
+            "instance_name": str(meta.get("name")),
+            "is_primary": False,
+            "configured": True,
+            "available": bool(collected.get("available")),
+            "latency_ms": collected.get("latency_ms"),
+            "endpoint": str(collected.get("endpoint") or ""),
+            "version": str(collected.get("version") or ""),
+            "summary": {},
+            "error": (errors[0].split(": ", 1)[-1] if errors else ""),
+        }
+        return _envelope(card, partial_errors=errors,
+                         source_status={kind: card["available"]})
     try:
         card = _card(kind, obj.status())
     except Exception as exc:

@@ -70,7 +70,6 @@ async function request(path, { method = 'GET', body, query, signal, timeoutMs } 
     if (!res.ok) {
       if (res.status === 401 && path !== '/auth/login') {
         clearAccessToken()
-        window.dispatchEvent(new CustomEvent('ops-auth-required'))
       }
       const err = new Error((data && (data.detail || data.msg)) || `HTTP ${res.status}`)
       err.status = res.status

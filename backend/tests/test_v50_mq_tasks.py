@@ -465,16 +465,22 @@ def test_mq_queues_management_mapping(monkeypatch):
         "name": "opscenter.tasks", "messages": 3, "messages_ready": 2,
         "messages_unacknowledged": 1, "consumers": 1, "state": "running",
         "node": "rabbit@node1",
+        "head_message_timestamp": int((time.time() - 42) * 1000),
     }])
     monkeypatch.setattr(mq_mod, "httpx", stub)
     monkeypatch.setattr(mq_mod, "MQ_MANAGEMENT_URL", "rabbitmq.local:15672")
     monkeypatch.setattr(mq_mod, "MQ_URL", "amqp://user:s3cret@rabbitmq.local:5672/")
 
     queues = task_queue.queues()
-    assert queues == [{
+    assert len(queues) == 1
+    queue = queues[0]
+    assert {key: queue[key] for key in (
+        "name", "messages", "messages_ready", "messages_unacknowledged", "consumers", "state",
+    )} == {
         "name": "opscenter.tasks", "messages": 3, "messages_ready": 2,
         "messages_unacknowledged": 1, "consumers": 1, "state": "running",
-    }]
+    }
+    assert queue["oldest_message_age_seconds"] == pytest.approx(42, abs=1)
     assert stub.calls[0]["url"] == "http://rabbitmq.local:15672/api/queues"
     assert stub.calls[0]["auth"] == ("user", "s3cret")
 

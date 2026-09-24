@@ -17,6 +17,7 @@ import base64
 import logging
 import threading
 import time
+from typing import Any
 
 from app.config import MW_PROBE_TIMEOUT, ZOOKEEPER_HOSTS
 
@@ -157,6 +158,53 @@ class ZKView:
             }
         except Exception:
             return None
+
+    def monitor_metrics(self) -> list[dict]:
+        client = self._backend()
+        if client is None:
+            return []
+        rows: list[dict] = []
+
+        def add(key: str, label: str, value: Any, unit: str = "count",
+                dimensions: dict | None = None, source: str = "zk") -> None:
+            if value is None:
+                return
+            rows.append({"key": key, "label": label, "value": value, "unit": unit,
+                         "dimensions": dimensions or {"instance": ZOOKEEPER_HOSTS}, "source": source})
+
+        add("zookeeper_connected", "连接状态", 1 if str(getattr(client, "state", "")) else 0, "bool")
+        try:
+            data, stat = client.get("/")
+            add("zookeeper_root_children", "根节点子节点数", getattr(stat, "numChildren", None))
+            add("zookeeper_root_data_bytes", "根节点数据大小", len(data or b""), "B")
+            add("zookeeper_root_version", "根节点版本", getattr(stat, "version", None))
+            add("zookeeper_root_mtime_epoch", "根节点修改时间", getattr(stat, "mtime", None), "s")
+        except Exception:
+            pass
+
+        tree = self.tree("/", 2, 1000)
+        count = 0
+        frontier = list(tree.get("children") or [])
+        while frontier:
+            node = frontier.pop()
+            count += 1
+            frontier.extend(node.get("children") or [])
+        add("zookeeper_znode_count", "ZNode 数", count)
+        add("zookeeper_tree_truncated", "树已截断", 1 if tree.get("truncated") else 0, "bool")
+
+        for child in (tree.get("children") or [])[:100]:
+            path = str(child.get("path") or "")
+            if not path:
+                continue
+            try:
+                data, stat = client.get(path)
+                dims = {"instance": ZOOKEEPER_HOSTS, "path": path}
+                add("zookeeper_node_data_bytes", "节点数据大小", len(data or b""), "B", dims)
+                add("zookeeper_node_children", "节点子节点数", getattr(stat, "numChildren", None), "count", dims)
+                add("zookeeper_node_version", "节点版本", getattr(stat, "version", None), "count", dims)
+            except Exception:
+                continue
+        return rows
 
     def close(self) -> None:
         with self._client_lock:
