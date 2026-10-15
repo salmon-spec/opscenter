@@ -15,6 +15,10 @@
     <!-- 事件 -->
     <div v-if="tab === 'events'">
       <div class="filter-row">
+        <select v-model.number="eventDays" class="select" aria-label="告警时间范围" @change="loadEvents">
+          <option :value="365">近一年</option>
+          <option :value="30">近 30 天</option>
+        </select>
         <button
           v-for="f in statusFilters" :key="f.id"
           class="btn btn-sm" :class="eventStatus === f.id ? 'btn-primary' : ''"
@@ -149,6 +153,7 @@ const statusFilters = [
 
 const tab = ref('events')
 const eventStatus = ref('')
+const eventDays = ref(365)
 const events = ref([])
 const rules = ref([])
 const silences = ref([])
@@ -210,7 +215,7 @@ async function scanCertificates() { await write(() => api.post('/modules/alerts/
 async function loadEvents() {
   eventsLoading.value = true
   try {
-    events.value = await api.get('/modules/alerts/api/v1/events', { status: eventStatus.value || undefined, days: 30 })
+    events.value = await api.get('/modules/alerts/api/v1/events', { status: eventStatus.value || undefined, days: eventDays.value })
   } finally {
     eventsLoading.value = false
   }
