@@ -12,7 +12,7 @@ from copy import deepcopy
 import pytest
 from fastapi.testclient import TestClient
 
-from app import topology
+from app import dashboard
 from app.main import app
 
 client = TestClient(app)
@@ -50,23 +50,23 @@ class _Probe:
 @pytest.fixture
 def probe(monkeypatch):
     """全量构建换成计数器，不触碰真实 DB/K3s/WG。"""
-    topology.reset_screen_cache()
+    dashboard.reset_screen_cache()
     p = _Probe()
 
     def _build():
         p.build_calls += 1
-        p.build_saw_lock_held = topology._SCREEN_CACHE_LOCK.locked()
+        p.build_saw_lock_held = dashboard._SCREEN_CACHE_LOCK.locked()
         payload = deepcopy(STUB_BUSINESS)
         payload["k3s"] = {"generation": p.build_calls}
         return payload, f"2026-09-12T00:00:0{p.build_calls}Z"
 
-    monkeypatch.setattr(topology, "_build_screen_business", _build)
+    monkeypatch.setattr(dashboard, "_build_screen_business", _build)
     yield p
-    topology.reset_screen_cache()
+    dashboard.reset_screen_cache()
 
 
 def _expire_cache(seconds=10):
-    topology._SCREEN_CACHE["stored_at"] -= seconds
+    dashboard._SCREEN_CACHE["stored_at"] -= seconds
 
 
 def test_hot_hit_does_not_rebuild(probe):

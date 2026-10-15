@@ -1,0 +1,2 @@
+MAILTO=""
+15 */6 * * * root /usr/local/sbin/opscenter-oss-manifest-export

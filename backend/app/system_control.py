@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.agent_manager import fetch_agent_metrics, fetch_agent_processes, fetch_agent_system_summary, fetch_from_agent
-from app.auth import get_current_user
+from app.auth import get_current_user, require_metric_reader
 from app.config import CONTAINERIZED, PREVIEW_MODE
 from app.database import get_db
 from app.models import Server
@@ -160,7 +160,7 @@ def _cached_summary(server_id: str, started: float, *, stale: bool = False) -> D
     }
 
 
-@router.get("/servers/{server_id}/system/summary", dependencies=[Depends(get_current_user)])
+@router.get("/servers/{server_id}/system/summary", dependencies=[Depends(require_metric_reader)])
 def system_summary(server_id: str, refresh: bool = Query(False)):
     started = time.perf_counter()
     if not refresh:

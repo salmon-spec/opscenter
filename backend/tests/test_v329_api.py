@@ -1,4 +1,4 @@
-"""v3.29 T2/T3 测试：开放 API 密钥 + 服务详情/拓扑/大屏聚合/健康/历史指标。
+"""v3.29 T2/T3 测试：开放 API 密钥 + 服务详情/大屏聚合/健康/历史指标。
 
 与现有测试一致：使用独立测试库 opscenter_test，每个用例重建表。
 运行于 VM2（sys.path 指向 /opt/opscenter/backend）。
@@ -21,14 +21,14 @@ from app.api_keys import router as keys_router
 from app.control import router as control_router
 from app.database import get_db
 from app.models import Base, MetricHistory, Server, Service
-from app.topology import router as topology_router
+from app.dashboard import router as dashboard_router
 
 
 def _make_app() -> FastAPI:
     """组装仅包含 v3.29 新路由的测试应用（main.py 接线前独立验证）。"""
     app = FastAPI()
     app.include_router(keys_router)
-    app.include_router(topology_router)
+    app.include_router(dashboard_router)
     app.include_router(control_router)
     return app
 
@@ -148,36 +148,8 @@ def test_service_detail_not_found():
     assert client.get("/api/v2/services/00000000-0000-0000-0000-000000000000/detail").status_code == 404
 
 
-# ── T3 拓扑 ──
-
-def test_topology_seed_and_idempotent():
-    srv = _add_server()
-    _add_service(srv, "GitLab", "http://x:8082")
-    _add_service(srv, "Jenkins", "http://x:8080")
-    _add_service(srv, "Nexus", "http://x:8081")
-
-    r = client.get("/api/v2/topology?scenario=cicd")
-    assert r.status_code == 200
-    data = r.json()
-    names = {n["name"] for n in data["nodes"]}
-    assert "GitLab" in names and "Jenkins" in names and "Nexus" in names
-    assert len(data["edges"]) >= 2
-    first_edges = len(data["edges"])
-
-    # 再次调用不产生重复边（幂等）
-    r2 = client.get("/api/v2/topology?scenario=cicd")
-    assert len(r2.json()["edges"]) == first_edges
-
-
-def test_topology_bad_scenario():
-    assert client.get("/api/v2/topology?scenario=hack").status_code == 400
-
-
-def test_topology_empty_db():
-    r = client.get("/api/v2/topology?scenario=monitoring")
-    assert r.status_code == 200
-    assert r.json()["nodes"] == []
-    assert r.json()["edges"] == []
+def test_topology_api_removed():
+    assert client.get("/api/v2/topology?scenario=cicd").status_code == 404
 
 
 # ── T3 大屏聚合 / 健康 / 历史 ──

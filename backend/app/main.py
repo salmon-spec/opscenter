@@ -10,14 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, CertCheck, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey, DatabaseInstance
+from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey, DatabaseInstance
 from app.credential_crypto import encrypt_secret
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, fetch_agent_system_summary, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host, resolve_management_hosts, fetch_from_agent
+from app.host_inventory_bridge import publish_host_inventory_telemetry
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count, RECONNECT_GRACE
-from app.cert_scanner import cert_scan_loop, run_cert_scan, seed_cert_rule
 from app.log_scanner import log_scan_loop, run_log_scan
 from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_rule
 from app.image_scanner import image_check_loop, run_image_check
@@ -36,17 +36,15 @@ from app.alerting import (
 )
 from app.config import CONTAINERIZED, CORS_ORIGINS, LOCAL_AGENT_TOKEN, LOCAL_SERVER_NAME, PREVIEW_MODE
 
-# === v3.29 新增模块（T2 密钥 / T3 详情拓扑大屏 / 主机操控 / T4 服务健康） ===
+# === v3.29 新增模块（T2 密钥 / T3 详情与健康大屏 / 主机操控 / T4 服务健康） ===
 from app.api_keys import router as api_keys_router
-from app.topology import router as topology_router
+from app.dashboard import router as dashboard_router
 from app.control import router as control_router
 from app.service_health import run_service_health_cycle, service_health_loop
 from app.plaza import router as plaza_router, plaza_health_loop
 from app.system_control import forget_system_summary, record_system_summary, is_host_network_interface, summarize_network_interfaces, router as system_control_router
 from app.databases import router as databases_router
 from app.ai_context import router as ai_context_router
-from app.ai_ops import router as ai_ops_router
-from app.ai_inspection import ai_inspection_loop
 # === K3s 只读监控 / 主机详情侧栏（需求基线 2026-09-10） ===
 from app.k8s_monitor import router as k8s_monitor_router
 from app.server_details import router as server_details_router
@@ -59,10 +57,7 @@ from app.data_service_config import (
     router as data_service_config_router,
 )
 from app.data_service_instances import router as data_service_instances_router
-from app.data_service_monitor import (
-    middleware_metrics_loop,
-    router as data_service_monitor_router,
-)
+from app.data_service_monitor import router as data_service_monitor_router
 from app.extension_modules import (
     command_code_usage_loop,
     router as extension_modules_router,
@@ -214,7 +209,7 @@ class ServerCreate(BaseModel):
     tags: List[str] = Field(default_factory=list)
     is_local: bool = False
     remark: Optional[str] = None
-    auto_deploy_agent: bool = True
+    auto_deploy_agent: bool = False
     # 双通道地址与 K3s 节点映射（需求基线 §7.3）
     lan_ip: Optional[str] = None
     wireguard_ip: Optional[str] = None
@@ -322,10 +317,10 @@ app.add_middleware(PerformanceMiddleware)
 # operator token is configured, including routes added by future modules.
 app.add_middleware(MutationAuthMiddleware)
 
-# === v3.29 路由挂载（T2 密钥 / T3 详情拓扑大屏 / 主机操控） ===
+# === v3.29 路由挂载（T2 密钥 / T3 详情与健康大屏 / 主机操控） ===
 app.include_router(auth_router)
 app.include_router(api_keys_router)
-app.include_router(topology_router)
+app.include_router(dashboard_router)
 app.include_router(control_router)
 app.include_router(plaza_router)
 app.include_router(system_control_router)
@@ -337,7 +332,6 @@ app.include_router(metrics_history_router)
 app.include_router(log_center_router)
 app.include_router(alloy_manager_router)
 app.include_router(ai_context_router)
-app.include_router(ai_ops_router)
 app.include_router(k8s_monitor_router)
 app.include_router(server_details_router)
 # v5.0.0 数据服务（Redis/MQ/Kafka/ZK/Nacos/MinIO/MongoDB 纳管 + 只读浏览）
@@ -436,6 +430,7 @@ def _run_agent_health_check():
             # scanner also updates hosts and used to deadlock with this loop's
             # previous all-host commit.
             db.commit()
+            publish_host_inventory_telemetry(local_srv)
 
         remote_servers = db.query(Server).filter(Server.agent_type != "local").order_by(Server.id).all()
         for srv in remote_servers:
@@ -468,6 +463,7 @@ def _run_agent_health_check():
                 print(f"[AgentHealthCheck] Error checking {srv.host}: {exc}")
                 db.query(Server).filter(Server.id == srv.id).update({Server.agent_status: "error"})
                 db.commit()
+            publish_host_inventory_telemetry(srv)
 
 
 async def _agent_health_check_loop():
@@ -804,69 +800,6 @@ def delete_alert_silence(silence_id: str):
             raise HTTPException(404, "Silence not found")
         db.delete(sil)
         db.commit()
-        return {"ok": True}
-
-
-# === Cert Checks API (v3.27, D1) ===
-
-class CertCheckCreate(BaseModel):
-    domain: str
-    port: int = 443
-    server_id: Optional[str] = None
-    enabled: bool = True
-
-
-@app.get("/api/v2/cert-checks")
-def list_cert_checks():
-    """证书检查项列表（含最近探测结果）。"""
-    with get_db() as db:
-        checks = db.query(CertCheck).order_by(CertCheck.domain).all()
-        result = []
-        for chk in checks:
-            srv_name = None
-            if chk.server_id:
-                srv = db.query(Server).filter(Server.id == chk.server_id).first()
-                srv_name = srv.name if srv else None
-            result.append({
-                "id": str(chk.id),
-                "server_id": str(chk.server_id) if chk.server_id else None,
-                "server_name": srv_name,
-                "domain": chk.domain, "port": chk.port,
-                "days_left": chk.days_left,
-                "not_after": chk.not_after.isoformat() if chk.not_after else None,
-                "issuer": chk.issuer,
-                "last_error": chk.last_error,
-                "enabled": chk.enabled,
-            })
-        return result
-
-
-@app.post("/api/v2/cert-checks")
-def create_cert_check(req: CertCheckCreate):
-    with get_db() as db:
-        chk = CertCheck(
-            domain=req.domain, port=req.port,
-            server_id=uuid.UUID(req.server_id) if req.server_id else None,
-            enabled=req.enabled,
-        )
-        db.add(chk); db.commit(); db.refresh(chk)
-        return {"id": str(chk.id), "domain": chk.domain}
-
-
-@app.post("/api/v2/cert-checks/scan")
-def trigger_cert_scan():
-    """手动触发一轮证书扫描。"""
-    run_cert_scan()
-    return {"ok": True}
-
-
-@app.delete("/api/v2/cert-checks/{check_id}")
-def delete_cert_check(check_id: str):
-    with get_db() as db:
-        chk = db.query(CertCheck).filter(CertCheck.id == uuid.UUID(check_id)).first()
-        if not chk:
-            raise HTTPException(404, "Cert check not found")
-        db.delete(chk); db.commit()
         return {"ok": True}
 
 
@@ -1379,7 +1312,6 @@ async def startup():
     _start_periodic("agent-health", _agent_health_check_loop)
     # v3.29 T4: 服务健康检查后台循环（间隔/阈值走环境变量）
     _start_periodic("service-health", service_health_loop)
-    _start_periodic("ai-inspection", ai_inspection_loop)
     # v4.5: 服务广场按每个应用的策略探活并沉淀历史数据。
     _start_periodic("plaza-health", plaza_health_loop)
     
@@ -1459,18 +1391,14 @@ async def startup():
     _start_periodic("metric-rollup", metric_rollup_loop)
     # v3.26: 告警引擎 + 数据保留后台任务
     _start_periodic("alerting", alerting_loop)    # 每 60s 一轮评估（ALERTING_ENABLED=false 关闭）
-    _start_periodic("cert-scan", cert_scan_loop)    # v3.27 D1 证书扫描（CERT_SCAN_ENABLED=false 关闭）
     _start_periodic("log-scan", log_scan_loop)    # v3.27 D2 日志扫描（LOG_SCAN_ENABLED=false 关闭）
     _start_periodic("backup-check", backup_check_loop)    # v3.27 D3 备份验证（BACKUP_CHECK_ENABLED=false 关闭）
     _start_periodic("image-check", image_check_loop)    # v3.27 D4 镜像检查（IMAGE_CHECK_ENABLED=false 关闭）
-    # API first, stale Agent upgrades afterwards. This never blocks startup.
-    _start_periodic("agent-upgrade", lambda: asyncio.to_thread(_upgrade_outdated_agents_once))
     _start_periodic("report", report_loop)    # v3.28 R2 日报（REPORT_ENABLED=false 关闭）
     _start_periodic("retention", retention_loop)   # 每天 01:00 清理过期数据
-    _start_periodic("command-code-usage", command_code_usage_loop)
-    _start_periodic("middleware-metrics", middleware_metrics_loop)
+    if os.getenv("OPS_COMMAND_CODE_USAGE_OWNER", "backend") == "backend":
+        _start_periodic("command-code-usage", command_code_usage_loop)
     seed_default_rules()
-    seed_cert_rule()
     seed_backup_rule()                    # 幂等 seed 默认规则（仅空表时写入）
     # Migrate groups.json to per-server format if needed
     _migrate_groups_json()
@@ -1603,27 +1531,8 @@ def _fetch_monitoring_sample(server, host=None):
     return fetch(host) if host else fetch_from_agent(server, fetch)
 
 
-def _upgrade_outdated_agents_once() -> list[str]:
-    """Upgrade running stale Agents without holding a database session over I/O."""
-    current = get_agent_version()
-    with get_db() as db:
-        targets = [
-            str(server.id) for server in db.query(Server).filter(Server.agent_status == "running").all()
-            if _version_parts(server.agent_version) < _version_parts(current)
-            and ((server.agent_type == "local" and not CONTAINERIZED) or bool(server.ssh_key))
-        ]
-        if targets:
-            db.query(Server).filter(Server.id.in_([uuid.UUID(item) for item in targets])).update(
-                {Server.agent_status: "deploying"}, synchronize_session=False,
-            )
-            db.commit()
-    for server_id in targets:
-        _deploy_agent_background(server_id)
-    return targets
-
-
 @app.post("/api/v2/servers", status_code=201)
-def create_server(data: ServerCreate, background_tasks: BackgroundTasks):
+def create_server(data: ServerCreate):
     with get_db() as db:
         duplicate = db.query(Server).filter(Server.host == data.host.strip(), Server.ssh_port == data.ssh_port).first()
         if duplicate:
@@ -1636,7 +1545,7 @@ def create_server(data: ServerCreate, background_tasks: BackgroundTasks):
             ssh_user=data.ssh_user, ssh_key=ssh_key_val,
             tags=data.tags, is_local=data.is_local, remark=data.remark,
             agent_type="local" if data.is_local else "remote",
-            agent_status="deploying" if (not data.is_local and data.auto_deploy_agent and (data.ssh_password or data.ssh_key)) else "not_deployed",
+            agent_status="not_deployed",
             lan_ip=data.lan_ip, wireguard_ip=data.wireguard_ip,
             preferred_management_channel=data.preferred_management_channel or "auto",
             management_address_override=data.management_address_override,
@@ -1648,9 +1557,6 @@ def create_server(data: ServerCreate, background_tasks: BackgroundTasks):
         db.refresh(srv)
         server_id = str(srv.id)
         result = {"id": server_id, "name": srv.name, "host": srv.host, "agent_status": srv.agent_status}
-    if result["agent_status"] == "deploying":
-        # v5.0.0：MQ 可用时走 RabbitMQ 任务队列，否则回退 BackgroundTasks
-        _dispatch_agent_deploy(background_tasks, server_id, data.ssh_password)
     return result
 
 @app.get("/api/v2/servers/{server_id}")
@@ -3871,7 +3777,7 @@ def _collect_agent_metrics():
                 }
                 # v4.8: 大屏容器汇总复用最近 Agent 采集摘要（不为此触发容器列表/SSH）
                 try:
-                    from app.topology import record_agent_snapshot
+                    from app.dashboard import record_agent_snapshot
                     record_agent_snapshot(target.id, data)
                     record_system_summary(target.id, data)
                 except Exception:

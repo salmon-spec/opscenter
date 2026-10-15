@@ -59,12 +59,14 @@ def _server(status="stopped"):
 def test_stopped_agent_recovers_and_refreshes_its_token(monkeypatch):
     server = _server("stopped")
     db = _Db([server])
+    published = []
 
     @contextmanager
     def fake_db():
         yield db
 
     monkeypatch.setattr(main, "get_db", fake_db)
+    monkeypatch.setattr(main, "publish_host_inventory_telemetry", lambda value: published.append(value))
     monkeypatch.setattr(
         main,
         "check_agent_status",
@@ -88,6 +90,7 @@ def test_stopped_agent_recovers_and_refreshes_its_token(monkeypatch):
     assert server.agent_version == "2.2.0"
     assert server.last_seen is not None
     assert db.committed
+    assert published == [server]
 
 
 def test_missing_agent_remains_explicitly_not_deployed(monkeypatch):

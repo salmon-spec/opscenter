@@ -222,7 +222,7 @@ def server_overview(server_id: str):
         k8s_source = "ok" if k8s_node else "unavailable"
 
     # 新鲜度契约（§8.3）：data_timestamp 取最新一个指标采样时刻（无数据则回退响应时刻，
-    # 同时 metrics 源标记为 empty 且 stale=True）；阈值沿用 topology 的 90s。
+    # 同时 metrics 源标记为 empty 且 stale=True）；阈值为 90s。
     return {
         "server": {
             "id": str(server.id),

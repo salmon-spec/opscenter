@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """开放 API 密钥管理（v3.29, T2）。
 
-为开放 API（/api/v2/screen/summary、/api/v2/topology、/api/v2/monitor/history 等）
+为开放 API（/api/v2/screen/summary、/api/v2/monitor/history 等）
 提供 Bearer 密钥鉴权：
 - 数据库仅存 SHA-256 哈希，明文只在创建时返回一次；
 - scope 区分 read / write，write 可调用全部只读接口；
@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
+import app.auth as auth
 from app.auth import get_current_user
 from app.database import get_db
 from app.models import ApiKey
@@ -80,19 +81,22 @@ def require_api_key(scope: str = "read", *, required: bool = False):
     """FastAPI 依赖工厂：开放 API 密钥鉴权。
 
     - 请求头带 Authorization: Bearer <key> → 必须校验通过（无效/停用 401，scope 不足 403）
-    - 不带令牌 → 放行（免登录工作台自身使用；OPS_AUTH_ENABLED=true 时可在此收紧为强制）
+    - 登录模式接受工作台 JWT 或有效 API 密钥，拒绝匿名；required=True 仅接受 API 密钥。
+    - 明确关闭鉴权且未配置运维令牌的旧部署保留匿名兼容。
     """
     def _dependency(
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
     ) -> Optional[ApiKey]:
         if credentials is None:
-            if required:
+            if required or auth.AUTH_ENABLED or auth.OPERATOR_TOKEN:
                 raise HTTPException(
                     status_code=401,
-                    detail="该接口必须使用 API 密钥",
+                    detail="该接口需要登录或 API 密钥",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            # 兼容既有工作台开放接口；AI context 接口始终传 required=True。
+            # 兼容显式关闭鉴权的既有部署；required=True 始终只接受 API 密钥。
+            return None
+        if not required and (auth.AUTH_ENABLED or auth.OPERATOR_TOKEN) and auth.check_access_token(credentials.credentials):
             return None
         row = verify_api_key(credentials.credentials)
         if row is None:

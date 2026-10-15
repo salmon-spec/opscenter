@@ -14,12 +14,6 @@ def test_classify_create_silence():
     assert res == "silence"
 
 
-def test_classify_delete_cert():
-    action, res = _classify("/api/v2/cert-checks/abc-123", "DELETE")
-    assert action == "delete"
-    assert res == "cert"
-
-
 def test_classify_generate_report():
     action, res = _classify("/api/v2/reports/generate", "POST")
     assert action == "generate"

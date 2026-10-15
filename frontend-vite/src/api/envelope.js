@@ -1,4 +1,4 @@
-/* 统一响应信封工具（v5.0.0）：K8s 监控与数据服务共用。
+/* 统一响应信封工具（v5.0.0）：K8s 监控使用。
    信封契约：{ data, data_timestamp, cached, cache_age_seconds, partial_errors, source_status }；
    兼容裸数组/对象（后端旧路径或简化路径）。 */
 

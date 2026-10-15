@@ -13,7 +13,7 @@ services:
       POSTGRES_DB: opscenter
     command: ["postgres", "-c", "shared_buffers=128MB", "-c", "max_connections=80"]
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      - ../../data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U opscenter -d opscenter"]
       interval: 10s
@@ -27,34 +27,44 @@ services:
     command: -config.file=/etc/loki/loki-test.yaml
     volumes:
       - ./loki-test.yaml:/etc/loki/loki-test.yaml:ro
-      - ./data/loki:/loki
+      - ../../data/loki:/loki
     restart: unless-stopped
     mem_limit: 384m
 
   backend:
     build:
-      context: .
+      context: ../..
       dockerfile: deploy/docker/backend.Dockerfile
-    image: opscenter/backend:5.3.1-test
+    image: opscenter/backend:5.5.10-test-extension-owner
     env_file:
-      - ./ai-ops.env
+      - ../../secrets/opscenter-auth.env
+      - ../../secrets/opscenter-metrics.env
     environment:
+      OPS_JWT_PRIVATE_KEY_FILE: /run/secrets/opscenter_jwt_private
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
       DATABASE_URL: postgresql+psycopg://opscenter:${OPS_TEST_POSTGRES_PASSWORD:?set OPS_TEST_POSTGRES_PASSWORD}@db:5432/opscenter
       CONTAINERIZED: "true"
       LOCAL_AGENT_HOST: host.docker.internal
       LOKI_URL: http://loki:3100
       OPERATOR_TOKEN: ""
-      OPS_MONITOR_ALLOW_ANONYMOUS: "true"
+      OPS_AUTH_ENABLED: "true"
+      ALERTING_ENABLED: "false"
+      OPS_COMMAND_CODE_USAGE_OWNER: module
+      OPS_MONITOR_ALLOW_ANONYMOUS: "false"
       GROUPS_JSON_PATH: /opt/opscenter/frontend/groups.json
       K8S_API_URL: https://k8s-master-01:6443
       K8S_TOKEN_FILE: /run/k8s-test/token
       K8S_CA_PATH: /run/k8s-test/ca.crt
-      MW_METRICS_ENABLED: "true"
-      MW_METRICS_INTERVAL_SECONDS: "60"
-      MW_METRICS_RETENTION_DAYS: "7"
+      HOST_INVENTORY_INGEST_URL: http://module-host-inventory:8080/api/v1/agent/telemetry
+      HOST_INVENTORY_INGEST_TOKEN_FILE: /run/secrets/host_inventory_ingest_token
+    secrets:
+      - opscenter_jwt_private
+      - opscenter_jwt_public
+      - host_inventory_ingest_token
     volumes:
-      - ./k8s/token:/run/k8s-test/token:ro
-      - ./k8s/ca.crt:/run/k8s-test/ca.crt:ro
+      - ../../k8s/token:/run/k8s-test/token:ro
+      - ../../k8s/ca.crt:/run/k8s-test/ca.crt:ro
     extra_hosts:
       - host.docker.internal:host-gateway
       # k3s API 证书 SAN 含 k8s-master-01；用主机名经 WG 直连，TLS 域名校验通过
@@ -73,14 +83,343 @@ services:
     restart: unless-stopped
     mem_limit: 768m
 
+  module-k3s:
+    build:
+      context: ../..
+      dockerfile: modules/k3s/Dockerfile
+    image: opscenter/module-k3s:0.2.2-test-db
+    env_file:
+      - ../../secrets/opscenter-module-auth.env
+    environment:
+      MODULE_AUTH_REQUIRED: "true"
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
+      K8S_API_URL: https://k8s-master-01:6443
+      K8S_TOKEN_FILE: /run/k8s-test/token
+      K8S_CA_PATH: /run/k8s-test/ca.crt
+      K8S_TIMEOUT_SECONDS: "5"
+      MODULE_DATABASE_URL_FILE: /run/secrets/k3s_db_url
+    volumes:
+      - ../../k8s/token:/run/k8s-test/token:ro
+      - ../../k8s/ca.crt:/run/k8s-test/ca.crt:ro
+    secrets:
+      - opscenter_jwt_public
+      - k3s_db_url
+    extra_hosts:
+      - k8s-master-01:10.66.66.13
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 192m
+
+  module-host-inventory:
+    build:
+      context: ../..
+      dockerfile: modules/host_inventory/Dockerfile
+    image: opscenter/module-host-inventory:0.2.7-test
+    env_file:
+      - ../../secrets/opscenter-module-auth.env
+    environment:
+      MODULE_AUTH_REQUIRED: "true"
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
+      HOST_INVENTORY_SOURCE_URL: http://backend:9091/api/v2/servers
+      HOST_INVENTORY_TIMEOUT_SECONDS: "5"
+      HOST_INVENTORY_SYNC_ENABLED: "false"
+      HOST_INVENTORY_DATABASE_URL_FILE: /run/secrets/host_inventory_db_url
+      HOST_INVENTORY_INGEST_TOKEN_FILE: /run/secrets/host_inventory_ingest_token
+      OPS_MODULE_INTERNAL_TOKEN_FILE: /run/secrets/host_inventory_internal_token
+    secrets:
+      - opscenter_jwt_public
+      - host_inventory_db_url
+      - host_inventory_ingest_token
+      - host_inventory_internal_token
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 160m
+
+  module-host-monitor:
+    build:
+      context: ../..
+      dockerfile: modules/host_monitor/Dockerfile
+    image: opscenter/module-host-monitor:0.2.3-test
+    env_file:
+      - ../../secrets/opscenter-module-auth.env
+    environment:
+      MODULE_AUTH_REQUIRED: "true"
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
+      HOST_MONITOR_DATABASE_URL_FILE: /run/secrets/host_monitor_db_url
+      HOST_MONITOR_AGENT_TOKEN_FILE: /run/secrets/host_monitor_agent_token
+      HOST_MONITOR_AGENT_ID: 9233ebf3-3fad-46cc-b1bd-e4bd3badaee0
+      HOST_MONITOR_AGENT_NAME: VM1 测试环境
+      HOST_MONITOR_AGENT_HOST: 192.168.1.152
+      HOST_MONITOR_AGENT_PORT: "19100"
+      OPS_MODULE_INTERNAL_TOKEN_FILE: /run/secrets/host_monitor_internal_token
+    secrets:
+      - opscenter_jwt_public
+      - host_monitor_db_url
+      - host_monitor_agent_token
+      - host_monitor_internal_token
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 160m
+
+  module-service-catalog:
+    build:
+      context: ../..
+      dockerfile: modules/service_catalog/Dockerfile
+    image: opscenter/module-service-catalog:0.7.2-test
+    env_file:
+      - ../../secrets/opscenter-module-auth.env
+    environment:
+      MODULE_AUTH_REQUIRED: "true"
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
+      SERVICE_CATALOG_SOURCE_URL: http://backend:9091/api/v2
+      SERVICE_CATALOG_DATABASE_URL_FILE: /run/secrets/service_catalog_db_url
+      SERVICE_CATALOG_CREDENTIAL_KEY_FILE: /run/secrets/service_catalog_credential_key
+    secrets:
+      - opscenter_jwt_public
+      - service_catalog_db_url
+      - service_catalog_credential_key
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 160m
+
+  module-pve-backup:
+    build:
+      context: ../..
+      dockerfile: modules/pve_backup/Dockerfile
+    image: opscenter/module-pve-backup:0.1.8-test
+    env_file:
+      - ../../secrets/pve-backup.env
+      - ../../secrets/opscenter-module-auth.env
+    environment:
+      MODULE_AUTH_REQUIRED: "true"
+      OPS_MODULE_INTERNAL_TOKEN_FILE: /run/secrets/pve_backup_internal_token
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
+      PVE_API_TOKEN_SECRET_FILE: /run/secrets/pve_api_token_secret
+      PVE_API_CA_FILE: /run/secrets/pve_api_ca
+      PVE_BACKUP_DATABASE_URL_FILE: /run/secrets/pve_backup_db_url
+      PVE_BACKUP_STALE_AFTER_DAYS: "7"
+    secrets:
+      - opscenter_jwt_public
+      - pve_api_token_secret
+      - pve_api_ca
+      - pve_backup_db_url
+      - pve_backup_internal_token
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 160m
+
+  module-alerts:
+    build:
+      context: ../..
+      dockerfile: modules/alerts/Dockerfile
+    image: opscenter/module-alerts:0.5.2-test-certificate-atomic
+    env_file:
+      - ../../secrets/opscenter-module-auth.env
+    environment:
+      MODULE_AUTH_REQUIRED: "true"
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
+      ALERTS_SOURCE_URL: http://backend:9091/api/v2
+      ALERTS_DATABASE_URL_FILE: /run/secrets/alerts_db_url
+      ALERTS_SYNC_ENABLED: "false"
+      HOST_INVENTORY_INTERNAL_URL: http://module-host-inventory:8080
+      HOST_INVENTORY_INTERNAL_TOKEN_FILE: /run/secrets/host_inventory_internal_token
+      HOST_MONITOR_INTERNAL_URL: http://module-host-monitor:8080
+      HOST_MONITOR_INTERNAL_TOKEN_FILE: /run/secrets/host_monitor_internal_token
+      PVE_BACKUP_INTERNAL_URL: http://module-pve-backup:8080
+      PVE_BACKUP_INTERNAL_TOKEN_FILE: /run/secrets/pve_backup_internal_token
+    secrets:
+      - opscenter_jwt_public
+      - alerts_db_url
+      - host_inventory_internal_token
+      - host_monitor_internal_token
+      - pve_backup_internal_token
+    depends_on:
+      - db
+      - backend
+      - module-host-inventory
+      - module-host-monitor
+      - module-pve-backup
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 160m
+
+  module-logs:
+    build:
+      context: ../..
+      dockerfile: modules/logs/Dockerfile
+    image: opscenter/module-logs:0.2.2-test-db
+    env_file:
+      - ../../secrets/opscenter-module-auth.env
+    environment:
+      MODULE_AUTH_REQUIRED: "true"
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
+      LOGS_TIMEOUT_SECONDS: "8"
+      HOST_INVENTORY_URL: http://module-host-inventory:8080
+      LOGS_LOKI_URL: http://loki:3100
+      LOGS_DATA_DIR: /loki
+      MODULE_DATABASE_URL_FILE: /run/secrets/logs_db_url
+    depends_on:
+      - module-host-inventory
+      - loki
+    secrets:
+      - opscenter_jwt_public
+      - logs_db_url
+    volumes:
+      - ../../data/loki:/loki:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 160m
+
+  module-oss-browser:
+    build:
+      context: ../..
+      dockerfile: modules/extension_worker/Dockerfile
+    image: opscenter/module-oss-browser:1.2.4-test-db
+    env_file:
+      - ../../secrets/opscenter-extension.env
+    environment:
+      EXTENSION_MODULE_KEY: oss-browser
+      EXTENSION_DATABASE_URL_FILE: /run/secrets/oss_browser_db_url
+      OPS_AUTH_ENABLED: "true"
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+    secrets:
+      - opscenter_jwt_public
+      - oss_browser_db_url
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 256m
+
+  module-command-code-usage:
+    build:
+      context: ../..
+      dockerfile: modules/extension_worker/Dockerfile
+    image: opscenter/module-command-code-usage:1.0.4-test-db
+    env_file:
+      - ../../secrets/opscenter-extension.env
+    environment:
+      EXTENSION_MODULE_KEY: command-code-usage
+      EXTENSION_DATABASE_URL_FILE: /run/secrets/command_code_usage_db_url
+      OPS_AUTH_ENABLED: "true"
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
+    secrets:
+      - opscenter_jwt_public
+      - command_code_usage_db_url
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    mem_limit: 256m
+
   web:
     build:
-      context: .
+      context: ../..
       dockerfile: deploy/docker/frontend.Dockerfile
-    image: opscenter/frontend:5.3.1-test
+    image: opscenter/frontend:5.5.11-test-certificate-owner
+    volumes:
+      - ./Caddyfile.test:/etc/caddy/Caddyfile:ro
     depends_on:
       - backend
     ports:
-      - 8090:80
+      - 10.66.66.6:8090:80
     restart: unless-stopped
     mem_limit: 128m
+
+secrets:
+  k3s_db_url:
+    file: ../../secrets/k3s_db_url
+  logs_db_url:
+    file: ../../secrets/logs_db_url
+  oss_browser_db_url:
+    file: ../../secrets/oss_browser_db_url
+  command_code_usage_db_url:
+    file: ../../secrets/command_code_usage_db_url
+  opscenter_jwt_private:
+    file: ../../secrets/opscenter_jwt_private.pem
+  opscenter_jwt_public:
+    file: ../../secrets/opscenter_jwt_public.pem
+  host_inventory_db_url:
+    file: ../../secrets/host_inventory_db_url
+  host_inventory_ingest_token:
+    file: ../../secrets/host_inventory_ingest_token
+  host_inventory_internal_token:
+    file: ../../secrets/host_inventory_internal_token
+  host_monitor_internal_token:
+    file: ../../secrets/host_monitor_internal_token
+  service_catalog_db_url:
+    file: ../../secrets/service_catalog_db_url
+  service_catalog_credential_key:
+    file: ../../secrets/service_catalog_credential_key
+  alerts_db_url:
+    file: ../../secrets/alerts_db_url
+  pve_api_token_secret:
+    file: ../../secrets/pve_api_token_secret
+  pve_api_ca:
+    file: ../../secrets/pve_api_ca.crt
+  pve_backup_db_url:
+    file: ../../secrets/pve_backup_db_url
+  pve_backup_internal_token:
+    file: ../../secrets/pve_backup_internal_token
+  host_monitor_db_url:
+    file: ../../secrets/host_monitor_db_url
+  host_monitor_agent_token:
+    file: ../../secrets/host_monitor_agent_token

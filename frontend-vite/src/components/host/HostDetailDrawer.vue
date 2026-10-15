@@ -143,7 +143,6 @@
               <button class="btn btn-sm" :disabled="checking || !server" @click="checkAgent">{{ checking ? '检查中…' : '检查更新' }}</button>
             </div>
             <p v-if="checkNotes.length" class="notes muted">{{ checkNotes.join('；') }}</p>
-            <AgentUpgradePanel v-if="server" :server="server" :visible="visible" @upgraded="onUpgraded" />
           </section>
 
           <section v-show="section === 'alerts'">
@@ -173,7 +172,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import echarts from '../../utils/echarts'
 import { api, fmtBytes, fmtTime, toast } from '../../api'
 import { useHostContext } from '../../hostContext'
-import AgentUpgradePanel from './AgentUpgradePanel.vue'
 import {
   agentStatusLabel, agentTagClass, monitoringAddress, monitoringChannelLabel, runtimeTypeLabel,
 } from './hostAdmin'
@@ -182,7 +180,7 @@ const props = defineProps({
   visible: Boolean,
   hostId: { type: String, default: '' },
 })
-const emit = defineEmits(['close', 'upgraded'])
+defineEmits(['close'])
 
 const { hosts } = useHostContext()
 
@@ -408,7 +406,7 @@ async function loadAlerts() {
   alertLoading.value = true
   const id = props.hostId
   try {
-    const data = await api.get('/alert-events', { server_id: id, days: 7 }, { signal: detailController.signal, timeoutMs: 10000 })
+    const data = await api.get('/modules/alerts/api/v1/events', { server_id: id, days: 7 }, { signal: detailController.signal, timeoutMs: 10000 })
     if (id === requestedId) {
       alerts.value = Array.isArray(data) ? data : []
       alertLoaded.value = true
@@ -554,13 +552,6 @@ async function checkAgent() {
   } finally {
     checking.value = false
   }
-}
-
-async function onUpgraded() {
-  checkResult.value = null
-  checkNotes.value = []
-  await loadOverview()
-  emit('upgraded')
 }
 
 function onResize() {

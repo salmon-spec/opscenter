@@ -1,6 +1,14 @@
 :80 {
     encode zstd gzip
 
+    @disabledHostWrites {
+        method POST PUT PATCH DELETE
+        path /api/v2/servers/*/files/* /api/v2/servers/*/firewall/* /api/v2/servers/*/ssh/* /api/v2/servers/*/processes/*/signal /api/v2/servers/*/power /api/v2/services/*/control /api/v2/servers/*/containers/actions /api/v2/servers/*/containers/prune /api/v2/servers/*/docker/*/delete /api/v2/servers/*/docker/*/prune /api/v2/servers/*/deploy-agent /api/v2/servers/*/upgrade-agent /api/v2/servers/*/agent /api/v2/agents/upgrade-outdated /api/v2/servers/*/logs/agent/deploy /api/v2/logs/agents/deploy-missing /api/v2/test-ssh /api/v2/servers/*/ssh-test /api/v2/terminal/sessions /api/v2/terminal/sessions/*/files/upload /api/v2/terminal/sessions/*/files/mkdir /api/v2/terminal/sessions/*/files/rename /api/v2/terminal/sessions/*/files/delete
+    }
+    respond @disabledHostWrites `{"detail":"此主机写操作已停用，待独立受控模块上线后再开放"}` 410
+    @disabledTerminalSocket path /ws/terminal/*
+    respond @disabledTerminalSocket "Terminal access is disabled" 403
+
     handle /api/* {
         reverse_proxy backend:9091
     }

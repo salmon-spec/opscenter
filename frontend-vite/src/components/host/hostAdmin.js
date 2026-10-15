@@ -44,7 +44,7 @@ export function buildServerPayload(form) {
     runtime_type: form.runtime_type || '',
   })
   if (!form.id) {
-    Object.assign(payload, { auto_deploy_agent: !!form.auto_deploy_agent, is_local: false })
+    Object.assign(payload, { auto_deploy_agent: false, is_local: false })
   }
   return payload
 }

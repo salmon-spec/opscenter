@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 
 from app.main import Base, SessionLocal, app, engine
 from app.models import AlertEvent, DatabaseInstance, MetricHistory, Server
-from app import topology
-from app.topology import _LAST_AGENT_SNAPSHOT, record_agent_snapshot, reset_screen_cache
+from app import dashboard
+from app.dashboard import _LAST_AGENT_SNAPSHOT, record_agent_snapshot, reset_screen_cache
 
 client = TestClient(app)
 
@@ -21,9 +21,9 @@ def clean_database():
     _LAST_AGENT_SNAPSHOT.clear()
     # 任务 D：TTL 内命中不再探 DB 指纹，响应缓存不再随写库即时失效 → 测试间必须显式清缓存
     reset_screen_cache()
-    topology._WG_TOPOLOGY_SNAPSHOT = {"summary": {}, "generated_at": None, "partial_errors": []}
-    topology._WG_TOPOLOGY_SNAPSHOT_AT = time.time()
-    topology._WG_TOPOLOGY_REFRESHING = False
+    dashboard._WG_SUMMARY_SNAPSHOT = {"summary": {}, "generated_at": None, "partial_errors": []}
+    dashboard._WG_SUMMARY_SNAPSHOT_AT = time.time()
+    dashboard._WG_SUMMARY_REFRESHING = False
     yield
     _LAST_AGENT_SNAPSHOT.clear()
 
@@ -99,7 +99,7 @@ def test_summary_database_and_alert_summaries():
 
 
 def test_ninety_second_metric_stale_threshold():
-    from app.topology import _metric_is_stale
+    from app.dashboard import _metric_is_stale
 
     now = datetime.utcnow()
     assert _metric_is_stale(True, now - timedelta(seconds=45), now) is False

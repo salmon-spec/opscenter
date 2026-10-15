@@ -42,7 +42,6 @@ _RESOURCE_PATTERNS = [
     (r"alert-rules", "alert-rule"),
     (r"alert-events/([^/]+)/ack", "alert-event"),
     (r"alert-silences", "silence"),
-    (r"cert-checks", "cert"),
     (r"log-rules", "log-rule"),
     (r"backup-checks", "backup"),
     (r"images/scan", "image"),

@@ -316,7 +316,7 @@ class PlazaCredentialAccess(Base):
 
 
 class ServiceRelation(Base):
-    """服务依赖关系（v3.29, 拓扑）：描述服务间数据流/调用/部署/反代关系，驱动拓扑图。"""
+    """服务依赖关系：为服务详情提供调用、数据流与反代关系说明。"""
     __tablename__ = "service_relations"
     __table_args__ = (
         UniqueConstraint("source_service_id", "target_service_id", "relation_type",

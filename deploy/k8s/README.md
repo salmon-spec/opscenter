@@ -1,4 +1,4 @@
-# OpsCenter v5.3.1 K3s 配置契约
+# OpsCenter v5.5.0 K3s 配置契约（本地源码，未发布）
 本目录只管理 OpsCenter 如何接入现有 `middleware` 命名空间，不复制或接管
 PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的生命周期。
 这些有状态组件应由独立清单或 Helm 发布，并各自具备 PVC、备份和恢复方案。
@@ -28,19 +28,7 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
      --dry-run=client -o yaml | kubectl apply -f -
    ```
 
-6. 如需启用 AI 自动巡检，复制 `opscenter-ai-ops.env.example` 到仓库外，填入
-   CommandCode API Key，然后创建或更新独立 Secret：
-
-   ```sh
-   kubectl -n opscenter create secret generic opscenter-ai-ops \
-     --from-env-file=/secure/path/opscenter-ai-ops.env \
-     --dry-run=client -o yaml | kubectl apply -f -
-   ```
-
-   该 Secret 在 Deployment 补丁中是可选项；未创建时后端仍可启动，但 AI
-   分析与自动巡检不会调用模型。
-
-7. 应用非敏感配置，并把补丁合并到现有 backend Deployment：
+6. 应用非敏感配置，并把补丁合并到现有 backend Deployment：
 
    ```sh
    kubectl apply -f deploy/k8s/opscenter-v5-config.yaml
@@ -53,7 +41,7 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
 
 ## 启用顺序
 
-默认只接入中间件状态页，写入型能力全部关闭。逐项验证健康接口后，再单独开启
+默认保留中间件连接供 OpsCenter 内部集成使用，写入型能力全部关闭。逐项验证健康接口后，再单独开启
 `MQ_ENABLED`、`KAFKA_ENABLED`、`MONGO_ENABLED`、`NACOS_ENABLED`、
 `MINIO_ENABLED`。最后确认 Redis 稳定后开启 `MW_LEADER_ENABLED`。
 
@@ -68,8 +56,7 @@ PostgreSQL、Redis、RabbitMQ、Kafka、MongoDB、Nacos、MinIO、ZooKeeper 的�
 kubectl -n opscenter rollout status deployment/backend --timeout=180s
 kubectl -n opscenter get pod,svc
 kubectl -n opscenter logs deployment/backend --tail=200
-curl -fsS http://10.66.66.15:30088/openapi.json | grep -q '"version":"5.3.1"'
-curl -fsS http://10.66.66.15:30088/api/v2/data-services/overview
+curl -fsS http://10.66.66.15:30088/openapi.json | grep -q '"version":"5.5.0"'
 ```
 
 验收时还需确认：前端登录、服务广场、主机详情、系统监控、终端、K3s 概览均可用；

@@ -31,7 +31,7 @@ from app.models import (
     PlazaHealthState, PlazaProbeResult, PlazaServicePreference,
     PlazaServiceCredential, PlazaServiceProfile, Server, Service, ServiceSource,
 )
-from app.topology import _service_relations
+from app.dashboard import _service_relations
 
 
 router = APIRouter(prefix="/api/v2", tags=["service-plaza"])
@@ -1213,7 +1213,7 @@ def end_plaza_silence(silence_id: uuid.UUID, _current_user=Depends(get_current_u
 
 
 @router.get("/services/plaza/{plaza_key}/detail")
-def get_plaza_service_detail(plaza_key: str):
+def get_plaza_service_detail(plaza_key: str, _current_user=Depends(get_current_user)):
     """Return a complete catalog, manual, or scanned profile without a saved password."""
     with get_db() as db:
         item, service, profile, server_info = _resolve_item(db, plaza_key)

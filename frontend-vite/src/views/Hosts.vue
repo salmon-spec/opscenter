@@ -3,7 +3,7 @@
     <div class="view-head">
       <div>
         <h1 class="view-title">主机管理</h1>
-        <p class="view-sub">主机资产盘点 · LAN/WG 双通道 · Agent 与日志采集器维护</p>
+        <p class="view-sub">主机资产与运行状态</p>
       </div>
       <div class="head-actions">
         <div class="ov-chips">
@@ -11,8 +11,8 @@
           <span class="ov-chip">在线 <b class="ok-text">{{ overview.online }}</b></span>
           <span class="ov-chip">Agent 待升级 <b :class="overview.outdated ? 'warn-text' : ''">{{ overview.outdated }}</b></span>
         </div>
+        <button class="btn btn-primary" :disabled="!canEditHosts" @click="openAdd">添加主机</button>
         <button class="btn" :disabled="hostLoading" @click="reloadAll">↻ 刷新</button>
-        <button class="btn btn-primary" @click="openAdd">＋ 添加主机</button>
       </div>
     </div>
 
@@ -21,13 +21,14 @@
       :metrics-map="metricsMap"
       :cluster-options="clusterOptions"
       :agent-version="agentVersion"
+      :read-only="!canEditHosts"
       @update:filters="onFilters"
       @detail="openDetail"
       @edit="openEdit"
     />
 
     <HostEditorDrawer :visible="editorVisible" :host="editingHost" @close="editorVisible = false" @saved="onSaved" />
-    <HostDetailDrawer :visible="detailVisible" :host-id="detailId" @close="detailVisible = false" @upgraded="reloadAll" />
+    <HostDetailDrawer :visible="detailVisible" :host-id="detailId" @close="detailVisible = false" />
   </div>
 </template>
 
@@ -36,8 +37,8 @@ export default { name: 'Hosts' }
 </script>
 
 <script setup>
-import { computed, nextTick, onActivated, onDeactivated, onMounted, reactive, ref, watch } from 'vue'
-import { api } from '../api'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { api, getAccessToken } from '../api'
 import { useHostContext } from '../hostContext'
 import workbench, { useTabActive, setTabState, getTabState } from '../workbench/tabs'
 import { useHostPolling, isHostOutdated } from '../components/host/hostAdmin'
@@ -47,6 +48,10 @@ import HostDetailDrawer from '../components/host/HostDetailDrawer.vue'
 
 const { hosts, loading: hostLoading, refreshHosts } = useHostContext()
 const { isActive } = useTabActive('Hosts')
+const canEditHosts = ref(!!getAccessToken())
+function syncAuth() { canEditHosts.value = !!getAccessToken() }
+window.addEventListener('ops-auth-changed', syncAuth)
+onUnmounted(() => window.removeEventListener('ops-auth-changed', syncAuth))
 
 const tabKey = computed(() => workbench.state.activeKey)
 
@@ -76,7 +81,11 @@ async function loadAgentVersion() {
 const metricsMap = ref({})
 async function loadMetrics() {
   try {
-    const data = await api.get('/metrics/hosts/overview', { metrics: 'cpu,memory,disk' }, { timeoutMs: 15000 })
+    const end = new Date()
+    const start = new Date(end.getTime() - 60 * 60 * 1000)
+    const data = await api.get('/modules/host-monitor/api/v1/metrics/hosts/overview', {
+      start: start.toISOString(), end: end.toISOString(), resolution: 'auto', metrics: 'cpu,memory,disk',
+    }, { timeoutMs: 15000 })
     const map = {}
     for (const host of data.hosts || []) {
       const m = host.metrics || {}

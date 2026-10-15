@@ -3,13 +3,17 @@
     <div class="view-head">
       <div>
         <h1 class="view-title">服务广场</h1>
-        <p class="view-sub">统一入口 · 完整信息与登录凭证集中管理</p>
+        <p class="view-sub">统一服务入口与健康摘要</p>
       </div>
       <div style="display:flex;gap:8px">
         <input v-model="search" class="input" style="width:280px" :disabled="sortMode" placeholder="搜索服务名称 / 地址…" />
-        <template v-if="sortMode"><button class="btn btn-primary" :disabled="orderSaving" @click="saveOrder">{{ orderSaving ? '保存中…' : '保存顺序' }}</button><button class="btn" @click="cancelOrder">取消排序</button></template>
-        <button v-else class="btn" @click="startOrder">调整顺序</button>
-        <template v-if="!sortMode"><button class="btn btn-primary" @click="openAdd">添加服务</button><button class="btn" @click="openHidden">隐藏服务<span v-if="hiddenServices.length"> ({{ hiddenServices.length }})</span></button><button class="btn" :disabled="scanBusy" @click="scanAllServices">{{ scanBusy ? '扫描中…' : '扫描全部主机' }}</button><button class="btn" @click="reload">刷新</button></template>
+        <button v-if="sortMode" class="btn" @click="cancelOrder">取消排序</button>
+        <button v-if="sortMode" class="btn btn-primary" :disabled="orderSaving" @click="saveOrder">保存顺序</button>
+        <button v-else class="btn" :disabled="!canEditCatalog" @click="startOrder">调整顺序</button>
+        <button class="btn" :disabled="!canEditCatalog" @click="openAdd">添加服务</button>
+        <button class="btn" @click="openHidden">隐藏服务</button>
+        <button class="btn" :disabled="!canEditCatalog || scanBusy" @click="scanAllServices">{{ scanBusy ? '扫描中…' : '扫描全部主机' }}</button>
+        <button class="btn" @click="reload">刷新</button>
       </div>
     </div>
 
@@ -54,13 +58,13 @@
             @click.stop
           >进入服务</a>
           <button class="btn btn-sm btn-ghost" title="查看详情" @click.stop="openDetail(s)">详情</button>
-          <button class="btn btn-sm btn-ghost" title="从服务广场隐藏" @click.stop="hideService(s)">隐藏</button>
+          <button class="btn btn-sm btn-ghost" :disabled="!canEditCatalog" @click.stop="hideService(s)">隐藏</button>
         </div>
       </div>
     </div>
 
     <!-- 详情抽屉 -->
-    <ServiceDetailDrawer :visible="drawerVisible" :service="selected" @close="drawerVisible = false" @updated="handleServiceUpdated" @deleted="handleServiceDeleted" />
+    <ServiceDetailDrawer :visible="drawerVisible" :service="selected" :read-only="!canEditCatalog" @close="drawerVisible = false" @updated="handleServiceUpdated" @deleted="handleServiceDeleted" />
 
     <Modal :visible="addVisible" title="手动添加服务" width="620px" @close="addVisible = false">
       <div class="form-grid">
@@ -79,13 +83,12 @@
         <div class="field full"><label>访问地址 *</label><input v-model.trim="form.url" class="input" placeholder="http://10.66.66.x:端口/" /></div>
         <div class="field full"><label>健康检查路径</label><input v-model.trim="form.health_path" class="input" placeholder="例如 /health；留空时探测访问地址" /></div>
         <div class="field full"><label>说明</label><textarea v-model.trim="form.description" class="textarea" rows="3" placeholder="服务用途、登录方式和注意事项"></textarea></div>
-        <div class="field"><label>登录账号</label><input v-model.trim="form.account" class="input" autocomplete="off" placeholder="可稍后在详情中补充" /></div>
-        <div class="field"><label>登录密码</label><input v-model="form.password" class="input" type="password" autocomplete="new-password" placeholder="将加密保存" /></div>
+        <p class="field full muted">当前仅登记入口和探活路径；服务凭证暂不通过 HTTP 表单收集。</p>
         <label class="check-row full"><input v-model="form.pinned" type="checkbox" /> 添加后置顶</label>
       </div>
       <div class="modal-actions">
         <button class="btn" @click="addVisible = false">取消</button>
-        <button class="btn btn-primary" :disabled="saving" @click="createService">{{ saving ? '保存中…' : '保存并加入广场' }}</button>
+        <button class="btn btn-primary" :disabled="saving || !canEditCatalog" @click="createService">{{ saving ? '保存中…' : '保存并加入广场' }}</button>
       </div>
     </Modal>
 
@@ -101,8 +104,8 @@
             <td><span class="tag tag-slate">{{ kindLabel(service) }}</span></td>
             <td class="mono muted">{{ service.url || service.ports || '#none' }}</td>
             <td class="hidden-actions">
-              <button class="btn btn-sm btn-primary" @click="restoreService(service)">恢复显示</button>
-              <button v-if="service.deletable" class="btn btn-sm btn-danger" @click="deleteManualService(service)">删除</button>
+              <button class="btn btn-sm btn-primary" :disabled="!canEditCatalog" @click="restoreService(service)">恢复显示</button>
+              <button v-if="service.kind === 'manual'" class="btn btn-sm btn-danger" :disabled="!canEditCatalog" @click="deleteManualService(service)">归档</button>
             </td>
           </tr>
         </tbody>
@@ -113,8 +116,8 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { api, toast } from '../api'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { api, getAccessToken, toast } from '../api'
 import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
 import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'
@@ -130,6 +133,10 @@ const healthFilter = ref('all')
 const overview = ref({ summary: {}, items: [], generated_at: null })
 const drawerVisible = ref(false)
 const selected = ref(null)
+const canEditCatalog = ref(!!getAccessToken())
+function syncAuth() { canEditCatalog.value = !!getAccessToken() }
+window.addEventListener('ops-auth-changed', syncAuth)
+onUnmounted(() => window.removeEventListener('ops-auth-changed', syncAuth))
 const hosts = ref([])
 const addVisible = ref(false)
 const hiddenVisible = ref(false)
@@ -138,7 +145,7 @@ const saving = ref(false)
 const scanBusy = ref(false)
 const sortMode = ref(false), sortDraft = ref([]), draggedKey = ref(''), orderSaving = ref(false)
 const categories = ['应用服务', '代码与CI/CD', '监控与日志', '安全与运维', '开发工具', '文档工具', '未分类']
-const emptyForm = () => ({ server_id: '', name: '', url: '', category: '应用服务', description: '', health_path: '', pinned: false, account: '', password: '' })
+const emptyForm = () => ({ server_id: '', name: '', url: '', category: '应用服务', description: '', health_path: '', pinned: false, server_name: '', server_host: '' })
 const form = ref(emptyForm())
 const hiddenServices = ref([])
 
@@ -212,7 +219,7 @@ function startOrder(){search.value='';activeGroup.value='all';healthFilter.value
 function cancelOrder(){sortMode.value=false;sortDraft.value=[];draggedKey.value=''}
 function moveService(service,delta){const from=sortDraft.value.findIndex(item=>item.key===service.key),to=from+delta;if(from<0||to<0||to>=sortDraft.value.length)return;const rows=[...sortDraft.value];rows.splice(to,0,rows.splice(from,1)[0]);sortDraft.value=rows}
 function dropService(targetKey){const from=sortDraft.value.findIndex(item=>item.key===draggedKey.value),to=sortDraft.value.findIndex(item=>item.key===targetKey);if(from<0||to<0||from===to)return;const rows=[...sortDraft.value];rows.splice(to,0,rows.splice(from,1)[0]);sortDraft.value=rows;draggedKey.value=''}
-async function saveOrder(){orderSaving.value=true;try{await api.put('/services/plaza/order',{ordered_keys:sortDraft.value.map(item=>item.key)});services.value=[...sortDraft.value];localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}));cancelOrder();toast('服务顺序已保存','success')}catch(error){toast(`顺序保存失败：${error.message}`,'error')}finally{orderSaving.value=false}}
+async function saveOrder(){orderSaving.value=true;try{await api.put('/modules/service-catalog/api/v1/services/order',{ordered_keys:sortDraft.value.map(item=>item.key)});services.value=[...sortDraft.value];localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}));cancelOrder();toast('服务顺序已保存','success')}catch(error){toast(`顺序保存失败：${error.message}`,'error')}finally{orderSaving.value=false}}
 
 function statusCount(status){return services.value.filter(s=>(s.status||'unknown')===status).length}
 function shortTime(value){const numeric=typeof value==='number'||/^\d+(\.\d+)?$/.test(String(value||''));const date=new Date(numeric?Number(value)*1000:value);return Number.isNaN(date.getTime())?'-':date.toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'})}
@@ -234,7 +241,7 @@ function warmService(service){try{const origin=new URL(service.entry_url,locatio
 async function reload(silent=false) {
   loading.value = true
   try {
-    const svc = await api.get('/services/plaza')
+    const svc = await api.get('/modules/service-catalog/api/v1/services')
     if(Array.isArray(svc)){services.value=svc;localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:svc,time:Date.now()}));svc.slice(0,6).forEach(warmService);loadHealthOverview()}
     groups.value = PLAZA_GROUPS
   } catch(error) {
@@ -244,16 +251,16 @@ async function reload(silent=false) {
   }
 }
 
-async function loadHealthOverview(){try{const data=await api.get('/services/plaza/health-overview',{hours:24});overview.value=data||{summary:{},items:[]};const healthByKey=new Map((data.items||[]).map(item=>[item.key,item]));services.value=services.value.map(service=>{const health=healthByKey.get(service.key);return health?{...service,...health}:service});localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}))}catch{/* 总览失败不影响服务入口 */}}
+async function loadHealthOverview(){try{const data=await api.get('/modules/service-catalog/api/v1/health-overview',{hours:24});overview.value=data||{summary:{},items:[]};const healthByKey=new Map((data.items||[]).map(item=>[item.key,item]));services.value=services.value.map(service=>{const health=healthByKey.get(service.key);return health?{...service,...health}:service});localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}))}catch{/* 总览失败不影响服务入口 */}}
 
 async function loadHosts() {
-  if (!hosts.value.length) hosts.value = await api.get('/servers')
+  if (!hosts.value.length) hosts.value = (await api.get('/modules/host-inventory/api/v1/hosts')).items
 }
 
 async function scanAllServices() {
   scanBusy.value = true
   try {
-    const result = await api.post('/scan')
+    const result = await api.post('/modules/service-catalog/api/v1/scan')
     await reload(true)
     const failed = (result.servers || []).filter((item) => item.status !== 'ok').length
     toast(`扫描完成：新增 ${result.added || 0}，更新 ${result.updated || 0}${failed ? `，${failed} 台主机未完成` : ''}`, failed ? 'warning' : 'success')
@@ -281,9 +288,10 @@ async function createService() {
   }
   saving.value = true
   try {
-    const { server_id, ...payload } = form.value
-    payload.health_path = payload.health_path || null
-    await api.post(`/services?server_id=${encodeURIComponent(server_id)}`, payload)
+    const host = hosts.value.find((item) => item.id === form.value.server_id)
+    await api.post('/modules/service-catalog/api/v1/services', {
+      ...form.value, server_name: host?.name || '', server_host: host?.host || '',
+    })
     addVisible.value = false
     toast('服务已添加到服务广场', 'success')
     await reload()
@@ -298,7 +306,7 @@ async function openHidden() {
   hiddenVisible.value = true
   hiddenLoading.value = true
   try {
-    hiddenServices.value = await api.get('/services/plaza/hidden')
+    hiddenServices.value = await api.get('/modules/service-catalog/api/v1/hidden')
   } catch (error) {
     toast(`隐藏服务加载失败：${error.message}`, 'error')
   } finally {
@@ -308,10 +316,11 @@ async function openHidden() {
 
 async function restoreService(service) {
   try {
-    if (service.kind === 'catalog') {
-      await api.put(`/services/plaza/${encodeURIComponent(service.key)}/visibility`, { hidden: false })
+    if (service.legacy_hidden) {
+      if (service.kind === 'catalog') await api.put(`/modules/service-catalog/api/v1/legacy/catalog/${encodeURIComponent(service.key)}/visibility`, { hidden: false })
+      else await api.put(`/modules/service-catalog/api/v1/legacy/services/${service.service_id || service.id}`, { hidden: false })
     } else {
-      await api.put(`/services/${service.service_id || service.id}`, { hidden: false })
+      await api.put(`/modules/service-catalog/api/v1/services/${encodeURIComponent(service.key)}/visibility`, { hidden: false })
     }
     hiddenServices.value = hiddenServices.value.filter((item) => item.id !== service.id)
     toast(`${service.name} 已恢复显示`, 'success')
@@ -330,11 +339,7 @@ function kindLabel(service) {
 async function hideService(service) {
   if (!confirm(`确认从服务广场隐藏「${service.name}」？之后可在“隐藏服务”中恢复。`)) return
   try {
-    if (service.service_id) {
-      await api.put(`/services/${service.service_id}`, { hidden: true })
-    } else {
-      await api.put(`/services/plaza/${encodeURIComponent(service.key)}/visibility`, { hidden: true })
-    }
+    await api.put(`/modules/service-catalog/api/v1/services/${encodeURIComponent(service.key)}/visibility`, { hidden: true })
     toast(`${service.name} 已隐藏`, 'success')
     await reload()
   } catch (error) {
@@ -344,11 +349,11 @@ async function hideService(service) {
 
 async function deleteManualService(service) {
   const serviceId = service.service_id || service.id
-  if (!serviceId || !confirm(`确认永久删除手动服务「${service.name}」？此操作不可恢复。`)) return
+  if (!serviceId || !confirm(`确认归档手动服务「${service.name}」？`)) return
   try {
-    await api.del(`/services/${serviceId}`)
+    await api.post(`/modules/service-catalog/api/v1/services/manual/${serviceId}/archive`)
     hiddenServices.value = hiddenServices.value.filter((item) => item.id !== service.id)
-    toast(`${service.name} 已删除`, 'success')
+    toast(`${service.name} 已归档`, 'success')
     await reload()
   } catch (error) {
     toast(`删除失败：${error.message}`, 'error')

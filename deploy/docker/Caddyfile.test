@@ -1,0 +1,84 @@
+:80 {
+    encode zstd gzip
+
+    handle /api/* {
+        @legacyAlerts path /api/v2/alert-rules /api/v2/alert-rules/* /api/v2/alert-events /api/v2/alert-events/* /api/v2/alert-silences /api/v2/alert-silences/*
+        respond @legacyAlerts `{"detail":"告警功能已迁移至 alerts 模块"}` 410
+        @ossExtension path /api/v2/modules/oss-browser/health /api/v2/modules/oss-browser/status /api/v2/modules/oss-browser/config /api/v2/modules/oss-browser/config/* /api/v2/modules/oss-browser/objects /api/v2/modules/oss-browser/summary /api/v2/modules/oss-browser/preview /api/v2/modules/oss-browser/download
+        reverse_proxy @ossExtension module-oss-browser:8080
+        @modelExtension path /api/v2/modules/command-code-usage/health /api/v2/modules/command-code-usage/status /api/v2/modules/command-code-usage/config /api/v2/modules/command-code-usage/config/*
+        reverse_proxy @modelExtension module-command-code-usage:8080
+        reverse_proxy backend:9091
+    }
+    handle_path /modules/k3s/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        reverse_proxy module-k3s:8080
+    }
+    handle_path /modules/host-inventory/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        reverse_proxy module-host-inventory:8080
+    }
+    handle_path /modules/host-monitor/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        reverse_proxy module-host-monitor:8080
+    }
+    handle_path /modules/service-catalog/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        reverse_proxy module-service-catalog:8080
+    }
+    handle_path /modules/pve-backup/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        reverse_proxy module-pve-backup:8080
+    }
+    handle_path /modules/alerts/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        reverse_proxy module-alerts:8080
+    }
+    handle_path /modules/logs/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        reverse_proxy module-logs:8080
+    }
+    handle_path /modules/oss-browser/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        rewrite * /api/v2/modules/oss-browser{uri}
+        reverse_proxy module-oss-browser:8080
+    }
+    handle_path /modules/command-code-usage/* {
+        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
+        respond @internalProbe 404
+        rewrite * /api/v2/modules/command-code-usage{uri}
+        reverse_proxy module-command-code-usage:8080
+    }
+    handle /modules/* {
+        respond `{"detail":"业务模块网关尚未接入"}` 503
+    }
+    handle /ws/* {
+        reverse_proxy backend:9091
+    }
+    @apiDocs path /openapi.json /docs /docs/* /redoc /redoc/*
+    handle @apiDocs {
+        reverse_proxy backend:9091
+    }
+    @versionedAssets path /v3/assets/*
+    header @versionedAssets Cache-Control "public, max-age=31536000, immutable"
+    @moduleDocuments path /v3/extension-modules/*/index.html
+    header @moduleDocuments Cache-Control "no-cache, must-revalidate"
+    handle /v3/* {
+        root * /srv
+        file_server
+    }
+    handle {
+        rewrite * /v3/index.html
+        root * /srv
+        header Cache-Control "no-cache, no-store, must-revalidate"
+        file_server
+    }
+}

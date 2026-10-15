@@ -7,8 +7,29 @@ export const getAccessToken = () => localStorage.getItem(TOKEN_KEY) || ''
 export const setAccessToken = (token) => localStorage.setItem(TOKEN_KEY, token || '')
 export const clearAccessToken = () => localStorage.removeItem(TOKEN_KEY)
 
+let sessionCheck = null
+function expireSession(token) {
+  if (token !== getAccessToken()) return
+  clearAccessToken()
+  window.dispatchEvent(new CustomEvent('ops-auth-required'))
+}
+
+async function confirmSession(token) {
+  if (token !== getAccessToken()) return
+  if (sessionCheck?.token !== token) {
+    const promise = fetch(API_BASE + '/api/v2/auth/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then((res) => {
+      if (res.status === 401) expireSession(token)
+    }).catch(() => { /* 网络故障不等于会话失效 */ })
+    sessionCheck = { token, promise }
+    promise.finally(() => { if (sessionCheck?.promise === promise) sessionCheck = null })
+  }
+  await sessionCheck.promise
+}
+
 async function requestBlob(path, { query, signal, timeoutMs } = {}) {
-  let url = API_BASE + '/api/v2' + path
+  let url = API_BASE + (path.startsWith('/modules/') ? path : '/api/v2' + path)
   if (query) {
     const p = new URLSearchParams()
     for (const [k, v] of Object.entries(query)) {
@@ -28,6 +49,7 @@ async function requestBlob(path, { query, signal, timeoutMs } = {}) {
   try {
     const res = await fetch(url, { headers, signal: controller?.signal || signal })
     if (!res.ok) {
+      if (res.status === 401 && token) await confirmSession(token)
       let data = null
       try { data = await res.json() } catch { /* binary error body */ }
       const err = new Error((data && (data.detail || data.msg)) || `HTTP ${res.status}`)
@@ -42,7 +64,7 @@ async function requestBlob(path, { query, signal, timeoutMs } = {}) {
 }
 
 async function request(path, { method = 'GET', body, query, signal, timeoutMs } = {}) {
-  let url = API_BASE + '/api/v2' + path
+  let url = API_BASE + (path.startsWith('/modules/') ? path : '/api/v2' + path)
   if (query) {
     const p = new URLSearchParams()
     for (const [k, v] of Object.entries(query)) {
@@ -68,8 +90,9 @@ async function request(path, { method = 'GET', body, query, signal, timeoutMs } 
     let data = null
     try { data = await res.json() } catch { /* 非 JSON 响应忽略 */ }
     if (!res.ok) {
-      if (res.status === 401 && path !== '/auth/login') {
-        clearAccessToken()
+      if (res.status === 401 && token && path !== '/auth/login' && !path.endsWith('/auth/login')) {
+        if (path === '/auth/me') expireSession(token)
+        else await confirmSession(token)
       }
       const err = new Error((data && (data.detail || data.msg)) || `HTTP ${res.status}`)
       err.status = res.status

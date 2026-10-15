@@ -15,22 +15,26 @@ const modules = [
     { key: 'apps', label: '应用负载', path: '/kubernetes/workloads', items: [{ label: '工作负载', path: '/kubernetes/workloads' }, { label: 'Pod', path: '/kubernetes/pods' }] },
     { key: 'resources', label: '资源与运维', path: '/kubernetes/network', items: [{ label: '网络与入口', path: '/kubernetes/network' }, { label: '存储', path: '/kubernetes/storage' }, { label: '任务与事件', path: '/kubernetes/operations' }] },
   ] },
-  { prefix: '/data-services', groups: [
-    { key: 'overview', label: '实例总览', path: '/data-services', items: [{ label: '实例总览', path: '/data-services' }] },
-    { key: 'cache', label: '缓存与消息', path: '/data-services/redis', items: [{ label: 'Redis', path: '/data-services/redis' }, { label: 'RabbitMQ', path: '/data-services/rabbitmq' }, { label: 'Kafka', path: '/data-services/kafka' }, { label: 'ZooKeeper', path: '/data-services/zookeeper' }] },
-    { key: 'registry', label: '配置与存储', path: '/data-services/nacos', items: [{ label: 'Nacos', path: '/data-services/nacos' }, { label: 'MinIO', path: '/data-services/minio' }, { label: 'MongoDB', path: '/data-services/mongodb' }] },
-    { key: 'settings', label: '连接配置', path: '/data-services/config', items: [{ label: '连接配置', path: '/data-services/config' }] },
-  ] },
-  { paths: ['/system/', '/docker', '/database'], groups: [
-    { key: 'monitor', label: '主机监控', path: '/system/monitor', items: [{ label: '主机监控', path: '/system/monitor' }] },
-    { key: 'terminal', label: '终端', path: '/system/terminal', items: [{ label: '终端', path: '/system/terminal' }] },
-    { key: 'runtime', label: '运行环境', path: '/docker', items: [{ label: 'Docker', path: '/docker' }, { label: '数据库', path: '/database' }] },
-    { key: 'tools', label: '运维工具', path: '/system/files', items: [{ label: '文件', path: '/system/files' }, { label: '进程管理', path: '/system/processes' }] },
-    { key: 'security', label: '安全管理', path: '/system/firewall', items: [{ label: '防火墙', path: '/system/firewall' }, { label: 'SSH 管理', path: '/system/ssh' }] },
+  { paths: ['/system/', '/database'], groups: [
+    { key: 'system-app', label: '系统应用', path: '/system/monitor', items: [
+      { label: '监控', path: '/system/monitor' },
+      { label: '文件', path: '/system/files' },
+      { label: '进程', path: '/system/processes' },
+      { label: 'SSH', path: '/system/ssh' },
+      { label: '防火墙', path: '/system/firewall' },
+      { label: '终端', path: '/system/terminal' },
+    ] },
+    { key: 'runtime', label: '运行环境', path: '/database', items: [{ label: '数据库', path: '/database' }] },
   ] },
 ]
 const module = computed(() => modules.find((item) => item.prefix ? route.path.startsWith(item.prefix) : item.paths.some((path) => route.path === path || route.path.startsWith(path))) || null)
-const pages = computed(() => module.value?.groups.flatMap((group) => group.items) || [])
+const pages = computed(() => {
+  if (!module.value) return []
+  if (module.value.paths.includes('/database')) {
+    return route.path.startsWith('/system/') ? module.value.groups[0].items : module.value.groups[1].items
+  }
+  return module.value.groups.flatMap((group) => group.items)
+})
 </script>
 
 <style scoped>

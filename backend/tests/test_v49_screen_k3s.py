@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient
 
 from app.main import Base, SessionLocal, app, engine
 from app.models import PlazaHealthState, Server
-from app import topology
-from app.topology import _LAST_AGENT_SNAPSHOT, reset_screen_cache
+from app import dashboard
+from app.dashboard import _LAST_AGENT_SNAPSHOT, reset_screen_cache
 
 client = TestClient(app)
 
@@ -31,9 +31,9 @@ def clean_database():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     _LAST_AGENT_SNAPSHOT.clear()
-    topology._WG_TOPOLOGY_SNAPSHOT = {"summary": {}, "generated_at": None, "partial_errors": []}
-    topology._WG_TOPOLOGY_SNAPSHOT_AT = time.time()
-    topology._WG_TOPOLOGY_REFRESHING = False
+    dashboard._WG_SUMMARY_SNAPSHOT = {"summary": {}, "generated_at": None, "partial_errors": []}
+    dashboard._WG_SUMMARY_SNAPSHOT_AT = time.time()
+    dashboard._WG_SUMMARY_REFRESHING = False
     reset_screen_cache()
     yield
     _LAST_AGENT_SNAPSHOT.clear()
@@ -184,7 +184,7 @@ def seed_plaza_states():
 
 def test_k3s_section_full_counts(monkeypatch):
     fake = FakeK8sClient(k3s_fixture_data())
-    monkeypatch.setattr(topology, "_k8s_client_or_none", lambda: (fake, None))
+    monkeypatch.setattr(dashboard, "_k8s_client_or_none", lambda: (fake, None))
     r = client.get("/api/v2/screen/summary")
     assert r.status_code == 200, r.text
     data = r.json()
@@ -222,7 +222,7 @@ def test_k3s_section_full_counts(monkeypatch):
 
 
 def test_k8s_unavailable_keeps_screen_alive(monkeypatch):
-    monkeypatch.setattr(topology, "_k8s_client_or_none", lambda: (None, "ModuleNotFoundError"))
+    monkeypatch.setattr(dashboard, "_k8s_client_or_none", lambda: (None, "ModuleNotFoundError"))
     r = client.get("/api/v2/screen/summary")
     assert r.status_code == 200, r.text
     data = r.json()
@@ -236,7 +236,7 @@ def test_k8s_unavailable_keeps_screen_alive(monkeypatch):
 
 def test_k8s_api_failure_degrades_to_unavailable(monkeypatch):
     fake = FakeK8sClient(k3s_fixture_data(), fail=True)
-    monkeypatch.setattr(topology, "_k8s_client_or_none", lambda: (fake, None))
+    monkeypatch.setattr(dashboard, "_k8s_client_or_none", lambda: (fake, None))
     r = client.get("/api/v2/screen/summary")
     assert r.status_code == 200, r.text
     data = r.json()
@@ -247,7 +247,7 @@ def test_k8s_api_failure_degrades_to_unavailable(monkeypatch):
 
 def test_k8s_disabled_mode(monkeypatch):
     fake = FakeK8sClient(k3s_fixture_data(), mode="disabled")
-    monkeypatch.setattr(topology, "_k8s_client_or_none", lambda: (fake, None))
+    monkeypatch.setattr(dashboard, "_k8s_client_or_none", lambda: (fake, None))
     data = client.get("/api/v2/screen/summary").json()
     assert data["k3s"] is None
     assert data["source_status"]["k3s"] == "disabled"
@@ -258,7 +258,7 @@ def test_services_dual_external_not_in_cluster(monkeypatch):
     seed_plaza_states()
     monkeypatch.setattr("app.plaza._load_plaza_items", fake_load_plaza_items)
     fake = FakeK8sClient(k3s_fixture_data(), mode="kubeconfig")
-    monkeypatch.setattr(topology, "_k8s_client_or_none", lambda: (fake, None))
+    monkeypatch.setattr(dashboard, "_k8s_client_or_none", lambda: (fake, None))
     data = client.get("/api/v2/screen/summary").json()
     dual = data["services_dual"]
     assert len(dual) == 4
@@ -293,7 +293,7 @@ def test_services_dual_internal_probe_success_and_failure(monkeypatch):
          "spec": {"clusterIP": "None", "ports": [{"port": 80}]}},
     ]
     fake = FakeK8sClient(fixture)
-    monkeypatch.setattr(topology, "_k8s_client_or_none", lambda: (fake, None))
+    monkeypatch.setattr(dashboard, "_k8s_client_or_none", lambda: (fake, None))
     calls = []
 
     def fake_probe(host, port, timeout=2.0):
@@ -302,7 +302,7 @@ def test_services_dual_internal_probe_success_and_failure(monkeypatch):
             return True, 1.2, None
         return False, None, "ConnectionRefusedError"
 
-    monkeypatch.setattr(topology, "_probe_tcp", fake_probe)
+    monkeypatch.setattr(dashboard, "_probe_tcp", fake_probe)
     data = client.get("/api/v2/screen/summary").json()
     by_name = {d["name"]: d for d in data["services_dual"]}
     assert by_name["GitLab"]["internal"] == {
@@ -323,7 +323,7 @@ def _expire_screen_cache(seconds=10):
 
     这里手动让响应缓存过期，才能验证"业务数据变了就失效"。
     """
-    topology._SCREEN_CACHE["stored_at"] -= seconds
+    dashboard._SCREEN_CACHE["stored_at"] -= seconds
 
 
 def test_etag_304_and_change():

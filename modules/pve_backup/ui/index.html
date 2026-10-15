@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PVE 与备份</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><h1>PVE 与备份</h1><p>虚拟机、存储、备份覆盖与恢复证据 · 只读</p></div><button id="refresh" type="button">刷新</button></header>
+    <p id="notice" class="notice" role="status">正在连接模块…</p>
+    <section class="metrics" aria-label="摘要">
+      <article><span>虚拟机 / 容器</span><strong id="vm-total">—</strong><small id="vm-running">运行中 —</small></article>
+      <article><span>存储已用</span><strong id="storage-percent">—</strong><small id="storage-bytes">—</small></article>
+      <article><span>备份覆盖</span><strong id="coverage">—</strong><small id="coverage-detail">—</small></article>
+      <article><span>恢复验证</span><strong id="recovery">—</strong><small>未验证不能等同于可恢复</small></article>
+    </section>
+    <section class="panel"><h2>虚拟机备份覆盖</h2><div class="table-wrap"><table><thead><tr><th>VMID</th><th>名称</th><th>节点</th><th>运行状态</th><th>覆盖</th><th>最近备份</th><th>恢复验证</th></tr></thead><tbody id="guests"><tr><td colspan="7" class="empty">暂无数据</td></tr></tbody></table></div></section>
+    <div class="columns">
+      <section class="panel"><h2>存储</h2><div class="table-wrap"><table><thead><tr><th>节点 / 存储</th><th>状态</th><th>类型</th><th>已用 / 总量</th></tr></thead><tbody id="storages"><tr><td colspan="4" class="empty">暂无数据</td></tr></tbody></table></div></section>
+      <section class="panel"><h2>备份计划与最近文件</h2><ul id="jobs" class="entries"><li class="empty">暂无可见计划</li></ul><h3>最近备份文件</h3><ul id="backups" class="entries"><li class="empty">暂无可见文件</li></ul></section>
+    </div>
+    <footer id="collected">最近采集：暂无成功采集</footer>
+  </main>
+</body>
+</html>

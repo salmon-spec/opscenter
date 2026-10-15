@@ -6,7 +6,7 @@
   未安装时 status() 明确提示，不新增依赖）。
 - 有界重试：连接错误/5xx 重试 1 次；4xx 不重试。并发受 K8S_MAX_CONCURRENCY 限制。
 - 凭证（token/CA）只存内存；错误信息一律脱敏。
-- 提供模块级 get_client()/reset_client()/list_nodes() 供 topology.py 与
+- 提供模块级 get_client()/reset_client()/list_nodes() 供系统健康汇总与
   server_details.py 的接缝使用（他们做了延迟导入+异常包裹）。
 """
 
@@ -329,7 +329,7 @@ class K8sClient:
             raise K8sError(f"日志获取失败: {sanitize_error(exc)}") from exc
 
 
-# ── 模块级单例（供 topology.py / server_details.py 接缝） ─────
+# ── 模块级单例（供系统健康汇总 / server_details.py 接缝） ─────
 _client_lock = threading.Lock()
 _client: Optional[K8sClient] = None
 

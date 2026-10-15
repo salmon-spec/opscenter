@@ -7,6 +7,11 @@ venv
 /backup/
 /backup_*/
 data
+.env
+.env.*
+secrets/
+k8s/token
+k8s/ca.crt
 *.tar.gz
 *.tar.gz.enc
 *-test.db

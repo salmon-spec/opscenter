@@ -33,7 +33,8 @@ async function refreshHosts(force = false) {
   loading.value = true
   const promise = (async () => {
     try {
-      const list = await api.get('/servers', undefined, { signal: controller.signal, timeoutMs: 8000 })
+      const snapshot = await api.get('/modules/host-inventory/api/v1/hosts', undefined, { signal: controller.signal, timeoutMs: 8000 })
+      const list = snapshot.items
       hosts.value = Array.isArray(list) ? list : []
       const selected = hosts.value.find((host) => host.id === selectedHostId.value)
         || hosts.value.find((host) => host.status === 'online')

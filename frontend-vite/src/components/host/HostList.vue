@@ -70,21 +70,21 @@
             </td>
             <td class="ops" @click.stop>
               <button class="link-btn" @click="$emit('detail', host)">详情</button>
-              <button class="link-btn" @click="$emit('edit', host)">编辑</button>
-              <button v-if="host.agent_type !== 'local' && !host.is_local" class="link-btn danger" :disabled="deletingId === host.id" @click="openDelete(host)">{{ deletingId === host.id ? '删除中…' : '删除' }}</button>
+              <button v-if="!readOnly" class="link-btn" @click="$emit('edit', host)">编辑</button>
+              <button v-if="!readOnly && host.agent_type !== 'local' && !host.is_local" class="link-btn danger" :disabled="deletingId === host.id" @click="openDelete(host)">{{ deletingId === host.id ? '归档中…' : '归档' }}</button>
             </td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <Modal :visible="deleteTarget !== null" title="删除主机" width="480px" @close="cancelDelete">
+    <Modal :visible="deleteTarget !== null" title="归档主机" width="480px" @close="cancelDelete">
       <div class="delete-confirm">
-        <p>删除后关联服务与监控历史也会一并移除。<b>删除资产不会卸载远端 Agent</b>；如需卸载，请先在该主机上单独执行 Agent 卸载。</p>
+        <p>归档后主机从资产列表中隐藏；远端 Agent 和监控历史不受影响。</p>
         <label>请输入主机名称「<b>{{ deleteTarget?.name || '' }}</b>」以确认：<input v-model.trim="deleteConfirmText" :disabled="!!deletingId" placeholder="主机名称" /></label>
         <footer>
           <button class="btn" :disabled="!!deletingId" @click="deleteTarget = null">取消</button>
-          <button class="btn btn-danger" :disabled="!deleteConfirmText || deleteConfirmText !== deleteTarget?.name || !!deletingId" @click="confirmDelete">{{ deletingId ? '正在删除主机…' : '确认删除' }}</button>
+          <button class="btn btn-danger" :disabled="!deleteConfirmText || deleteConfirmText !== deleteTarget?.name || !!deletingId" @click="confirmDelete">{{ deletingId ? '正在归档…' : '确认归档' }}</button>
         </footer>
       </div>
     </Modal>
@@ -107,6 +107,7 @@ const props = defineProps({
   metricsMap: { type: Object, default: () => ({}) },
   clusterOptions: { type: Array, default: () => [] },
   agentVersion: { type: String, default: '2.6.0' },
+  readOnly: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:filters', 'detail', 'edit'])
 
@@ -172,18 +173,18 @@ async function confirmDelete() {
   if (!host || deleteConfirmText.value !== host.name) return
   const wasSelected = selectedHostId.value === host.id
   deletingId.value = host.id
-  toast(`正在删除主机「${host.name}」…`, 'info')
+  toast(`正在归档主机「${host.name}」…`, 'info')
   try {
-    const data = await api.del(`/servers/${host.id}`)
+    const data = await api.post(`/modules/host-inventory/api/v1/hosts/${host.id}/archive`)
     deleteTarget.value = null
     await refreshHosts(true)
     if (wasSelected) {
       const fallback = hosts.value.find((h) => h.agent_type === 'local' || h.is_local) || hosts.value[0]
       if (fallback) selectHost(fallback.id)
     }
-    toast(data.message || '主机已删除', 'ok')
+    toast(data.message || '主机已归档', 'ok')
   } catch (error) {
-    toast(`删除失败：${error.message}`, 'err')
+    toast(`归档失败：${error.message}`, 'err')
   } finally {
     deletingId.value = ''
   }

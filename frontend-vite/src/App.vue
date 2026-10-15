@@ -11,10 +11,14 @@
         <button class="sidebar-toggle" :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'" @click="toggleSidebar">{{ sidebarCollapsed ? '›' : '‹' }}</button>
       </div>
       <nav class="nav">
-        <router-link v-for="item in navs" :key="item.path" :to="item.path" class="nav-item" :title="sidebarCollapsed ? item.label : ''" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
-        <div class="nav-section">扩展模块</div>
+        <div class="nav-section">值班入口</div>
+        <router-link to="/" class="nav-item" title="值班首页" :class="{ active: route.path === '/' }"><span class="nav-icon">▦</span><span class="nav-label">值班首页</span></router-link>
+        <div class="nav-section">底座</div>
+        <router-link v-for="item in baseNavs" :key="item.path" :to="item.path" class="nav-item" :title="sidebarCollapsed ? item.label : ''" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
+        <div class="nav-section">业务模块</div>
+        <router-link v-for="item in moduleNavs" :key="item.path" :to="item.path" class="nav-item" :title="sidebarCollapsed ? item.label : ''" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
+        <div v-if="runningModules.length" class="nav-section">扩展模块</div>
         <router-link v-for="item in runningModules" :key="item.key" :to="`/extensions/${item.key}`" class="nav-item" :title="sidebarCollapsed ? item.name : ''" :class="{ active: route.path === `/extensions/${item.key}` }"><span class="nav-icon">{{ item.icon || '◇' }}</span><span class="nav-label">{{ item.name }}</span></router-link>
-        <router-link to="/modules" class="nav-item" :title="sidebarCollapsed ? '模块管理' : ''" :class="{ active: route.path === '/modules' }"><span class="nav-icon">◇</span><span class="nav-label">模块管理</span></router-link>
       </nav>
       <div class="sidebar-foot">
         <div v-if="hostSummary.total > 0" class="host-mini">
@@ -30,6 +34,8 @@
         <div class="topbar-right">
           <ClusterSelector v-if="showClusterSelector" />
           <span class="muted">{{ nowStr }}</span>
+          <span v-if="globalUser" class="muted">{{ globalUser }}</span>
+          <button class="btn btn-sm" @click="globalUser ? logout() : (loginVisible = true)">{{ globalUser ? '退出登录' : '登录' }}</button>
         </div>
       </header>
       <ModuleTabs v-if="!isStandalone" />
@@ -50,6 +56,14 @@
       <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">{{ t.msg }}</div>
     </div>
     <HostManagerDrawer :visible="hostDrawer" @close="hostDrawer=false" />
+    <Modal :visible="loginVisible" title="运维工作台登录" width="420px" @close="loginVisible=false">
+      <form class="login-form" @submit.prevent="login">
+        <label>用户名<input v-model.trim="loginForm.username" class="input" autocomplete="username" required /></label>
+        <label>密码<input v-model="loginForm.password" class="input" type="password" autocomplete="current-password" required /></label>
+        <p v-if="loginError" class="login-error">{{ loginError }}</p>
+        <div class="modal-actions"><button class="btn" type="button" @click="loginVisible=false">取消</button><button class="btn btn-primary" :disabled="loginBusy || !loginForm.username || !loginForm.password">{{ loginBusy ? '登录中…' : '登录' }}</button></div>
+      </form>
+    </Modal>
   </div>
 </template>
 
@@ -58,13 +72,14 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import router from './router'
 import HostManagerDrawer from './components/HostManagerDrawer.vue'
+import Modal from './components/Modal.vue'
 import HostSelector from './components/workbench/HostSelector.vue'
 import ClusterSelector from './components/workbench/ClusterSelector.vue'
 import ModuleTabs from './components/workbench/ModuleTabs.vue'
 import { useHostContext } from './hostContext'
 import workbench from './workbench/tabs'
 import packageInfo from '../package.json'
-import { api } from './api'
+import { api, clearAccessToken, getAccessToken, setAccessToken } from './api'
 
 const route = useRoute()
 const appVersion = packageInfo.version
@@ -73,6 +88,27 @@ const isStandalone = computed(() => !!route.meta.standalone)
 workbench.init(router)
 const { hosts, refreshHosts } = useHostContext()
 const hostDrawer=ref(false)
+const loginVisible = ref(false)
+const loginBusy = ref(false)
+const loginError = ref('')
+const loginForm = ref({ username: 'admin', password: '' })
+const globalUser = ref(getAccessToken() ? 'admin' : '')
+async function login() {
+  loginBusy.value = true
+  loginError.value = ''
+  try {
+    const result = await api.post('/auth/login', loginForm.value)
+    setAccessToken(result.access_token)
+    window.dispatchEvent(new Event('ops-auth-changed'))
+    globalUser.value = result.user?.username || loginForm.value.username
+    loginForm.value.password = ''
+    loginVisible.value = false
+    window.location.reload()
+  } catch (error) { loginError.value = error.message }
+  finally { loginBusy.value = false }
+}
+function logout() { clearAccessToken(); window.dispatchEvent(new Event('ops-auth-changed')); globalUser.value = ''; loginVisible.value = true }
+function onAuthRequired() { globalUser.value = ''; window.dispatchEvent(new Event('ops-auth-changed')); loginVisible.value = true }
 const SIDEBAR_KEY = 'ops-sidebar-collapsed'
 const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_KEY) === '1')
 function toggleSidebar() {
@@ -89,18 +125,19 @@ const viewKey = computed(() => {
   const tab = workbench.state.tabs.find((t) => t.key === workbench.state.activeKey)
   return tab && tab.routeName === route.name && tab.path === route.path ? tab.key : route.fullPath
 })
-const navs = [
-  { path: '/', label: '服务广场', icon: '▦', exact: true },
-  { path: '/kubernetes/overview', label: 'K3s 集群', icon: '☸', matches: ['/kubernetes/'] },
-  { path: '/data-services', label: '数据服务', icon: '◫', matches: ['/data-services'] },
-  { path: '/system/monitor', label: '系统', icon: '▥', matches: ['/system/', '/docker', '/database'] },
-  { path: '/screen', label: '健康大屏', icon: '📊' },
+const baseNavs = [
+  { path: '/services', label: '服务广场', icon: '◇', exact: true },
+  { path: '/system/monitor', label: '系统应用', icon: '▥', exact: true },
   { path: '/hosts', label: '主机管理', icon: '▣' },
-  { path: '/topology', label: '拓扑架构', icon: '🔗' },
+]
+const moduleNavs = [
+  { path: '/kubernetes/overview', label: 'K3s 集群', icon: '☸', matches: ['/kubernetes/'] },
+  { path: '/pve-backup', label: 'PVE 与备份', icon: '▣', exact: true },
+  { path: '/screen', label: '健康大屏', icon: '📊' },
   { path: '/alerts', label: '告警中心', icon: '🔔' },
-  { path: '/ai-ops', label: 'AI 运维', icon: '✦' },
-  { path: '/api-keys', label: '开放API', icon: '🔑' },
+  { path: '/api-keys', label: '开放 API', icon: '🔑' },
   { path: '/logs', label: '日志中心', icon: '≡' },
+  { path: '/modules', label: '模块管理', icon: '◇', exact: true },
 ]
 function isActive(path, exact) { return exact ? route.path === path : (route.path === path || (path !== '/' && route.path.startsWith(path))) }
 function itemActive(item) { return item.matches ? item.matches.some((path) => route.path.startsWith(path)) : isActive(item.path, item.exact) }
@@ -120,7 +157,7 @@ function tick() {
 async function loadModules() {
   try {
     const data = await api.get('/modules', { running: true })
-    runningModules.value = data.items || []
+    runningModules.value = (data.items || []).filter((item) => item.key !== 'middleware-console')
   } catch { /* 模块接口故障不影响主系统导航 */ }
 }
 
@@ -147,14 +184,19 @@ onMounted(() => {
   tick()
   clockTimer = setInterval(tick, 1000)
   window.addEventListener('ops-toast', onToast)
+  window.addEventListener('ops-auth-required', onAuthRequired)
   window.addEventListener('ops-modules-changed', loadModules)
-  loadHosts()
-  loadModules()
+  if (getAccessToken()) api.get('/auth/me').then((user) => { globalUser.value = user.username }).catch(() => {})
+  if (!isStandalone.value) {
+    loadHosts()
+    loadModules()
+  }
 })
 onUnmounted(() => {
   clearInterval(clockTimer)
   window.removeEventListener('ops-modules-changed', loadModules)
   window.removeEventListener('ops-toast', onToast)
+  window.removeEventListener('ops-auth-required', onAuthRequired)
 })
 </script>
 
@@ -194,6 +236,9 @@ onUnmounted(() => {
 }
 .topbar-title { font-size: 16px; margin: 0; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
+.login-form { display:grid; gap:14px; }
+.login-form label { display:grid; gap:6px; }
+.login-error { margin:0; color:var(--danger,#dc2626); }
 .workspace-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .content { flex: 1; min-width: 0; overflow: auto; }
 .content.standalone { overflow: hidden; background: var(--screen-bg); }

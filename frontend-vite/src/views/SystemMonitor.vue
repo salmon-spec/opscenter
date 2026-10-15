@@ -65,7 +65,7 @@ const infoRows=computed(()=>[['主机名',summary.value?.hostname||currentHost.v
 async function loadSummary(refresh=false){
   const hostId=selectedHostId.value;if(!hostId||loading.value&&!refresh)return
   controller?.abort();controller=new AbortController();const activeController=controller;loading.value=true;error.value=''
-  try{const data=await api.get(`/servers/${hostId}/system/summary`,{refresh},{signal:activeController.signal,timeoutMs:8000});if(hostId===selectedHostId.value)summary.value=data}
+  try{const data=await api.get(`/modules/host-monitor/api/v1/hosts/${hostId}/system/summary`,{refresh},{signal:activeController.signal,timeoutMs:8000});if(hostId===selectedHostId.value)summary.value=data}
   catch(e){if(e.name!=='AbortError'&&hostId===selectedHostId.value)error.value=e.message}finally{if(controller===activeController)loading.value=false}
 }
 function activeRange(){const end=rangeKey.value==='custom'&&customEnd.value?new Date(customEnd.value):new Date();const selected=ranges.find(item=>item.key===rangeKey.value);const start=rangeKey.value==='custom'&&customStart.value?new Date(customStart.value):new Date(end.getTime()-(selected?.hours||1)*3600000);if(start>=end)throw new Error('开始时间必须早于结束时间');return{start,end}}
@@ -76,8 +76,8 @@ async function loadHistory(){
   try{
     const {start,end}=activeRange();const query={start:start.toISOString(),end:end.toISOString(),resolution:'auto'}
     const [data,overview]=await Promise.all([
-      api.get(`/servers/${hostId}/metrics/timeseries`,{...query,metrics:selectedMetrics.value.join(',')},{signal:activeController.signal,timeoutMs:12000}),
-      api.get('/metrics/hosts/overview',{...query,metrics:'cpu,memory,disk'},{signal:activeController.signal,timeoutMs:12000}),
+      api.get(`/modules/host-monitor/api/v1/hosts/${hostId}/metrics/timeseries`,{...query,metrics:selectedMetrics.value.join(',')},{signal:activeController.signal,timeoutMs:12000}),
+      api.get('/modules/host-monitor/api/v1/metrics/hosts/overview',{...query,metrics:'cpu,memory,disk'},{signal:activeController.signal,timeoutMs:12000}),
     ])
     if(hostId!==selectedHostId.value)return;history.value=data.series||{};hostOverview.value=overview.hosts||[];historyResolution.value=({raw:'原始数据','5m':'5分钟聚合','1h':'1小时聚合'})[data.resolution]||data.resolution;historyPointCount.value=data.point_count||0;renderChart()
   }catch(e){if(e.name!=='AbortError'&&hostId===selectedHostId.value)error.value=e.message}finally{if(historyController===activeController){historyLoading.value=false;overviewLoading.value=false}}

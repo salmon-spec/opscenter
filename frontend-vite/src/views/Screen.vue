@@ -198,14 +198,14 @@
               </div>
             </div>
           </div>
-          <div class="wg-block" @click="goWireguard">
+          <div class="wg-block">
             <span class="risk-k">WireGuard</span>
             <span class="k3s-chip">已纳管 <b>{{ wgSummary.managed ?? '--' }}</b></span>
             <span class="k3s-chip">健康 <b>{{ wgSummary.healthy ?? '--' }}</b></span>
             <span class="k3s-chip" :class="{ 'chip-warn': wgSummary.warning > 0 }">警告 <b>{{ wgSummary.warning ?? '--' }}</b></span>
             <span class="k3s-chip" :class="{ 'chip-bad': wgSummary.offline > 0 }">离线 <b>{{ wgSummary.offline ?? '--' }}</b></span>
             <span class="k3s-chip">未纳管 <b>{{ wgSummary.unmanaged ?? '--' }}</b></span>
-            <span v-if="wgFreshText" class="screen-muted wg-at">拓扑时间 {{ wgFreshText }}</span>
+            <span v-if="wgFreshText" class="screen-muted wg-at">数据时间 {{ wgFreshText }}</span>
           </div>
         </template>
       </section>
@@ -236,10 +236,10 @@
     <div v-if="dockerHostsCount > 0" class="compat-zone">
       <div class="compat-title">兼容资源 · 独立 Docker 主机 {{ dockerHostsCount }} 台</div>
       <div class="compat-row">
-        <router-link to="/docker" class="res-card">
+        <article class="res-card">
           <div class="res-head"><span class="res-label">Docker 容器</span><b class="res-num">{{ containersSummary.running ?? '--' }}</b></div>
           <p class="res-meta">运行中 · 已停止 {{ containersSummary.stopped ?? '--' }}<template v-if="containersSummary.unknown_hosts"> · 未知主机 {{ containersSummary.unknown_hosts }}</template></p>
-        </router-link>
+        </article>
       </div>
     </div>
   </div>
@@ -478,7 +478,6 @@ function fmtShort(iso) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 function go(path) { router.push(path) }
-function goWireguard() { router.push({ path: '/topology', query: { scenario: 'wireguard' } }) }
 
 // 单层错误只错该层卡片：按关键字把 partial_errors 归位到对应面板
 const LAYER_ERROR_PATTERNS = [
@@ -749,7 +748,7 @@ function resizeChart() { trendChart?.resize() }
 .risk-bad { color: #f87171; }
 .risk-sub { font-size: 12px; color: var(--screen-muted); margin: 10px 0 4px; border-top: 1px dashed var(--screen-border); padding-top: 8px; }
 .src-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.wg-block { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 12px; border-top: 1px dashed var(--screen-border); padding-top: 10px; cursor: pointer; }
+.wg-block { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 12px; border-top: 1px dashed var(--screen-border); padding-top: 10px; }
 .wg-at { font-size: 11px; margin-left: auto; }
 .health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; max-height: 300px; overflow: auto; }
 .health-tile { border: 1px solid var(--screen-border); border-radius: 8px; padding: 8px 6px; text-align: center; font-size: 12px; cursor: pointer; background: rgba(20,35,58,.5); }

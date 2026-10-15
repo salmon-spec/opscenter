@@ -55,8 +55,6 @@ class Settings(BaseSettings):
     # ── Alerting (v3.26, F4/F5) ──
     alerting_enabled: bool = True                       # ALERTING_ENABLED=false 一键关停告警引擎
     silence_enabled: bool = True                        # SILENCE_ENABLED=false 跳过静默判断（回滚兜底）
-    cert_scan_enabled: bool = True                      # CERT_SCAN_ENABLED=false 关闭证书采集（回滚兜底）
-    cert_scan_interval_hours: int = 6                   # 证书探测周期（小时）
     log_scan_enabled: bool = True                        # LOG_SCAN_ENABLED=false 关闭日志异常扫描（回滚兜底）
     backup_check_enabled: bool = True                   # BACKUP_CHECK_ENABLED=false 关闭备份验证（回滚兜底）
     image_check_enabled: bool = True                    # IMAGE_CHECK_ENABLED=false 关闭镜像更新检测（回滚兜底）
@@ -118,6 +116,7 @@ class Settings(BaseSettings):
     minio_access_key: str = ""           # MINIO_ACCESS_KEY
     minio_secret_key: str = ""           # MINIO_SECRET_KEY
     minio_bucket: str = "opscenter"      # MINIO_BUCKET
+    mw_minio_allowed_buckets: str = ""   # MW_MINIO_ALLOWED_BUCKETS，兼容已部署的数据服务对象浏览器
     minio_secure: bool = False           # MINIO_SECURE=true 时使用 HTTPS
     minio_enabled: bool = False          # MINIO_ENABLED=true 时报告导出/对象浏览可用（只读仍可视图纸）
     zookeeper_hosts: str = ""            # ZOOKEEPER_HOSTS=zookeeper.middleware.svc.cluster.local:2181
@@ -172,9 +171,6 @@ CONTAINERIZED = _settings.containerized
 ALERTING_ENABLED = _settings.alerting_enabled
 # v3.27 S1 告警静默开关
 SILENCE_ENABLED = _settings.silence_enabled
-# v3.27 D1 证书监控开关与周期
-CERT_SCAN_ENABLED = _settings.cert_scan_enabled
-CERT_SCAN_INTERVAL_HOURS = _settings.cert_scan_interval_hours
 # v3.27 D2 日志异常扫描开关
 LOG_SCAN_ENABLED = _settings.log_scan_enabled
 # v3.27 D3 备份验证开关
@@ -234,6 +230,7 @@ NACOS_USERNAME = _settings.nacos_username
 NACOS_PASSWORD = _settings.nacos_password
 NACOS_ENABLED = _settings.nacos_enabled
 MINIO_ENDPOINT = _settings.minio_endpoint
+MW_MINIO_ALLOWED_BUCKETS = _settings.mw_minio_allowed_buckets.strip()
 MINIO_ACCESS_KEY = _settings.minio_access_key
 MINIO_SECRET_KEY = _settings.minio_secret_key
 MINIO_BUCKET = _settings.minio_bucket

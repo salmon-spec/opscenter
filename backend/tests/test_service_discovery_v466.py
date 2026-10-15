@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from app import main
+from app.version import VERSION
 from fastapi.testclient import TestClient
 
 
@@ -20,7 +21,7 @@ def test_proxied_openapi_documentation():
     client = TestClient(main.app)
     schema = client.get('/api/v2/openapi.json')
     assert schema.status_code == 200
-    assert schema.json()['info']['version'] == '5.3.1'
+    assert schema.json()['info']['version'] == VERSION
     docs = client.get('/api/v2/docs')
     assert docs.status_code == 200
     assert '/api/v2/openapi.json' in docs.text

@@ -11,12 +11,14 @@ v3.24.0：新增环境变量开关 OPS_AUTH_ENABLED（默认 false）。
 """
 import os
 import secrets as _secrets
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import jwt
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
@@ -27,6 +29,11 @@ from app.config import MONITOR_ALLOW_ANONYMOUS
 # === 配置 ===
 SECRET_KEY = os.getenv("OPS_JWT_SECRET", "").strip()
 ALGORITHM = "HS256"
+PRIVATE_KEY_FILE = os.getenv("OPS_JWT_PRIVATE_KEY_FILE", "").strip()
+PUBLIC_KEY_FILE = os.getenv("OPS_JWT_PUBLIC_KEY_FILE", "").strip()
+JWT_ISSUER = "opscenter"
+JWT_AUDIENCE = "opscenter-modules"
+LEGACY_UNTIL = os.getenv("OPS_JWT_LEGACY_UNTIL", "").strip()
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 # 免登录开关：OPS_AUTH_ENABLED=true 时恢复 JWT 鉴权；缺省/false 时免登录（v3.24.0）
 AUTH_ENABLED = os.getenv("OPS_AUTH_ENABLED", "false").strip().lower() in ("1", "true", "yes")
@@ -34,6 +41,10 @@ ADMIN_USER = os.getenv("OPS_ADMIN_USER", "admin").strip() or "admin"
 ADMIN_PASSWORD = os.getenv("OPS_ADMIN_PASSWORD", "")
 # v5.0.0 运维共享令牌：非空时 require_operator 保护的端点必须携带 Bearer <OPERATOR_TOKEN>
 OPERATOR_TOKEN = os.getenv("OPERATOR_TOKEN", "").strip()
+METRICS_READER_TOKEN = os.getenv("OPS_HOST_MONITOR_TOKEN", "").strip()
+# shortcut: process-local direct-peer buckets reset on restart and share the proxy IP; use trusted client IPs before multi-user rollout.
+_LOGIN_FAILURES: dict[str, tuple[int, float]] = {}
+_LOGIN_LOCK = threading.Lock()
 
 # Bearer 令牌提取器：auto_error=False 使未带令牌时返回 None 而非直接 403，
 # 由 get_current_user 自行返回 401，便于前端识别并弹出登录框。
@@ -63,7 +74,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 # === JWT 令牌 ===
 def create_access_token(user_id: int, username: str) -> str:
     """生成 JWT 访问令牌，有效期 24 小时。"""
-    if not SECRET_KEY:
+    if not SECRET_KEY and not PRIVATE_KEY_FILE:
         raise RuntimeError("OPS_JWT_SECRET 未配置，不能签发登录令牌")
     now = datetime.now(timezone.utc)
     payload = {
@@ -72,23 +83,34 @@ def create_access_token(user_id: int, username: str) -> str:
         "iat": now,
         "exp": now + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
     }
+    if PRIVATE_KEY_FILE:
+        with open(PRIVATE_KEY_FILE, "rb") as key_file:
+            private_key = key_file.read()
+        payload.update({"iss": JWT_ISSUER, "aud": JWT_AUDIENCE, "role": "admin"})
+        return jwt.encode(payload, private_key, algorithm="EdDSA")
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def decode_token(token: str) -> Optional[dict]:
     """解码并校验令牌，无效或过期返回 None。"""
-    if not SECRET_KEY:
-        return None
     try:
+        algorithm = jwt.get_unverified_header(token).get("alg")
+        if algorithm == "EdDSA" and PUBLIC_KEY_FILE:
+            with open(PUBLIC_KEY_FILE, "rb") as key_file:
+                public_key = key_file.read()
+            return jwt.decode(token, public_key, algorithms=["EdDSA"], issuer=JWT_ISSUER,
+                              audience=JWT_AUDIENCE, options={"require": ["exp", "sub", "iss", "aud", "role"]})
+        if algorithm != "HS256" or not SECRET_KEY:
+            return None
+        if LEGACY_UNTIL and datetime.now(timezone.utc) >= datetime.fromisoformat(LEGACY_UNTIL.replace("Z", "+00:00")):
+            return None
         return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        return None
-    except jwt.InvalidTokenError:
+    except (jwt.InvalidTokenError, OSError, ValueError):
         return None
 
 
 @router.post("/login")
-def login(payload: LoginRequest):
+def login(payload: LoginRequest, request: Request):
     if not AUTH_ENABLED:
         if OPERATOR_TOKEN and _secrets.compare_digest(payload.password, OPERATOR_TOKEN):
             return {
@@ -97,10 +119,22 @@ def login(payload: LoginRequest):
                 "user": {"id": 1, "username": ADMIN_USER, "display_name": "管理员", "role": "admin"},
             }
         raise HTTPException(status_code=409, detail="当前未启用账号登录")
-    if not SECRET_KEY or not ADMIN_PASSWORD:
+    if not (SECRET_KEY or PRIVATE_KEY_FILE) or not ADMIN_PASSWORD:
         raise HTTPException(status_code=503, detail="登录密钥或管理员密码未配置")
-    valid_user = _secrets.compare_digest(payload.username, ADMIN_USER)
-    valid_password = _secrets.compare_digest(payload.password, ADMIN_PASSWORD)
+    client_ip = request.client.host if request.client else "unknown"
+    now_mono = time.monotonic()
+    with _LOGIN_LOCK:
+        attempts, since = _LOGIN_FAILURES.get(client_ip, (0, now_mono))
+        if now_mono - since >= 300:
+            attempts, since = 0, now_mono
+        if attempts >= 5:
+            raise HTTPException(status_code=429, detail="登录尝试过多，请 5 分钟后重试")
+        valid_user = _secrets.compare_digest(payload.username, ADMIN_USER)
+        valid_password = _secrets.compare_digest(payload.password, ADMIN_PASSWORD)
+        if valid_user and valid_password:
+            _LOGIN_FAILURES.pop(client_ip, None)
+        else:
+            _LOGIN_FAILURES[client_ip] = (attempts + 1, since)
     if not (valid_user and valid_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -159,9 +193,16 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="无效的认证令牌")
 
     username = str(payload.get("username") or "")
+    if payload.get("iss") == JWT_ISSUER and payload.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="此账号没有管理员权限")
     if str(user_id) != "1" or not _secrets.compare_digest(username, ADMIN_USER):
         raise HTTPException(status_code=401, detail="用户不存在或已禁用")
     return _virtual_admin()
+
+
+@router.get("/me")
+def current_session(user: object = Depends(get_current_user)):
+    return {"username": user.username, "role": user.role}
 
 
 # === v5.0.0 运维共享令牌依赖（数据服务/高危端点） ===
@@ -221,7 +262,7 @@ def require_configured_operator(
     instead of an anonymous virtual administrator.
     """
     if AUTH_ENABLED:
-        if not SECRET_KEY:
+        if not (SECRET_KEY or PUBLIC_KEY_FILE):
             raise HTTPException(status_code=503, detail="OPS_JWT_SECRET 未配置，监控接口不可用")
         return get_current_user(credentials)
     if MONITOR_ALLOW_ANONYMOUS:
@@ -239,6 +280,16 @@ def require_configured_operator(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return _virtual_admin()
+
+
+def require_metric_reader(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+) -> object:
+    """Allow the host-monitor service to read metrics without granting mutations."""
+    token = credentials.credentials if credentials else None
+    if METRICS_READER_TOKEN and token and _secrets.compare_digest(token, METRICS_READER_TOKEN):
+        return _virtual_admin()
+    return require_operator(credentials)
 
 
 class MutationAuthMiddleware:

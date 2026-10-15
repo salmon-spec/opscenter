@@ -1,6 +1,6 @@
 # OpsCenter 运维工作台
 
-> **当前版本：v5.3.1** · 更新于 2026-09-24
+> **本地源码目标版本：v5.5.0（未发布）** · 更新于 2026-10-10。生产发布基线记录为 v5.3.1；发布前需核对 v5.4.2/v5.4.3 的来源与版本链。
 > 访问：https://ops.salmon.xin/ · 状态页：https://ops.salmon.xin/status/ · Vite 灰度页：https://ops.salmon.xin/v3/
 
 面向 DevOps/SRE 的自托管**统一运维工作台**：管理服务器、服务、监控、告警、证书、日志、备份、镜像与巡检日报，中文界面，支持 JWT 登录、SSH 终端直连与远程 Agent 采集。
@@ -16,18 +16,18 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 - **告警生态**：告警规则 / 事件 / 静默 + 多源检测（证书 / 日志 / 备份 / 镜像）
 - **数据价值化**：巡检日报自动生成与飞书推送，7 天可用性状态页
 - **操作审计**：写操作自动记录，90 天 TTL，可追溯
-- **远程能力**：Agent 一键部署采集 + WebSocket SSH 终端 + 文件管理
+- **远程能力**：Agent 数据采集；旧主机写操作暂时封锁，等待独立受控模块
 - **资源控制台**：全局主机上下文；数据库、容器、系统独立分域；容器统计按需采集；系统监控、终端与进程管理独立加载
 - **AI 上下文 API**：强制 API 密钥认证的只读态势、主机、服务、事件与聚合快照接口，不触发实时探活或控制动作
 
-## 二、当前状态（2026-09-24）
+## 二、上次发布状态（2026-09-24）
 
 | 项 | 状态 |
 |---|---|
 | 后端测试 | **本地 SQLite 兼容回归 428/428 全绿**；PostgreSQL 全量回归由 CI 发布门禁执行 |
 | API | 增加 6 个 `/api/v2/ai/*` 只读上下文接口；现有管理与监控接口保持兼容 |
 | Agent | v2.6.3 |
-| 版本里程碑 | **v5.3.1**（中间件监控界面优化：实例与健康概览、关键/全部/关注指标视图、语义分组与搜索、趋势单位格式化、快速指标切换、响应式诊断卡片；已部署 VM100 测试环境） |
+| 版本里程碑 | **v5.3.1**（2026-09-24 发布记录）；本地 v5.5.0 候选已移除内置数据服务页面并封锁旧主机写操作，尚未部署 |
 | 扩展模块 | OSS 只读浏览 + 模型用量监控（Command Code / GOAT，API Key 加密保存，沙箱 iframe 隔离） |
 | 系统文件管理 | **v4.3 已交付**（本机/SFTP 浏览、编辑、上传下载、改名、可恢复删除） |
 | 系统防火墙 / SSH | **v4.3 已交付**（UFW/Firewalld、防失联保护、SSH 配置/会话/登录日志） |
@@ -66,7 +66,7 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 │  FastAPI app/main.py + routers/{servers,services,       │
 │  monitor,terminal}                                       │
 │  ├── 采集层：Docker SDK 发现 / SSH 采集 / Agent 远程      │
-│  ├── 检测层：alerting / cert_scanner / log_scanner /     │
+│  ├── 检测层：alerts 模块 / log_scanner /                │
 │  │           backup_scanner / image_scanner             │
 │  ├── 产品层：report_engine(巡检日报) / audit(操作审计)    │
 │  └── 持久层：PostgreSQL 16（15 张表）                    │
@@ -80,7 +80,6 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | `main.py` | FastAPI 应用：全部 /api/v2/* 端点 + 中间件（AuditMiddleware）+ 定时任务 |
 | `routers/` | 分组路由：servers（服务器）、services（服务）、monitor（监控）、terminal（SSH 终端） |
 | `alerting.py` | 告警引擎：规则 / 事件 / 静默 / 通知（飞书 webhook） |
-| `cert_scanner.py` | 证书检测：SSL 证书有效期巡检 |
 | `log_scanner.py` | 日志检测：系统日志规则匹配 |
 | `backup_scanner.py` | 备份检测：备份任务状态巡检 |
 | `image_scanner.py` | 镜像检测：Docker 镜像更新状态 |
@@ -187,7 +186,6 @@ OpsCenter 定位为「运维导航 + 监控中心 + 告警生态 + 数据价值�
 | 服务 | `GET/POST /api/v2/services` · `PUT/DELETE /api/v2/services/{id}` · `PATCH /{id}/pin` · `GET /api/v2/services/all` · `GET /api/v2/services-with-status` |
 | 监控 | `GET /api/v2/monitor/{id}` · `/{id}/history` · `/{id}/network` · `/{id}/network/history` · `/{id}/network/latency` · `GET /api/v2/monitor/{id}/health-check` |
 | 告警 | `GET/POST /api/v2/alert-rules` · `PUT/DELETE /{rule_id}` · `GET /api/v2/alert-events` · `POST /{event_id}/ack` · `GET/POST/DELETE /api/v2/alert-silences` |
-| 证书 | `GET/POST /api/v2/cert-checks` · `POST /scan` · `DELETE /{check_id}` |
 | 日志 | `GET/POST /api/v2/log-rules` · `POST /scan` · `GET /api/v2/log-matches` |
 | 备份 | `GET/POST /api/v2/backup-checks` · `POST /scan` · `DELETE /{check_id}` |
 | 镜像 | `GET /api/v2/images` · `POST /api/v2/images/scan` |
@@ -208,7 +206,6 @@ OpsCenter/
 │   │   ├── main.py               # FastAPI 应用（全部端点 + 中间件 + 定时任务）
 │   │   ├── routers/              # servers / services / monitor / terminal
 │   │   ├── alerting.py           # 告警引擎
-│   │   ├── cert_scanner.py       # 证书检测
 │   │   ├── log_scanner.py        # 日志检测
 │   │   ├── backup_scanner.py     # 备份检测
 │   │   ├── image_scanner.py      # 镜像检测
@@ -219,7 +216,7 @@ OpsCenter/
 │   │   ├── ssh_terminal.py       # WebSocket 终端 + 文件管理
 │   │   ├── discovery.py          # 服务自动发现
 │   │   ├── models.py             # SQLAlchemy 模型（15 表）
-│   │   └── version.py            # 版本号（5.3.1，单一来源）
+│   │   └── version.py            # 后端版本号（本地源码 5.5.0）
 │   ├── tests/                    # pytest（428 用例）
 │   └── requirements.txt
 ├── agent/
@@ -362,8 +359,7 @@ cd backend && pytest    # 当前 428/428 全绿
 - **前端入口兼容**：Vite 版本继续保留 `/v3/` 入口，正式切换由发布流程统一执行
 - **docker-compose.yml 已废弃**：实际由 systemd 运行（文件标注 DEPRECATED）
 - **运维规范**：本机无 docker；生产配置修改需走部署脚本 + 自动备份
-- **v5.3.1 已进入测试环境**：VM100 已更新为 `opscenter/{backend,frontend}:5.3.1-test`；生产仍保持 v5.1.0。代码尚未 commit、tag 或 push，待用户验收后再进入发布流程。
-- **v5.3.1 已进入测试环境**：VM100 已更新为 `opscenter/{backend,frontend}:5.3.1-test`；生产仍保持 v5.1.0，本轮不部署生产。
+- **本地 v5.5.0 未发布**：工作台已移除内置数据服务控制台并封锁旧主机写操作；模块化迁移尚未完成，发布前须补齐隔离模块、核对版本链并完成真实入口验收。
 - **版本标签补齐**：本轮按 `v5.1.1`、`v5.1.2`、`v5.2.0`、`v5.2.1`、`v5.2.2`、`v5.2.3`、`v5.2.4`、`v5.3.0`、`v5.3.1` 顺序补打并同步 GitHub 与 Forgejo。
 
 ## 十二、参考资料

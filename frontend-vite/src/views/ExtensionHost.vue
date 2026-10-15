@@ -6,9 +6,9 @@
         <div><b>{{ module?.name || moduleKey }}</b><small>{{ module?.description || '扩展模块' }}</small></div>
       </div>
       <div class="host-meta">
-        <span class="state" :class="module?.running ? 'running' : 'stopped'"><i></i>{{ module?.running ? '隔离运行中' : '已停止' }}</span>
+        <span class="state" :class="module?.running ? 'running' : 'stopped'"><i></i>{{ module?.running ? '导航入口已启用' : '导航入口已隐藏' }}</span>
         <span v-if="module?.version" class="muted">v{{ module.version }}</span>
-        <router-link class="btn btn-sm" to="/modules">模块管理</router-link>
+        <router-link v-if="!fixedKey" class="btn btn-sm" to="/modules">模块管理</router-link>
       </div>
     </div>
 
@@ -19,9 +19,9 @@
       <button class="btn" @click="loadModule">重试</button>
     </div>
     <div v-else-if="!module?.running" class="center-state">
-      <b>模块当前未启动</b>
-      <span>启动后模块会在受控 iframe 中运行，并出现在侧边栏。</span>
-      <button class="btn btn-primary" :disabled="starting" @click="startModule">{{ starting ? '启动中…' : '启动模块' }}</button>
+      <b>模块入口当前已隐藏</b>
+      <span>启用入口后会显示在侧边栏。页面服务状态请以模块健康检查为准。</span>
+      <button v-if="!fixedKey" class="btn btn-primary" :disabled="starting" @click="startModule">{{ starting ? '启用中…' : '显示模块入口' }}</button>
     </div>
     <iframe
       v-else
@@ -42,14 +42,21 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, toast } from '../api'
 
+const props = defineProps({ fixedKey: { type: String, default: '' }, fixedName: { type: String, default: '' } })
 const route = useRoute()
-const moduleKey = computed(() => String(route.params.moduleKey || ''))
+const moduleKey = computed(() => props.fixedKey || String(route.params.moduleKey || ''))
 const frame = ref(null)
 const module = ref(null)
 const loading = ref(true)
 const loadError = ref('')
 const starting = ref(false)
 let loadRevision = 0
+let frameNonce = ''
+
+function newNonce() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
 
 const sandboxValue = computed(() => {
   const requested = Array.isArray(module.value?.manifest?.sandbox)
@@ -65,9 +72,17 @@ async function loadModule() {
   loading.value = true
   loadError.value = ''
   module.value = null
+  frameNonce = newNonce()
   starting.value = false
   try {
-    const result = await api.get(`/modules/${requestedKey}`)
+    const result = props.fixedKey
+      ? await api.get(`/modules/${requestedKey}/api/v1/module`).then((info) => ({
+        key: requestedKey, name: props.fixedName || requestedKey, version: info.version,
+        description: '独立业务模块', running: true,
+        entry_url: `/modules/${requestedKey}/ui/`,
+        manifest: { sandbox: ['allow-scripts'], api_prefixes: [`/modules/${requestedKey}/api/v1/`] },
+      }))
+      : await api.get(`/modules/${requestedKey}`)
     if (revision === loadRevision) module.value = result
   } catch (error) {
     if (revision === loadRevision) loadError.value = error.message
@@ -85,7 +100,7 @@ async function startModule() {
     if (requestedKey !== moduleKey.value || revision !== loadRevision) return
     module.value = result
     window.dispatchEvent(new CustomEvent('ops-modules-changed'))
-    toast(`${module.value.name} 已启动`, 'ok')
+    toast(`${module.value.name} 入口已显示`, 'ok')
   } catch (error) {
     if (revision === loadRevision) toast(error.message, 'err')
   } finally {
@@ -150,6 +165,7 @@ function resolveAllowedPath(path) {
 function reply(id, ok, data) {
   frame.value?.contentWindow?.postMessage({
     type: 'ops-module-api-response',
+    nonce: frameNonce,
     id,
     ok,
     data: ok ? data : { message: String(data?.message || data || '模块请求失败') },
@@ -157,6 +173,8 @@ function reply(id, ok, data) {
 }
 
 async function handleApiRequest(data) {
+  if (props.fixedKey && data.nonce !== frameNonce) return
+  const revision = loadRevision
   const id = String(data.id || '')
   const path = resolveAllowedPath(data.path)
   if (!id || !path) return reply(id, false, { message: '模块无权访问该接口' })
@@ -170,18 +188,21 @@ async function handleApiRequest(data) {
     const result = method === 'GET'
       ? await api.get(path, data.query || {}, { timeoutMs })
       : await api.post(path, data.body ?? {}, { query: data.query || {}, timeoutMs })
-    reply(id, true, result)
+    if (revision === loadRevision) reply(id, true, result)
   } catch (error) {
-    reply(id, false, { message: error.message, status: error.status })
+    if (revision === loadRevision) reply(id, false, { message: error.message, status: error.status })
   }
 }
 
 async function handleDownload(data) {
+  if (props.fixedKey && data.nonce !== frameNonce) return
+  const revision = loadRevision
   const id = String(data.id || '')
   const path = resolveAllowedPath(data.path)
   if (!id || !path) return reply(id, false, { message: '模块无权下载该对象' })
   try {
     const blob = await api.download(path, data.query || {}, { timeoutMs: 120000 })
+    if (revision !== loadRevision) return
     const objectUrl = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = objectUrl
@@ -193,7 +214,7 @@ async function handleDownload(data) {
     setTimeout(() => URL.revokeObjectURL(objectUrl), 30000)
     reply(id, true, { downloaded: true })
   } catch (error) {
-    reply(id, false, { message: error.message, status: error.status })
+    if (revision === loadRevision) reply(id, false, { message: error.message, status: error.status })
   }
 }
 
@@ -207,6 +228,7 @@ function announceModule(event) {
   }))
   frame.value.contentWindow.postMessage({
     type: 'ops-module-info',
+    nonce: frameNonce,
     module: info,
   }, '*')
 }

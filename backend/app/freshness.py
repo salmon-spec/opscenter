@@ -15,7 +15,7 @@
 字典型端点直接并进响应体；列表型端点（/servers、/services/plaza）顶层是数组、
 前端按数组消费，不能换结构，改由同名 HTTP 响应头下发（见 freshness_headers()）。
 
-判定“过期”的口径沿用既有 app.topology._metric_is_stale：数据缺失（无时间戳）
+判定“过期”的口径与系统健康汇总一致：数据缺失（无时间戳）
 同样算不新鲜。
 """
 
@@ -26,7 +26,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-# 指标过期阈值：与 app.topology._METRIC_STALE_SECONDS 一致（约 30s 采样 ×3）
+# 指标过期阈值：约 30s 采样 ×3
 METRIC_STALENESS_SECONDS = 90.0
 
 
