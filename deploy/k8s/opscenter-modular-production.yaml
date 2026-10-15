@@ -1,0 +1,1060 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-k3s
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-k3s
+  template:
+    metadata:
+      labels:
+        app: module-k3s
+    spec:
+      containers:
+      - name: module-k3s
+        image: opscenter/module-k3s:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MODULE_AUTH_REQUIRED
+          value: 'true'
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: K8S_API_URL
+          value: https://kubernetes.default.svc:443
+        - name: K8S_TOKEN_FILE
+          value: /var/run/secrets/kubernetes.io/serviceaccount/token
+        - name: K8S_CA_PATH
+          value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        - name: K8S_TIMEOUT_SECONDS
+          value: '5'
+        - name: MODULE_DATABASE_URL_FILE
+          value: /run/secrets/k3s_db_url
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: k3s-db-url
+          mountPath: /run/secrets/k3s_db_url
+          subPath: k3s_db_url
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: k3s-db-url
+        secret:
+          secretName: module-k3s-db
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      serviceAccountName: opscenter-reader
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-k3s
+  namespace: opscenter
+spec:
+  selector:
+    app: module-k3s
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-host-inventory
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-host-inventory
+  template:
+    metadata:
+      labels:
+        app: module-host-inventory
+    spec:
+      containers:
+      - name: module-host-inventory
+        image: opscenter/module-host-inventory:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MODULE_AUTH_REQUIRED
+          value: 'true'
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: HOST_INVENTORY_SOURCE_URL
+          value: http://backend:9091/api/v2/servers
+        - name: HOST_INVENTORY_TIMEOUT_SECONDS
+          value: '5'
+        - name: HOST_INVENTORY_SYNC_ENABLED
+          value: 'true'
+        - name: HOST_INVENTORY_DATABASE_URL_FILE
+          value: /run/secrets/host_inventory_db_url
+        - name: HOST_INVENTORY_INGEST_TOKEN_FILE
+          value: /run/secrets/host_inventory_ingest_token
+        - name: OPS_MODULE_INTERNAL_TOKEN_FILE
+          value: /run/secrets/host_inventory_internal_token
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: host-inventory-db-url
+          mountPath: /run/secrets/host_inventory_db_url
+          subPath: host_inventory_db_url
+          readOnly: true
+        - name: host-inventory-ingest-token
+          mountPath: /run/secrets/host_inventory_ingest_token
+          subPath: host-inventory-ingest-token
+          readOnly: true
+        - name: host-inventory-internal-token
+          mountPath: /run/secrets/host_inventory_internal_token
+          subPath: host-inventory-internal-token
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: host-inventory-db-url
+        secret:
+          secretName: module-host-inventory-db
+      - name: host-inventory-ingest-token
+        secret:
+          secretName: opscenter-host-inventory-ingest
+      - name: host-inventory-internal-token
+        secret:
+          secretName: opscenter-host-inventory-internal
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-host-inventory
+  namespace: opscenter
+spec:
+  selector:
+    app: module-host-inventory
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-host-monitor
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-host-monitor
+  template:
+    metadata:
+      labels:
+        app: module-host-monitor
+    spec:
+      containers:
+      - name: module-host-monitor
+        image: opscenter/module-host-monitor:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MODULE_AUTH_REQUIRED
+          value: 'true'
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: HOST_MONITOR_DATABASE_URL_FILE
+          value: /run/secrets/host_monitor_db_url
+        - name: HOST_MONITOR_AGENT_TOKEN_FILE
+          value: /run/secrets/host_monitor_agent_token
+        - name: HOST_MONITOR_AGENT_ID
+          value: 79999aaf-34ca-466c-b959-6a74023bc47d
+        - name: HOST_MONITOR_AGENT_NAME
+          value: PVE 宿主机
+        - name: HOST_MONITOR_AGENT_HOST
+          value: 192.168.1.151
+        - name: HOST_MONITOR_AGENT_PORT
+          value: '19100'
+        - name: OPS_MODULE_INTERNAL_TOKEN_FILE
+          value: /run/secrets/host_monitor_internal_token
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: host-monitor-db-url
+          mountPath: /run/secrets/host_monitor_db_url
+          subPath: host_monitor_db_url
+          readOnly: true
+        - name: host-monitor-agent-token
+          mountPath: /run/secrets/host_monitor_agent_token
+          subPath: agent-token
+          readOnly: true
+        - name: host-monitor-internal-token
+          mountPath: /run/secrets/host_monitor_internal_token
+          subPath: host-monitor-internal-token
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: host-monitor-db-url
+        secret:
+          secretName: module-host-monitor-db
+      - name: host-monitor-agent-token
+        secret:
+          secretName: opscenter-host-monitor-agent
+      - name: host-monitor-internal-token
+        secret:
+          secretName: opscenter-host-monitor-internal
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-host-monitor
+  namespace: opscenter
+spec:
+  selector:
+    app: module-host-monitor
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-service-catalog
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-service-catalog
+  template:
+    metadata:
+      labels:
+        app: module-service-catalog
+    spec:
+      containers:
+      - name: module-service-catalog
+        image: opscenter/module-service-catalog:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MODULE_AUTH_REQUIRED
+          value: 'true'
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: SERVICE_CATALOG_SOURCE_URL
+          value: http://backend:9091/api/v2
+        - name: SERVICE_CATALOG_DATABASE_URL_FILE
+          value: /run/secrets/service_catalog_db_url
+        - name: SERVICE_CATALOG_CREDENTIAL_KEY_FILE
+          value: /run/secrets/service_catalog_credential_key
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: service-catalog-db-url
+          mountPath: /run/secrets/service_catalog_db_url
+          subPath: service_catalog_db_url
+          readOnly: true
+        - name: service-catalog-credential-key
+          mountPath: /run/secrets/service_catalog_credential_key
+          subPath: credential-key
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: service-catalog-db-url
+        secret:
+          secretName: module-service-catalog-db
+      - name: service-catalog-credential-key
+        secret:
+          secretName: opscenter-service-catalog-key
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-service-catalog
+  namespace: opscenter
+spec:
+  selector:
+    app: module-service-catalog
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-pve-backup
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-pve-backup
+  template:
+    metadata:
+      labels:
+        app: module-pve-backup
+    spec:
+      containers:
+      - name: module-pve-backup
+        image: opscenter/module-pve-backup:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MODULE_AUTH_REQUIRED
+          value: 'true'
+        - name: OPS_MODULE_INTERNAL_TOKEN_FILE
+          value: /run/secrets/pve_backup_internal_token
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: PVE_API_TOKEN_SECRET_FILE
+          value: /run/secrets/pve_api_token_secret
+        - name: PVE_API_CA_FILE
+          value: /run/secrets/pve_api_ca
+        - name: PVE_BACKUP_DATABASE_URL_FILE
+          value: /run/secrets/pve_backup_db_url
+        - name: PVE_BACKUP_STALE_AFTER_DAYS
+          value: '7'
+        - name: PVE_API_URL
+          value: https://192.168.1.151:8006
+        - name: PVE_API_TOKEN_ID
+          value: opscenter-reader@pve!production
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: pve-api-token-secret
+          mountPath: /run/secrets/pve_api_token_secret
+          subPath: pve_api_token_secret
+          readOnly: true
+        - name: pve-api-ca
+          mountPath: /run/secrets/pve_api_ca
+          subPath: pve_api_ca.crt
+          readOnly: true
+        - name: pve-backup-db-url
+          mountPath: /run/secrets/pve_backup_db_url
+          subPath: pve_backup_db_url
+          readOnly: true
+        - name: pve-backup-internal-token
+          mountPath: /run/secrets/pve_backup_internal_token
+          subPath: pve-backup-internal-token
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: pve-api-token-secret
+        secret:
+          secretName: opscenter-pve-api
+      - name: pve-api-ca
+        secret:
+          secretName: opscenter-pve-api
+      - name: pve-backup-db-url
+        secret:
+          secretName: module-pve-backup-db
+      - name: pve-backup-internal-token
+        secret:
+          secretName: opscenter-pve-backup-internal
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-pve-backup
+  namespace: opscenter
+spec:
+  selector:
+    app: module-pve-backup
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-alerts
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-alerts
+  template:
+    metadata:
+      labels:
+        app: module-alerts
+    spec:
+      containers:
+      - name: module-alerts
+        image: opscenter/module-alerts:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MODULE_AUTH_REQUIRED
+          value: 'true'
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: ALERTS_SOURCE_URL
+          value: http://backend:9091/api/v2
+        - name: ALERTS_DATABASE_URL_FILE
+          value: /run/secrets/alerts_db_url
+        - name: ALERTS_SYNC_ENABLED
+          value: 'true'
+        - name: HOST_INVENTORY_INTERNAL_URL
+          value: http://module-host-inventory:8080
+        - name: HOST_INVENTORY_INTERNAL_TOKEN_FILE
+          value: /run/secrets/host_inventory_internal_token
+        - name: HOST_MONITOR_INTERNAL_URL
+          value: http://module-host-monitor:8080
+        - name: HOST_MONITOR_INTERNAL_TOKEN_FILE
+          value: /run/secrets/host_monitor_internal_token
+        - name: PVE_BACKUP_INTERNAL_URL
+          value: http://module-pve-backup:8080
+        - name: PVE_BACKUP_INTERNAL_TOKEN_FILE
+          value: /run/secrets/pve_backup_internal_token
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: alerts-db-url
+          mountPath: /run/secrets/alerts_db_url
+          subPath: alerts_db_url
+          readOnly: true
+        - name: host-inventory-internal-token
+          mountPath: /run/secrets/host_inventory_internal_token
+          subPath: host-inventory-internal-token
+          readOnly: true
+        - name: host-monitor-internal-token
+          mountPath: /run/secrets/host_monitor_internal_token
+          subPath: host-monitor-internal-token
+          readOnly: true
+        - name: pve-backup-internal-token
+          mountPath: /run/secrets/pve_backup_internal_token
+          subPath: pve-backup-internal-token
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 180
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: alerts-db-url
+        secret:
+          secretName: module-alerts-db
+      - name: host-inventory-internal-token
+        secret:
+          secretName: opscenter-host-inventory-internal
+      - name: host-monitor-internal-token
+        secret:
+          secretName: opscenter-host-monitor-internal
+      - name: pve-backup-internal-token
+        secret:
+          secretName: opscenter-pve-backup-internal
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-alerts
+  namespace: opscenter
+spec:
+  selector:
+    app: module-alerts
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-logs
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-logs
+  template:
+    metadata:
+      labels:
+        app: module-logs
+    spec:
+      containers:
+      - name: module-logs
+        image: opscenter/module-logs:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: MODULE_AUTH_REQUIRED
+          value: 'true'
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: LOGS_TIMEOUT_SECONDS
+          value: '8'
+        - name: HOST_INVENTORY_URL
+          value: http://module-host-inventory:8080
+        - name: LOGS_LOKI_URL
+          value: http://loki:3100
+        - name: LOGS_DATA_DIR
+          value: /loki
+        - name: MODULE_DATABASE_URL_FILE
+          value: /run/secrets/logs_db_url
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: logs-db-url
+          mountPath: /run/secrets/logs_db_url
+          subPath: logs_db_url
+          readOnly: true
+        - name: loki-data
+          mountPath: /loki
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: logs-db-url
+        secret:
+          secretName: module-logs-db
+      - name: loki-data
+        persistentVolumeClaim:
+          claimName: data-loki-0
+          readOnly: true
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: k8s-worker-02
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-logs
+  namespace: opscenter
+spec:
+  selector:
+    app: module-logs
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-oss-browser
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-oss-browser
+  template:
+    metadata:
+      labels:
+        app: module-oss-browser
+    spec:
+      containers:
+      - name: module-oss-browser
+        image: opscenter/module-oss-browser:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: EXTENSION_MODULE_KEY
+          value: oss-browser
+        - name: EXTENSION_DATABASE_URL_FILE
+          value: /run/secrets/oss_browser_db_url
+        - name: OPS_AUTH_ENABLED
+          value: 'true'
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        - name: CREDENTIAL_KEY
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: CREDENTIAL_KEY
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: oss-browser-db-url
+          mountPath: /run/secrets/oss_browser_db_url
+          subPath: oss_browser_db_url
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 256Mi
+          limits:
+            cpu: 300m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: oss-browser-db-url
+        secret:
+          secretName: module-oss-browser-db
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-oss-browser
+  namespace: opscenter
+spec:
+  selector:
+    app: module-oss-browser
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-command-code-usage
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-command-code-usage
+  template:
+    metadata:
+      labels:
+        app: module-command-code-usage
+    spec:
+      containers:
+      - name: module-command-code-usage
+        image: opscenter/module-command-code-usage:cf2f34bb
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        - name: EXTENSION_MODULE_KEY
+          value: command-code-usage
+        - name: EXTENSION_DATABASE_URL_FILE
+          value: /run/secrets/command_code_usage_db_url
+        - name: OPS_AUTH_ENABLED
+          value: 'true'
+        - name: OPS_JWT_PUBLIC_KEY_FILE
+          value: /run/secrets/opscenter_jwt_public
+        - name: OPS_JWT_LEGACY_UNTIL
+          value: '2026-10-15T00:00:00Z'
+        - name: OPS_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: OPS_ADMIN_USER
+        - name: CREDENTIAL_KEY
+          valueFrom:
+            secretKeyRef:
+              name: opscenter-env
+              key: CREDENTIAL_KEY
+        volumeMounts:
+        - name: opscenter-jwt-public
+          mountPath: /run/secrets/opscenter_jwt_public
+          subPath: jwt-public.pem
+          readOnly: true
+        - name: command-code-usage-db-url
+          mountPath: /run/secrets/command_code_usage_db_url
+          subPath: command_code_usage_db_url
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 256Mi
+          limits:
+            cpu: 300m
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: opscenter-jwt-public
+        secret:
+          secretName: opscenter-jwt-keypair
+      - name: command-code-usage-db-url
+        secret:
+          secretName: module-command-code-usage-db
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - k8s-worker-01
+                - k8s-worker-02
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-command-code-usage
+  namespace: opscenter
+spec:
+  selector:
+    app: module-command-code-usage
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080

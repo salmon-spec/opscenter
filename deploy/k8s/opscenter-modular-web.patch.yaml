@@ -1,0 +1,15 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: caddy
+          image: opscenter/frontend:cf2f34bb
+          volumeMounts:
+            - name: modular-gateway
+              mountPath: /etc/caddy/Caddyfile
+              subPath: Caddyfile
+              readOnly: true
+      volumes:
+        - name: modular-gateway
+          configMap:
+            name: opscenter-modular-gateway

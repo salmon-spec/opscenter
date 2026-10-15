@@ -1,0 +1,41 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: backend
+          image: opscenter/backend:cf2f34bb
+          env:
+            - name: OPS_AUTH_ENABLED
+              value: "true"
+            - name: OPS_MONITOR_ALLOW_ANONYMOUS
+              value: "false"
+            - name: OPS_JWT_PRIVATE_KEY_FILE
+              value: /run/jwt/jwt-private.pem
+            - name: OPS_JWT_PUBLIC_KEY_FILE
+              value: /run/jwt/jwt-public.pem
+            - name: OPS_JWT_LEGACY_UNTIL
+              value: "2026-10-15T00:00:00Z"
+            - name: HOST_INVENTORY_INGEST_URL
+              value: http://module-host-inventory:8080/api/v1/agent/telemetry
+            - name: HOST_INVENTORY_INGEST_TOKEN_FILE
+              value: /run/ingest/host-inventory-ingest-token
+            - name: ALERTING_ENABLED
+              value: "false"
+            - name: SERVICE_HEALTH_ENABLED
+              value: "false"
+            - name: OPS_COMMAND_CODE_USAGE_OWNER
+              value: module
+          volumeMounts:
+            - name: jwt-keypair
+              mountPath: /run/jwt
+              readOnly: true
+            - name: host-inventory-ingest
+              mountPath: /run/ingest
+              readOnly: true
+      volumes:
+        - name: jwt-keypair
+          secret:
+            secretName: opscenter-jwt-keypair
+        - name: host-inventory-ingest
+          secret:
+            secretName: opscenter-host-inventory-ingest
