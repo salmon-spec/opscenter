@@ -30,7 +30,7 @@ const modules = [
 const module = computed(() => modules.find((item) => item.prefix ? route.path.startsWith(item.prefix) : item.paths.some((path) => route.path === path || route.path.startsWith(path))) || null)
 const pages = computed(() => {
   if (!module.value) return []
-  if (module.value.paths.includes('/database')) {
+  if (module.value.paths?.includes('/database')) {
     return route.path.startsWith('/system/') ? module.value.groups[0].items : module.value.groups[1].items
   }
   return module.value.groups.flatMap((group) => group.items)

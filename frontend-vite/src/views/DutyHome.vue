@@ -118,22 +118,21 @@ async function loadSummary(item) {
   item.findingsError = ''
   const summaryController = new AbortController()
   const findingsController = new AbortController()
-  const summaryTimer = setTimeout(() => summaryController.abort(), 5000)
-  const findingsTimer = setTimeout(() => findingsController.abort(), 5000)
+  const summaryTimer = setTimeout(() => summaryController.abort(), 10000)
+  const findingsTimer = setTimeout(() => findingsController.abort(), 10000)
   try {
-    const [summary, findings] = await Promise.allSettled([
-      moduleRequest(item, 'summary', summaryController),
-      moduleRequest(item, 'findings', findingsController),
+    await Promise.all([
+      moduleRequest(item, 'summary', summaryController).then(summary => {
+        if (!['ok', 'degraded', 'unavailable'].includes(summary.status)) { item.error = '模块摘要格式不正确'; return }
+        if (summary.status === 'unavailable' && item.summary && item.summary.status !== 'unavailable') item.error = summary.error || '模块不可用，保留上次数据'
+        else item.summary = summary
+      }).catch(error => { item.error = summaryController.signal.aborted ? '模块请求超时（10 秒）' : error.message || '模块摘要不可用' }),
+      moduleRequest(item, 'findings', findingsController).then(findings => {
+        if (!Array.isArray(findings.items) || findings.status === 'unavailable') { item.findingsError = findings.error || '告警源暂不可用'; return }
+        item.findings = findings.items
+        if (findings.status === 'degraded') item.findingsError = findings.error || '告警项数据部分不可用'
+      }).catch(error => { item.findingsError = findingsController.signal.aborted ? '请求超时' : error.message || '不可用' }),
     ])
-    if (summary.status === 'fulfilled' && ['ok', 'degraded', 'unavailable'].includes(summary.value.status)) {
-      if (summary.value.status === 'unavailable' && item.summary && item.summary.status !== 'unavailable') {
-        item.error = summary.value.error || '模块不可用，保留上次数据'
-      } else item.summary = summary.value
-    } else item.error = summary.status === 'rejected' ? (summaryController.signal.aborted ? '模块请求超时（5 秒）' : summary.reason.message || '模块摘要不可用') : '模块摘要格式不正确'
-    if (findings.status === 'fulfilled' && Array.isArray(findings.value.items) && findings.value.status !== 'unavailable') {
-      item.findings = findings.value.items
-      if (findings.value.status === 'degraded') item.findingsError = findings.value.error || '告警项数据部分不可用'
-    } else item.findingsError = findings.status === 'rejected' ? (findingsController.signal.aborted ? '请求超时' : findings.reason.message || '不可用') : findings.value?.error || '告警源暂不可用'
   } finally {
     clearTimeout(summaryTimer)
     clearTimeout(findingsTimer)

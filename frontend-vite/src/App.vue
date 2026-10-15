@@ -1,5 +1,16 @@
 <template>
-  <div class="shell">
+  <main v-if="!authReady || !globalUser" class="login-screen">
+    <form v-if="authReady" class="login-panel" @submit.prevent="login">
+      <div class="login-brand">Ops</div>
+      <h1>运维工作台</h1>
+      <p>登录后查看集群与监控数据</p>
+      <label>用户名<input v-model.trim="loginForm.username" class="input" autocomplete="username" required autofocus /></label>
+      <label>密码<input v-model="loginForm.password" class="input" type="password" autocomplete="current-password" required /></label>
+      <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
+      <button class="btn btn-primary" :disabled="loginBusy || !loginForm.username || !loginForm.password">{{ loginBusy ? '登录中…' : '登录' }}</button>
+    </form>
+  </main>
+  <div v-else class="shell">
     <!-- 侧栏：独立大屏页（standalone）隐藏 -->
     <aside v-if="!isStandalone" class="sidebar" :class="{ collapsed: sidebarCollapsed }">
       <div class="logo">
@@ -35,7 +46,7 @@
           <ClusterSelector v-if="showClusterSelector" />
           <span class="muted">{{ nowStr }}</span>
           <span v-if="globalUser" class="muted">{{ globalUser }}</span>
-          <button class="btn btn-sm" @click="globalUser ? logout() : (loginVisible = true)">{{ globalUser ? '退出登录' : '登录' }}</button>
+          <button class="btn btn-sm" @click="logout">退出登录</button>
         </div>
       </header>
       <ModuleTabs v-if="!isStandalone" />
@@ -56,14 +67,6 @@
       <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">{{ t.msg }}</div>
     </div>
     <HostManagerDrawer :visible="hostDrawer" @close="hostDrawer=false" />
-    <Modal :visible="loginVisible" title="运维工作台登录" width="420px" @close="loginVisible=false">
-      <form class="login-form" @submit.prevent="login">
-        <label>用户名<input v-model.trim="loginForm.username" class="input" autocomplete="username" required /></label>
-        <label>密码<input v-model="loginForm.password" class="input" type="password" autocomplete="current-password" required /></label>
-        <p v-if="loginError" class="login-error">{{ loginError }}</p>
-        <div class="modal-actions"><button class="btn" type="button" @click="loginVisible=false">取消</button><button class="btn btn-primary" :disabled="loginBusy || !loginForm.username || !loginForm.password">{{ loginBusy ? '登录中…' : '登录' }}</button></div>
-      </form>
-    </Modal>
   </div>
 </template>
 
@@ -72,7 +75,6 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import router from './router'
 import HostManagerDrawer from './components/HostManagerDrawer.vue'
-import Modal from './components/Modal.vue'
 import HostSelector from './components/workbench/HostSelector.vue'
 import ClusterSelector from './components/workbench/ClusterSelector.vue'
 import ModuleTabs from './components/workbench/ModuleTabs.vue'
@@ -88,11 +90,11 @@ const isStandalone = computed(() => !!route.meta.standalone)
 workbench.init(router)
 const { hosts, refreshHosts } = useHostContext()
 const hostDrawer=ref(false)
-const loginVisible = ref(false)
+const authReady = ref(!getAccessToken())
 const loginBusy = ref(false)
 const loginError = ref('')
 const loginForm = ref({ username: 'admin', password: '' })
-const globalUser = ref(getAccessToken() ? 'admin' : '')
+const globalUser = ref('')
 async function login() {
   loginBusy.value = true
   loginError.value = ''
@@ -102,13 +104,12 @@ async function login() {
     window.dispatchEvent(new Event('ops-auth-changed'))
     globalUser.value = result.user?.username || loginForm.value.username
     loginForm.value.password = ''
-    loginVisible.value = false
     window.location.reload()
   } catch (error) { loginError.value = error.message }
   finally { loginBusy.value = false }
 }
-function logout() { clearAccessToken(); window.dispatchEvent(new Event('ops-auth-changed')); globalUser.value = ''; loginVisible.value = true }
-function onAuthRequired() { globalUser.value = ''; window.dispatchEvent(new Event('ops-auth-changed')); loginVisible.value = true }
+function logout() { clearAccessToken(); window.dispatchEvent(new Event('ops-auth-changed')); globalUser.value = ''; loginForm.value.password = ''; authReady.value = true }
+function onAuthRequired() { globalUser.value = ''; window.dispatchEvent(new Event('ops-auth-changed')); authReady.value = true }
 const SIDEBAR_KEY = 'ops-sidebar-collapsed'
 const sidebarCollapsed = ref(localStorage.getItem(SIDEBAR_KEY) === '1')
 function toggleSidebar() {
@@ -186,11 +187,7 @@ onMounted(() => {
   window.addEventListener('ops-toast', onToast)
   window.addEventListener('ops-auth-required', onAuthRequired)
   window.addEventListener('ops-modules-changed', loadModules)
-  if (getAccessToken()) api.get('/auth/me').then((user) => { globalUser.value = user.username }).catch(() => {})
-  if (!isStandalone.value) {
-    loadHosts()
-    loadModules()
-  }
+  if (getAccessToken()) api.get('/auth/me').then((user) => { globalUser.value = user.username; if (!isStandalone.value) { loadHosts(); loadModules() } }).catch((error) => { loginError.value = error.status === 401 ? '登录已过期，请重新登录' : '无法验证登录状态，请重试登录' }).finally(() => { authReady.value = true })
 })
 onUnmounted(() => {
   clearInterval(clockTimer)
@@ -236,9 +233,14 @@ onUnmounted(() => {
 }
 .topbar-title { font-size: 16px; margin: 0; }
 .topbar-right { display: flex; align-items: center; gap: 12px; }
-.login-form { display:grid; gap:14px; }
-.login-form label { display:grid; gap:6px; }
-.login-error { margin:0; color:var(--danger,#dc2626); }
+.login-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: linear-gradient(145deg, #0f172a, #1e3a5f); }
+.login-panel { width: min(100%, 400px); display: grid; gap: 16px; padding: 36px; border-radius: 18px; background: #fff; box-shadow: 0 24px 64px rgba(0,0,0,.25); }
+.login-brand { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 12px; background: var(--brand); color: #fff; font-weight: 800; }
+.login-panel h1 { margin: 0; font-size: 24px; }
+.login-panel p { margin: 0; color: var(--muted); }
+.login-panel label { display: grid; gap: 6px; }
+.login-panel .btn { width: 100%; }
+.login-panel .login-error { margin:0; color:var(--danger,#dc2626); }
 .workspace-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .content { flex: 1; min-width: 0; overflow: auto; }
 .content.standalone { overflow: hidden; background: var(--screen-bg); }

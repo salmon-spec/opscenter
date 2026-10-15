@@ -336,7 +336,6 @@ spec:
               - key: kubernetes.io/hostname
                 operator: In
                 values:
-                - k8s-worker-01
                 - k8s-worker-02
       automountServiceAccountToken: false
 ---
