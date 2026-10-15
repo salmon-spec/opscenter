@@ -82,7 +82,8 @@ async function loadModule() {
         entry_url: `/modules/${requestedKey}/ui/`,
         manifest: { sandbox: ['allow-scripts'], api_prefixes: [`/modules/${requestedKey}/api/v1/`] },
       }))
-      : await api.get(`/modules/${requestedKey}`)
+      : (await api.get('/modules')).items?.find((item) => item.key === requestedKey)
+    if (!result) throw new Error('扩展模块不存在')
     if (revision === loadRevision) module.value = result
   } catch (error) {
     if (revision === loadRevision) loadError.value = error.message

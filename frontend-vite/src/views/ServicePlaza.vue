@@ -28,7 +28,7 @@
       <button class="health-stat is-down" :disabled="sortMode" :class="{active:healthFilter==='down'}" @click="healthFilter='down'"><strong>{{ overview.summary.down ?? statusCount('down') }}</strong><span>离线</span></button>
       <button class="health-stat is-warn" :disabled="sortMode" :class="{active:healthFilter==='degraded'}" @click="healthFilter='degraded'"><strong>{{ overview.summary.degraded ?? statusCount('degraded') }}</strong><span>波动中</span></button>
       <button class="health-stat" :disabled="sortMode" :class="{active:healthFilter==='unknown'}" @click="healthFilter='unknown'"><strong>{{ (overview.summary.unknown ?? statusCount('unknown')) + (overview.summary.disabled ?? statusCount('disabled')) }}</strong><span>未检测 / 停用</span></button>
-      <div class="health-stat availability"><strong>{{ overview.summary.average_uptime_percent == null ? '-' : `${overview.summary.average_uptime_percent}%` }}</strong><span>24h 综合可用率</span><small v-if="overview.data_timestamp || overview.generated_at" :class="{ stale: overview.stale }">{{ overview.stale ? '数据过期' : '探测于' }} {{ shortTime(overview.data_timestamp || overview.generated_at) }}</small></div>
+      <div class="health-stat availability"><strong>{{ overview.summary.average_uptime_percent == null ? '-' : `${overview.summary.average_uptime_percent}%` }}</strong><span>24h 综合可用率</span><small v-if="healthTimestamp" :class="{ stale: probeDataStale }">{{ probeDataStale ? '探测数据过期' : uptimeHistoryPending ? '探测正常 · 24h 可用率历史补齐中' : '探测于' }} {{ shortTime(healthTimestamp) }}</small></div>
     </div>
 
     <!-- 分组标签 -->
@@ -158,6 +158,14 @@ const search = ref('')
 const activeGroup = ref('all')
 const healthFilter = ref('all')
 const overview = ref({ summary: {}, items: [], generated_at: null })
+const probeDataStale = computed(() => overview.value.items?.length
+  ? overview.value.items.some((item) => item.stale)
+  : !!overview.value.stale)
+const uptimeHistoryPending = computed(() => !!overview.value.stale && !probeDataStale.value)
+const healthTimestamp = computed(() => {
+  const timestamps = (overview.value.items || []).map((item) => item.status_checked_at || item.last_checked_at).filter(Boolean)
+  return timestamps.length ? timestamps.sort().at(-1) : overview.value.data_timestamp || overview.value.generated_at
+})
 const drawerVisible = ref(false)
 const selected = ref(null)
 const canEditCatalog = ref(!!getAccessToken())

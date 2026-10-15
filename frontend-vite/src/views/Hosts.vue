@@ -83,7 +83,7 @@ async function loadMetrics() {
   try {
     const end = new Date()
     const start = new Date(end.getTime() - 60 * 60 * 1000)
-    const data = await api.get('/api/v2/metrics/hosts/overview', {
+    const data = await api.get('/metrics/hosts/overview', {
       start: start.toISOString(), end: end.toISOString(), resolution: 'auto', metrics: 'cpu,memory,disk',
     }, { timeoutMs: 15000 })
     const map = {}
