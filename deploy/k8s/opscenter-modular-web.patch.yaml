@@ -3,13 +3,34 @@ spec:
     spec:
       containers:
         - name: caddy
-          image: opscenter/frontend:cf2f34bb
+          image: opscenter/frontend:data-visibility-auth-20261015
           volumeMounts:
             - name: modular-gateway
               mountPath: /etc/caddy/Caddyfile
               subPath: Caddyfile
               readOnly: true
+            - name: restored-v3
+              mountPath: /srv/v3
+      initContainers:
+        - name: restore-v3-static
+          image: opscenter/frontend:data-visibility-auth-20261015
+          imagePullPolicy: Never
+          command:
+            - /bin/sh
+            - -c
+            - set -eu; cp -a /srv/v3/. /work/; tar -xzf /bundle/dist.tar.gz -C /work
+          volumeMounts:
+            - name: restored-v3
+              mountPath: /work
+            - name: restored-v3-bundle
+              mountPath: /bundle
+              readOnly: true
       volumes:
         - name: modular-gateway
           configMap:
             name: opscenter-modular-gateway
+        - name: restored-v3
+          emptyDir: {}
+        - name: restored-v3-bundle
+          configMap:
+            name: opscenter-v3-monitor-refresh-20261015

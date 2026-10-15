@@ -3,7 +3,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: opscenter/backend:history-20261015
+          image: opscenter/backend:data-visibility-auth-20261015
           env:
             - name: OPS_AUTH_ENABLED
               value: "true"
@@ -32,6 +32,18 @@ spec:
             - name: host-inventory-ingest
               mountPath: /run/ingest
               readOnly: true
+            - name: backend-code-opt
+              mountPath: /opt/opscenter/backend/app/main.py
+              subPath: main.py
+              readOnly: true
+            - name: backend-code-opt
+              mountPath: /opt/opscenter/backend/app/alerting.py
+              subPath: alerting.py
+              readOnly: true
+            - name: backend-code-opt
+              mountPath: /opt/opscenter/backend/app/ssh_host_keys.py
+              subPath: ssh_host_keys.py
+              readOnly: true
       volumes:
         - name: jwt-keypair
           secret:
@@ -39,3 +51,6 @@ spec:
         - name: host-inventory-ingest
           secret:
             secretName: opscenter-host-inventory-ingest
+        - name: backend-code-opt
+          configMap:
+            name: opscenter-backend-code-opt-20261015
