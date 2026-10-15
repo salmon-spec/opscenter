@@ -1,0 +1,9 @@
+spec:
+  template:
+    spec:
+      containers:
+        - name: postgres
+          livenessProbe:
+            failureThreshold: 8
+            periodSeconds: 30
+            timeoutSeconds: 10
