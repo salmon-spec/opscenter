@@ -3,7 +3,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: opscenter/backend:cf2f34bb
+          image: opscenter/backend:history-20261015
           env:
             - name: OPS_AUTH_ENABLED
               value: "true"

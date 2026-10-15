@@ -972,7 +972,7 @@ spec:
     spec:
       containers:
       - name: module-command-code-usage
-        image: opscenter/module-command-code-usage:cf2f34bb
+        image: opscenter/module-command-code-usage:history-20261015
         imagePullPolicy: Never
         ports:
         - containerPort: 8080

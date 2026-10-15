@@ -408,7 +408,7 @@ class CommandCodeUsageMonitor:
             db.commit()
 
     @staticmethod
-    def _history_window(rows: list[CommandCodeUsageSnapshot], result: dict, current_at: datetime, seconds: int) -> dict:
+    def _history_window(baseline: CommandCodeUsageSnapshot | None, result: dict, current_at: datetime, seconds: int) -> dict:
         usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
         plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
         current_values = {
@@ -420,8 +420,8 @@ class CommandCodeUsageMonitor:
         # timestamp before comparing so aware and naive values never mix.
         current_utc = current_at.astimezone(timezone.utc).replace(tzinfo=None) if current_at.tzinfo else current_at
         start_at = current_utc - timedelta(seconds=seconds)
-        eligible = [row for row in rows if row.captured_at and row.captured_at >= start_at]
-        baseline = eligible[0] if eligible else None
+        if baseline and baseline.captured_at < start_at:
+            baseline = None
         can_diff = bool(
             baseline
             and str(baseline.period_start or "") == str(plan.get("current_period_start") or "")
@@ -462,21 +462,25 @@ class CommandCodeUsageMonitor:
         current_naive = current_at.astimezone(timezone.utc).replace(tzinfo=None)
         oldest = current_naive - timedelta(days=HISTORY_RETENTION_DAYS)
         with get_db() as db:
-            rows = (
-                db.query(CommandCodeUsageSnapshot)
-                .filter(
-                    CommandCodeUsageSnapshot.scope_key == scope_key,
-                    CommandCodeUsageSnapshot.captured_at >= oldest,
-                    CommandCodeUsageSnapshot.captured_at < current_naive,
+            def first_since(start):
+                return (
+                    db.query(CommandCodeUsageSnapshot)
+                    .filter(
+                        CommandCodeUsageSnapshot.scope_key == scope_key,
+                        CommandCodeUsageSnapshot.captured_at >= start,
+                        CommandCodeUsageSnapshot.captured_at < current_naive,
+                    )
+                    .order_by(CommandCodeUsageSnapshot.captured_at.asc())
+                    .first()
                 )
-                .order_by(CommandCodeUsageSnapshot.captured_at.asc())
-                .all()
-            )
+
+            oldest_row = first_since(oldest)
+            baselines = {name: first_since(current_naive - delta) for name, delta in HISTORY_WINDOWS.items()}
         plan = result.get("plan") if isinstance(result.get("plan"), dict) else {}
         usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
-        observed_since = rows[0].captured_at.isoformat() + "Z" if rows else None
+        observed_since = oldest_row.captured_at.isoformat() + "Z" if oldest_row else None
         windows = {
-            name: self._history_window(rows, result, current_at, int(delta.total_seconds()))
+            name: self._history_window(baselines[name], result, current_at, int(delta.total_seconds()))
             for name, delta in HISTORY_WINDOWS.items()
         }
         windows["month"] = {
