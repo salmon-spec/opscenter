@@ -51,7 +51,7 @@ const metricOptions=[
 ]
 const axisOrder=['percent','rate','load']
 const rangeKey=ref('1h'),selectedMetrics=ref(['cpu','memory','disk']),customStart=ref(''),customEnd=ref('')
-let timer=null, controller=null, historyController=null, chart=null
+let timer=null, historyTimer=null, historyLastAt=0, controller=null, historyController=null, chart=null
 const m=computed(()=>summary.value?.metrics||{})
 const cards=computed(()=>[
   {label:'CPU',value:`${Number(m.value.cpu||0).toFixed(1)}%`,percent:Number(m.value.cpu||0),note:`负载 ${m.value.load1||0} / ${m.value.load5||0} / ${m.value.load15||0}`},
@@ -71,6 +71,7 @@ async function loadSummary(refresh=false){
 function activeRange(){const end=rangeKey.value==='custom'&&customEnd.value?new Date(customEnd.value):new Date();const selected=ranges.find(item=>item.key===rangeKey.value);const start=rangeKey.value==='custom'&&customStart.value?new Date(customStart.value):new Date(end.getTime()-(selected?.hours||1)*3600000);if(start>=end)throw new Error('开始时间必须早于结束时间');return{start,end}}
 async function loadHistory(){
   const hostId=selectedHostId.value;if(!hostId)return
+  historyLastAt=Date.now()
   historyController?.abort();historyController=new AbortController();const activeController=historyController
   historyLoading.value=true;overviewLoading.value=true;error.value=''
   try{
@@ -112,8 +113,8 @@ function selectRange(key){rangeKey.value=key;if(key==='custom'){const end=new Da
 function toLocalInput(value){const shifted=new Date(value.getTime()-value.getTimezoneOffset()*60000);return shifted.toISOString().slice(0,16)}
 function toggleMetric(key){const values=[...selectedMetrics.value];const index=values.indexOf(key);if(index>=0){if(values.length===1)return;values.splice(index,1)}else if(values.length<6)values.push(key);selectedMetrics.value=values;loadHistory()}
 function exportCsv(){const rows=[['时间','主机','指标','平均值','最小值','最大值','样本数'],...metricRecords.value.map(row=>[formatRecordTime(row.timestamp),currentHost.value?.name||'',metricLabel(row.metric),row.avg,row.min,row.max,row.count])];const text='\ufeff'+rows.map(row=>row.map(value=>`"${String(value??'').replaceAll('"','""')}"`).join(',')).join('\r\n');const url=URL.createObjectURL(new Blob([text],{type:'text/csv;charset=utf-8'}));const link=document.createElement('a');link.href=url;link.download=`${currentHost.value?.name||'host'}-metrics-${rangeKey.value}.csv`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}
-function start(){stop();if(!isActive.value||document.hidden)return;loadSummary();timer=setInterval(()=>{if(isActive.value&&!document.hidden&&!loading.value)loadSummary()},5000)}
-function stop(){if(timer){clearInterval(timer);timer=null}}
+function start(){stop();if(!isActive.value||document.hidden)return;loadSummary();if(rangeKey.value!=='custom'&&Date.now()-historyLastAt>=60000)loadHistory();timer=setInterval(()=>{if(isActive.value&&!document.hidden&&!loading.value)loadSummary()},5000);historyTimer=setInterval(()=>{if(rangeKey.value!=='custom'&&!historyLoading.value)loadHistory()},60000)}
+function stop(){if(timer){clearInterval(timer);timer=null}if(historyTimer){clearInterval(historyTimer);historyTimer=null}}
 function visibility(){document.hidden?stop():start()}
 function resizeChart(){chart?.resize()}
 watch(selectedHostId,()=>{controller?.abort();historyController?.abort();loading.value=false;summary.value=null;history.value={};loadHistory();start()})
