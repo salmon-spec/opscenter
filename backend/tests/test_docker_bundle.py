@@ -75,8 +75,14 @@ def test_containerized_local_ssh_uses_host_gateway(monkeypatch):
     calls = []
 
     class Client:
-        def set_missing_host_key_policy(self, _policy):
+        def load_system_host_keys(self):
             pass
+
+        def load_host_keys(self, _path):
+            pass
+
+        def set_missing_host_key_policy(self, policy):
+            self.policy = policy
 
         def connect(self, **kwargs):
             calls.append(kwargs)
@@ -89,5 +95,7 @@ def test_containerized_local_ssh_uses_host_gateway(monkeypatch):
         ssh_user="root", ssh_key="__password__test",
     )
 
-    assert ssh_manager.get_ssh_client(server) is not None
+    client = ssh_manager.get_ssh_client(server)
+    assert client is not None
+    assert isinstance(client.policy, ssh_manager.paramiko.RejectPolicy)
     assert calls[0]["hostname"] == "host.docker.internal"
