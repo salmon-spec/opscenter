@@ -223,7 +223,7 @@ def test_browser_jwt_and_api_key_share_read_endpoints_without_anonymous_access(m
 
     assert client.get("/api/v2/auth/me").status_code == 401
     assert client.get("/api/v2/auth/me", headers={"Authorization": f"Bearer {token}"}).json()["username"] == "admin"
-    assert client.get("/api/v2/ai/summary", headers={"Authorization": f"Bearer {token}"}).status_code == 401
+    assert client.get("/api/v2/ai/summary", headers={"Authorization": f"Bearer {token}"}).status_code == 404
 
 
 def test_builtin_admin_login_is_rate_limited(monkeypatch):

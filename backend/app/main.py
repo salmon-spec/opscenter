@@ -44,7 +44,6 @@ from app.service_health import run_service_health_cycle, service_health_loop
 from app.plaza import router as plaza_router, plaza_health_loop
 from app.system_control import forget_system_summary, record_system_summary, is_host_network_interface, summarize_network_interfaces, router as system_control_router
 from app.databases import router as databases_router
-from app.ai_context import router as ai_context_router
 # === K3s 只读监控 / 主机详情侧栏（需求基线 2026-09-10） ===
 from app.k8s_monitor import router as k8s_monitor_router
 from app.server_details import router as server_details_router
@@ -331,7 +330,6 @@ app.include_router(ssh_control_router)
 app.include_router(metrics_history_router)
 app.include_router(log_center_router)
 app.include_router(alloy_manager_router)
-app.include_router(ai_context_router)
 app.include_router(k8s_monitor_router)
 app.include_router(server_details_router)
 # v5.0.0 数据服务（Redis/MQ/Kafka/ZK/Nacos/MinIO/MongoDB 纳管 + 只读浏览）
