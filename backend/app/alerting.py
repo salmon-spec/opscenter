@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 import requests
-from sqlalchemy import desc
+from sqlalchemy import delete, desc, select
 
 from app.config import (
     ALERTING_ENABLED,
@@ -327,14 +327,14 @@ def _delete_batched(db, model, cutoff_dt: datetime, cutoff_date=None, time_col="
     threshold = cutoff_date if is_date_col else cutoff_dt
     total = 0
     while True:
-        rows = db.query(model).filter(col < threshold).limit(5000).all()
-        if not rows:
+        batch = select(model.id).where(col < threshold).order_by(col).limit(5000).subquery()
+        statement = delete(model).where(model.id.in_(select(batch.c.id))).execution_options(synchronize_session=False)
+        count = db.execute(statement).rowcount
+        if not count:
             break
-        for r in rows:
-            db.delete(r)
         db.commit()
-        total += len(rows)
-        if len(rows) < 5000:
+        total += count
+        if count < 5000:
             break
         time.sleep(0.1)
     return total

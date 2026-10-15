@@ -16,14 +16,12 @@ _file_lock = threading.Lock()
 
 
 def configure_host_keys(client: paramiko.SSHClient) -> None:
-    """Load the product known-hosts file and permit TOFU for unknown hosts."""
+    """Accept only host keys already verified in system or product known-hosts."""
+    client.load_system_host_keys()
     path = Path(SSH_KNOWN_HOSTS_FILE) if SSH_KNOWN_HOSTS_FILE else None
     if path and path.is_file():
-        try:
-            client.load_host_keys(str(path))
-        except Exception as exc:
-            logger.warning("Could not load SSH known-hosts file %s: %s", path, exc)
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.load_host_keys(str(path))
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
 
 def persist_host_keys(client: paramiko.SSHClient) -> None:

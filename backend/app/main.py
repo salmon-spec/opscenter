@@ -467,14 +467,14 @@ def _run_agent_health_check():
 
 
 async def _agent_health_check_loop():
-    """Reconcile Agent state every five minutes without sticky failures."""
+    """Reconcile Agent state before the five-minute inventory freshness limit."""
     await asyncio.sleep(30)
     while True:
         try:
             await asyncio.to_thread(_run_agent_health_check)
         except Exception as exc:
             print(f"[AgentHealthCheck] Loop error: {exc}")
-        await asyncio.sleep(300)
+        await asyncio.sleep(180)
 
 
 def _migrate_groups_json():
@@ -1107,23 +1107,8 @@ def get_status_page():
                                  "status": "up" if up == total and total > 0 else ("degraded" if up > 0 else "down")})
         # 活跃告警
         firing = db.query(AlertEvent).filter(AlertEvent.status == "firing").count()
-        # 7 天可用性（基于 agent_status 历史：metric_history 无该指标时用当前状态近似）
-        since = datetime.utcnow() - timedelta(days=7)
-        avail = []
-        for s in servers:
-            # 尝试从 metric_history 统计 agent 在线比例（metric=agent_status value='running'）
-            samples = db.query(MetricHistory).filter(
-                MetricHistory.server_id == s.id,
-                MetricHistory.metric == "agent_status",
-                MetricHistory.timestamp >= since,
-            ).all()
-            if samples:
-                online = sum(1 for m in samples if m.value == "running")
-                pct = round(online / len(samples) * 100)
-            else:
-                # 无历史数据：用当前状态近似
-                pct = 100 if s.agent_status == "running" else 0
-            avail.append({"name": s.name, "availability_7d": pct, "samples": len(samples)})
+        # No Agent state history is recorded; avoid presenting current state as seven-day uptime.
+        avail = [{"name": s.name, "availability_7d": None, "samples": 0} for s in servers]
         return {
             "generated_at": datetime.utcnow().isoformat(),
             "summary": {
@@ -3004,7 +2989,7 @@ def _service_probe_allowed(url: str, srv) -> bool:
 
 
 @app.get("/api/v2/monitor/{server_id}/health-check")
-def monitor_health_check(server_id: str):
+def monitor_health_check(server_id: str, user: object = Depends(require_operator)):
     """对指定服务器的全部服务做 HTTP 探活，返回每服务实际状态码与耗时。
 
     SSRF 防护：仅探测该服务器登记的 host（白名单），其余服务标记 skipped。
@@ -3038,10 +3023,13 @@ def monitor_health_check(server_id: str):
                 continue
             t0 = time.time()
             try:
-                resp = req.get(url, timeout=5, stream=True, verify=False, allow_redirects=True,
-                               headers={"User-Agent": "OpsCenter-HealthCheck/3.25"})
-                entry["status_code"] = resp.status_code
-                entry["status"] = "up" if resp.status_code < 500 else "down"
+                with req.get(url, timeout=5, stream=True, verify=False, allow_redirects=False,
+                             headers={"User-Agent": "OpsCenter-HealthCheck/3.25"}) as resp:
+                    entry["status_code"] = resp.status_code
+                    if 300 <= resp.status_code < 400:
+                        entry["status"] = "blocked"
+                    else:
+                        entry["status"] = "up" if resp.status_code < 500 else "down"
             except Exception:
                 entry["status"] = "down"
             finally:
@@ -4394,7 +4382,8 @@ async def ws_terminal(websocket: WebSocket, session_id: str):
             await websocket.close(code=4401, reason="Unauthorized")
             return
     except Exception:
-        pass
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
     session = get_session(session_id)
     if not session:
         await websocket.close(code=4004, reason="Invalid or expired session")
