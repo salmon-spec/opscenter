@@ -31,7 +31,7 @@ def main(secret_dir: Path):
             ).fetchone()
             if current_db != name or superuser:
                 raise RuntimeError(f"Invalid owner role for {name}")
-            for other in (*DATABASES, "opscenter", "postgres"):
+            for other in (*DATABASES, "pve_backup", "opscenter", "postgres"):
                 if other != name and db.execute(
                     "SELECT has_database_privilege(current_user, %s, 'CONNECT')", (other,)
                 ).fetchone()[0]:
