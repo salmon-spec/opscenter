@@ -30,11 +30,6 @@
         respond @internalProbe 404
         reverse_proxy module-service-catalog:8080
     }
-    handle_path /modules/pve-backup/* {
-        @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
-        respond @internalProbe 404
-        reverse_proxy module-pve-backup:8080
-    }
     handle_path /modules/alerts/* {
         @internalProbe path /health/* /metrics /openapi.json /docs /docs/* /redoc /redoc/*
         respond @internalProbe 404

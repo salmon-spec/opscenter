@@ -3,7 +3,7 @@
     <div class="view-head">
       <div>
         <h1 class="view-title">值班首页</h1>
-        <p class="view-sub">按模块汇总资产、监控、日志、K3s、PVE 备份与告警状态；单个模块不可用不会阻塞其他卡片。</p>
+        <p class="view-sub">按模块汇总资产、监控、日志、K3s 与告警状态；单个模块不可用不会阻塞其他卡片。</p>
       </div>
       <div class="home-actions"><button class="btn" :disabled="refreshing" @click="refreshAll">{{ refreshing ? '刷新中…' : '刷新摘要' }}</button></div>
     </div>
@@ -57,7 +57,6 @@ const modules = ref([
   { key: 'host-monitor', title: '系统应用', description: '主机监控指标与系统运维工具', path: '/system/monitor', summary: null, error: '', findings: null, findingsError: '', loading: false },
   { key: 'logs', title: '日志中心', description: 'Loki 与日志查询模块状态', path: '/logs', summary: null, error: '', findings: null, findingsError: '', loading: false },
   { key: 'k3s', title: 'K3s 集群', description: '节点、工作负载、存储与事件', path: '/kubernetes/overview', summary: null, error: '', findings: null, findingsError: '', loading: false },
-  { key: 'pve-backup', title: 'PVE 与备份', description: '虚拟机、存储容量与备份覆盖', path: '/pve-backup', summary: null, error: '', findings: null, findingsError: '', loading: false },
   { key: 'alerts', title: '告警', description: '未处理事件、等级与最近变化', path: '/alerts', summary: null, error: '', findings: null, findingsError: '', loading: false },
 ])
 const refreshing = ref(false)

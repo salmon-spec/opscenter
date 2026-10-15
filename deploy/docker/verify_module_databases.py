@@ -12,7 +12,6 @@ DATABASES = {
     "host_inventory": "host_inventory_db_url",
     "host_monitor": "host_monitor_db_url",
     "service_catalog": "service_catalog_db_url",
-    "pve_backup": "pve_backup_db_url",
     "alerts": "alerts_db_url",
     "logs": "logs_db_url",
     "oss_browser": "oss_browser_db_url",

@@ -12,7 +12,6 @@ PATHS = (
     "/modules/host-inventory/api/v1/hosts",
     "/modules/host-monitor/api/v1/summary",
     "/modules/service-catalog/api/v1/services",
-    "/modules/pve-backup/api/v1/overview",
     "/modules/alerts/api/v1/summary",
     "/modules/logs/api/v1/status",
     "/modules/oss-browser/status",

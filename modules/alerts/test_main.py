@@ -208,31 +208,6 @@ def test_alert_evaluator_applies_duration_and_recovers(store, monkeypatch):
     assert store.value[0]["events"][0]["status"] == "recovered"
 
 
-def test_alert_evaluator_uses_fresh_pve_backup_summary(store, monkeypatch):
-    now = datetime.now(timezone.utc)
-    store.save({"events": [], "silences": [], "rules": [{
-        "id": "backup-rule", "name": "备份过期", "metric": "backup_age", "value_type": "numeric",
-        "operator": ">", "threshold": "24", "duration_sec": 0, "cooldown_sec": 0, "enabled": True,
-    }]}, now)
-    monkeypatch.setenv("ALERTS_SYNC_ENABLED", "false")
-    def source(url, token, path):
-        if path.endswith("/hosts"):
-            return {"status": "ok", "collected_at": now.isoformat(), "items": []}
-        if path.endswith("/latest"):
-            return {"items": []}
-        return {"status": "ok", "collected_at": now.isoformat(), "data": {"guests": [
-            {"vmid": 114, "name": "vm114", "coverage": "stale", "backup_age_days": 2},
-            {"vmid": 115, "name": "vm115", "coverage": "unknown", "backup_age_days": None},
-        ]}}
-    monkeypatch.setattr(main, "_module_get", source)
-
-    assert main.evaluate_once() is True
-    events = store.value[0]["events"]
-    assert len(events) == 1
-    assert events[0]["server_id"] == "114"
-    assert events[0]["current_value"] == "48.0"
-
-
 def test_alert_evaluator_checks_certificates_without_host_inventory(store, monkeypatch):
     now = datetime.now(timezone.utc)
     store.certificates = [{"id": "cert-1", "domain": "example.com", "enabled": True,

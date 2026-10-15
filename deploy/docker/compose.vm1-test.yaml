@@ -210,38 +210,6 @@ services:
     restart: unless-stopped
     mem_limit: 160m
 
-  module-pve-backup:
-    build:
-      context: ../..
-      dockerfile: modules/pve_backup/Dockerfile
-    image: opscenter/module-pve-backup:0.1.8-test
-    env_file:
-      - ../../secrets/pve-backup.env
-      - ../../secrets/opscenter-module-auth.env
-    environment:
-      MODULE_AUTH_REQUIRED: "true"
-      OPS_MODULE_INTERNAL_TOKEN_FILE: /run/secrets/pve_backup_internal_token
-      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/opscenter_jwt_public
-      OPS_JWT_LEGACY_UNTIL: "2026-10-16T00:00:00Z"
-      PVE_API_TOKEN_SECRET_FILE: /run/secrets/pve_api_token_secret
-      PVE_API_CA_FILE: /run/secrets/pve_api_ca
-      PVE_BACKUP_DATABASE_URL_FILE: /run/secrets/pve_backup_db_url
-      PVE_BACKUP_STALE_AFTER_DAYS: "7"
-    secrets:
-      - opscenter_jwt_public
-      - pve_api_token_secret
-      - pve_api_ca
-      - pve_backup_db_url
-      - pve_backup_internal_token
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    restart: unless-stopped
-    mem_limit: 160m
-
   module-alerts:
     build:
       context: ../..
@@ -260,20 +228,16 @@ services:
       HOST_INVENTORY_INTERNAL_TOKEN_FILE: /run/secrets/host_inventory_internal_token
       HOST_MONITOR_INTERNAL_URL: http://module-host-monitor:8080
       HOST_MONITOR_INTERNAL_TOKEN_FILE: /run/secrets/host_monitor_internal_token
-      PVE_BACKUP_INTERNAL_URL: http://module-pve-backup:8080
-      PVE_BACKUP_INTERNAL_TOKEN_FILE: /run/secrets/pve_backup_internal_token
     secrets:
       - opscenter_jwt_public
       - alerts_db_url
       - host_inventory_internal_token
       - host_monitor_internal_token
-      - pve_backup_internal_token
     depends_on:
       - db
       - backend
       - module-host-inventory
       - module-host-monitor
-      - module-pve-backup
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health/ready', timeout=4)"]
       interval: 30s
@@ -411,14 +375,6 @@ secrets:
     file: ../../secrets/service_catalog_credential_key
   alerts_db_url:
     file: ../../secrets/alerts_db_url
-  pve_api_token_secret:
-    file: ../../secrets/pve_api_token_secret
-  pve_api_ca:
-    file: ../../secrets/pve_api_ca.crt
-  pve_backup_db_url:
-    file: ../../secrets/pve_backup_db_url
-  pve_backup_internal_token:
-    file: ../../secrets/pve_backup_internal_token
   host_monitor_db_url:
     file: ../../secrets/host_monitor_db_url
   host_monitor_agent_token:

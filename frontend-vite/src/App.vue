@@ -133,7 +133,6 @@ const baseNavs = [
 ]
 const moduleNavs = [
   { path: '/kubernetes/overview', label: 'K3s 集群', icon: '☸', matches: ['/kubernetes/'] },
-  { path: '/pve-backup', label: 'PVE 与备份', icon: '▣', exact: true },
   { path: '/screen', label: '健康大屏', icon: '📊' },
   { path: '/alerts', label: '告警中心', icon: '🔔' },
   { path: '/api-keys', label: '开放 API', icon: '🔑' },

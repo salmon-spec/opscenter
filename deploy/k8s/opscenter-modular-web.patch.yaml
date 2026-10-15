@@ -28,9 +28,9 @@ spec:
       volumes:
         - name: modular-gateway
           configMap:
-            name: opscenter-modular-gateway
+            name: opscenter-modular-gateway-no-pve-20261015
         - name: restored-v3
           emptyDir: {}
         - name: restored-v3-bundle
           configMap:
-            name: opscenter-v3-monitor-refresh-20261015
+            name: opscenter-v3-no-pve-backup-20261015

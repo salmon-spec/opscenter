@@ -6,7 +6,7 @@
 
 每个业务模块独立构建镜像和部署，模块间只通过同源网关调用 HTTP 契约，不导入其他模块代码，也不访问其他模块数据库。`runtime/` 提供共同响应形状和全局会话校验，不持有业务数据。
 
-工作台通过固定同源前缀 `/modules/{module-key}/` 访问模块；网关负责将前缀映射到对应模块服务并移除前缀。模块 key 包括 `service-catalog`、`host-inventory`、`host-monitor`、`k3s`、`pve-backup`、`alerts`、`logs`。
+工作台通过固定同源前缀 `/modules/{module-key}/` 访问模块；网关负责将前缀映射到对应模块服务并移除前缀。当前模块 key 包括 `service-catalog`、`host-inventory`、`host-monitor`、`k3s`、`alerts`、`logs`。
 
 模块最小接口：
 
@@ -43,7 +43,7 @@
 
 远端操作信任说明：VM100 的已确认目标指纹用于严格 SSH 校验；跳板 `10.66.66.3` 的指纹尚未另行确认。本轮远程部署均使用 VM100 直连并显式禁用 ProxyJump；如需经跳板连接，先从可信渠道核验其 host key。
 
-host-inventory 使用独立逻辑数据库；backend 现通过专用单向桥接每 5 分钟推送 Agent 运行态，但资产业务资料、Agent enrollment/扫描仍部分由旧 backend 持有，因此此桥接不是最终所有权切换。service-catalog 将目录快照、资料覆盖、归档等保存在模块逻辑数据库，仍需完成独立刷新与探测所有权；host-monitor 使用模块自己的 Agent sampler、历史表和摘要 API，旧 backend 的指标 API/历史任务仍待取证及退役；alerts 与 logs 仍存在旧 backend/API 依赖。PVE/备份模块已接入只读 PVE/OSS 清单。独立进程/逻辑库不等同于独立 PostgreSQL 故障域。
+host-inventory 使用独立逻辑数据库；backend 现通过专用单向桥接每 5 分钟推送 Agent 运行态，但资产业务资料、Agent enrollment/扫描仍部分由旧 backend 持有，因此此桥接不是最终所有权切换。service-catalog 将目录快照、资料覆盖、归档等保存在模块逻辑数据库，仍需完成独立刷新与探测所有权；host-monitor 使用模块自己的 Agent sampler、历史表和摘要 API，旧 backend 的指标 API/历史任务仍待取证及退役；alerts 与 logs 仍存在旧 backend/API 依赖。独立进程/逻辑库不等同于独立 PostgreSQL 故障域。
 
 2026-10-14 12:45 CST 更新：host-monitor `0.2.1-test` 移除未使用的旧 backend 只读适配器，主机管理 CPU/内存/磁盘概览改由 host-monitor 模块查询；模块直连 Agent 并写自己的历史库。VM100 测试端 host-monitor healthy，首页 200、模块匿名 API 401；已登录浏览器核验系统应用实时与历史指标及主机列表指标均可见。旧 backend metric routes/background storage 尚未删除，须先完成调用证据与历史数据退役核对。
 

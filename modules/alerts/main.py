@@ -268,8 +268,6 @@ def evaluate_once():
                             os.getenv("HOST_INVENTORY_INTERNAL_TOKEN_FILE", ""), "/api/v1/internal/hosts")
     metrics = _module_get(os.getenv("HOST_MONITOR_INTERNAL_URL", ""),
                           os.getenv("HOST_MONITOR_INTERNAL_TOKEN_FILE", ""), "/api/v1/internal/metrics/latest")
-    backups = _module_get(os.getenv("PVE_BACKUP_INTERNAL_URL", ""),
-                          os.getenv("PVE_BACKUP_INTERNAL_TOKEN_FILE", ""), "/api/v1/internal/summary")
     inventory_at = _parse_time(inventory.get("collected_at")) if inventory else None
     now = datetime.now(timezone.utc)
     inventory_ready = bool(inventory and inventory.get("status") in {"ok", "degraded"}
@@ -279,11 +277,6 @@ def evaluate_once():
     metric_hosts = {str(item.get("id")): item for item in (metrics or {}).get("items", [])}
     hosts = inventory.get("items", []) if inventory_ready else []
     certificates = _store().read_certificates()
-    backup_data = backups.get("data", {}) if backups and backups.get("status") in {"ok", "degraded"} else {}
-    backup_at = _parse_time(backups.get("collected_at")) if backups else None
-    backup_guests = backup_data.get("guests", []) if (
-        backup_at and (now - backup_at).total_seconds() <= 300
-    ) else []
     changed = False
     for rule in data["rules"]:
         if not rule.get("enabled"):
@@ -299,20 +292,6 @@ def evaluate_once():
                     continue
                 targets.append((str(certificate.get("server_id") or f"cert:{certificate.get('id')}"),
                                 certificate.get("domain"), certificate["days_left"]))
-        elif rule.get("metric") == "backup_age":
-            targets = []
-            for guest in backup_guests:
-                if rule.get("server_id") and str(guest.get("vmid")) != str(rule["server_id"]):
-                    continue
-                coverage = guest.get("coverage")
-                age_hours = guest.get("backup_age_days")
-                if coverage == "missing":
-                    value = 8760
-                elif coverage in {"current", "stale"} and age_hours is not None:
-                    value = float(age_hours) * 24
-                else:
-                    continue
-                targets.append((str(guest.get("vmid")), guest.get("name"), value))
         elif inventory_ready:
             targets = [(str(host.get("id") or ""), host.get("name"), host)
                        for host in hosts if not rule.get("server_id") or str(host.get("id")) == str(rule["server_id"])]
@@ -320,8 +299,6 @@ def evaluate_once():
             continue
         for host_id, host_name, host in targets:
             if rule.get("metric") == "cert_days_left":
-                value = host
-            elif rule.get("metric") == "backup_age":
                 value = host
             else:
                 sample = metric_hosts.get(host_id, {})

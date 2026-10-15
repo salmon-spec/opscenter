@@ -48,7 +48,6 @@ const routes = [
   { path: '/screen', name: 'Screen', component: Screen, meta: { title: '健康大屏', hostScope: 'none', clusterScope: 'none' } },
   { path: '/screen-standalone', name: 'ScreenStandalone', component: Screen, meta: { title: '健康大屏', standalone: true, hostScope: 'none', clusterScope: 'none' } },
   { path: '/alerts', name: 'Alerts', component: Alerts, meta: { title: '告警中心', hostScope: 'none', clusterScope: 'none' } },
-  { path: '/pve-backup', name: 'PveBackup', component: ExtensionHost, props: { fixedKey: 'pve-backup', fixedName: 'PVE 与备份' }, meta: { title: 'PVE 与备份', hostScope: 'none', clusterScope: 'none' } },
   { path: '/api-keys', name: 'ApiKeys', component: ApiKeys, meta: { title: '开放 API', hostScope: 'none', clusterScope: 'none' } },
   { path: '/hosts', name: 'Hosts', component: Hosts, meta: { title: '主机管理', hostScope: 'none', clusterScope: 'none' } },
   { path: '/modules', name: 'ModuleManager', component: ModuleManager, meta: { title: '模块管理', hostScope: 'none', clusterScope: 'none' } },
