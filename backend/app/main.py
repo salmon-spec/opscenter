@@ -4267,7 +4267,7 @@ def list_services_with_status(server_id: Optional[str] = None):
 
 
 @app.get("/api/v2/services/all")
-def list_all_services(server_id: Optional[str] = None):
+def list_all_services(server_id: Optional[str] = None, user: object = Depends(require_operator)):
     """List all services including hidden ones. For admin/resource management only."""
     with get_db() as db:
         q = db.query(Service)

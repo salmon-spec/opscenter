@@ -8,7 +8,7 @@
       <div style="display:flex;gap:8px">
         <input v-model="search" class="input" style="width:280px" :disabled="sortMode" placeholder="搜索服务名称 / 地址…" />
         <button class="btn" :class="{ 'btn-primary': viewMode === 'plaza' }" @click="viewMode = 'plaza'">服务广场</button>
-        <button class="btn" :class="{ 'btn-primary': viewMode === 'inventory' }" @click="viewMode = 'inventory'">完整服务清单 ({{ inventory.length }})</button>
+        <button v-if="canEditCatalog" class="btn" :class="{ 'btn-primary': viewMode === 'inventory' }" @click="viewMode = 'inventory'">完整服务清单 ({{ inventory.length }})</button>
         <template v-if="viewMode === 'plaza'">
           <button v-if="sortMode" class="btn" @click="cancelOrder">取消排序</button>
           <button v-if="sortMode" class="btn btn-primary" :disabled="orderSaving" @click="saveOrder">保存顺序</button>
@@ -161,7 +161,11 @@ const overview = ref({ summary: {}, items: [], generated_at: null })
 const drawerVisible = ref(false)
 const selected = ref(null)
 const canEditCatalog = ref(!!getAccessToken())
-function syncAuth() { canEditCatalog.value = !!getAccessToken() }
+function syncAuth() {
+  canEditCatalog.value = !!getAccessToken()
+  if (canEditCatalog.value) loadInventory()
+  else { inventory.value = []; viewMode.value = 'plaza' }
+}
 window.addEventListener('ops-auth-changed', syncAuth)
 onUnmounted(() => window.removeEventListener('ops-auth-changed', syncAuth))
 const hosts = ref([])
@@ -283,6 +287,7 @@ async function reload(silent=false) {
 }
 
 async function loadInventory() {
+  if (!canEditCatalog.value) return
   inventoryLoading.value = true
   try { inventory.value = await api.get('/services/all') }
   catch (error) { toast(`完整服务清单加载失败：${error.message}`, 'error') }
@@ -398,7 +403,7 @@ async function deleteManualService(service) {
   }
 }
 
-onMounted(() => { reload(true); loadInventory() })
+onMounted(() => { reload(true); if (canEditCatalog.value) loadInventory() })
 </script>
 
 <style scoped>
