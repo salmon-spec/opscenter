@@ -7,18 +7,23 @@
       </div>
       <div style="display:flex;gap:8px">
         <input v-model="search" class="input" style="width:280px" :disabled="sortMode" placeholder="搜索服务名称 / 地址…" />
-        <button v-if="sortMode" class="btn" @click="cancelOrder">取消排序</button>
-        <button v-if="sortMode" class="btn btn-primary" :disabled="orderSaving" @click="saveOrder">保存顺序</button>
-        <button v-else class="btn" :disabled="!canEditCatalog" @click="startOrder">调整顺序</button>
-        <button class="btn" :disabled="!canEditCatalog" @click="openAdd">添加服务</button>
-        <button class="btn" @click="openHidden">隐藏服务</button>
-        <button class="btn" :disabled="!canEditCatalog || scanBusy" @click="scanAllServices">{{ scanBusy ? '扫描中…' : '扫描全部主机' }}</button>
-        <button class="btn" @click="reload">刷新</button>
+        <button class="btn" :class="{ 'btn-primary': viewMode === 'plaza' }" @click="viewMode = 'plaza'">服务广场</button>
+        <button class="btn" :class="{ 'btn-primary': viewMode === 'inventory' }" @click="viewMode = 'inventory'">完整服务清单 ({{ inventory.length }})</button>
+        <template v-if="viewMode === 'plaza'">
+          <button v-if="sortMode" class="btn" @click="cancelOrder">取消排序</button>
+          <button v-if="sortMode" class="btn btn-primary" :disabled="orderSaving" @click="saveOrder">保存顺序</button>
+          <button v-else class="btn" :disabled="!canEditCatalog" @click="startOrder">调整顺序</button>
+          <button class="btn" :disabled="!canEditCatalog" @click="openAdd">添加服务</button>
+          <button class="btn" @click="openHidden">隐藏服务</button>
+          <button class="btn" :disabled="!canEditCatalog || scanBusy" @click="scanAllServices">{{ scanBusy ? '扫描中…' : '扫描全部主机' }}</button>
+        </template>
+        <button class="btn" @click="viewMode === 'plaza' ? reload() : loadInventory()">刷新</button>
       </div>
     </div>
 
+    <template v-if="viewMode === 'plaza'">
     <div class="health-overview">
-      <button class="health-stat" :disabled="sortMode" :class="{active:healthFilter==='all'}" @click="healthFilter='all'"><strong>{{ overview.summary.total ?? services.length }}</strong><span>全部服务</span></button>
+      <button class="health-stat" :disabled="sortMode" :class="{active:healthFilter==='all'}" @click="healthFilter='all'"><strong>{{ overview.summary.total ?? services.length }}</strong><span>广场服务</span></button>
       <button class="health-stat is-up" :disabled="sortMode" :class="{active:healthFilter==='up'}" @click="healthFilter='up'"><strong>{{ overview.summary.up ?? statusCount('up') }}</strong><span>在线</span></button>
       <button class="health-stat is-down" :disabled="sortMode" :class="{active:healthFilter==='down'}" @click="healthFilter='down'"><strong>{{ overview.summary.down ?? statusCount('down') }}</strong><span>离线</span></button>
       <button class="health-stat is-warn" :disabled="sortMode" :class="{active:healthFilter==='degraded'}" @click="healthFilter='degraded'"><strong>{{ overview.summary.degraded ?? statusCount('degraded') }}</strong><span>波动中</span></button>
@@ -62,6 +67,25 @@
         </div>
       </div>
     </div>
+    </template>
+
+    <template v-else>
+      <p class="view-sub">历史扫描与手动登记的全部服务；隐藏记录也在此列出。</p>
+      <div v-if="inventoryLoading" class="loading"><span class="spinner"></span>正在加载服务清单…</div>
+      <EmptyState v-else-if="!filteredInventory.length" icon="🔍" text="没有匹配的服务" />
+      <table v-else class="table">
+        <thead><tr><th>服务</th><th>主机</th><th>来源</th><th>地址 / 端口</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr v-for="service in filteredInventory" :key="service.id">
+            <td><strong>{{ service.name }}</strong><span v-if="service.hidden" class="tag tag-slate">隐藏</span><div class="muted">{{ service.description || service.category || '-' }}</div></td>
+            <td>{{ service.server_name || service.server_host || '-' }}</td>
+            <td>{{ service.source || '-' }}</td>
+            <td class="mono">{{ service.url || service.ports || (service.port ? `${service.proto || 'tcp'}:${service.port}` : '-') }}</td>
+            <td>{{ service.status || 'unknown' }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </template>
 
     <!-- 详情抽屉 -->
     <ServiceDetailDrawer :visible="drawerVisible" :service="selected" :read-only="!canEditCatalog" @close="drawerVisible = false" @updated="handleServiceUpdated" @deleted="handleServiceDeleted" />
@@ -125,6 +149,9 @@ import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'
 const PLAZA_CACHE_KEY='ops-plaza-cache-v2'
 function readCache(){try{const value=JSON.parse(localStorage.getItem(PLAZA_CACHE_KEY)||'null');return Array.isArray(value?.items)?value.items:[]}catch{return[]}}
 const services = ref(readCache())
+const inventory = ref([])
+const inventoryLoading = ref(false)
+const viewMode = ref('plaza')
 const groups = ref([])
 const loading = ref(!services.value.length)
 const search = ref('')
@@ -202,6 +229,10 @@ const filtered = computed(() => {
 })
 
 const visibleGroups = computed(() => groups.value.filter((g) => groupCount(g) > 0))
+const filteredInventory = computed(() => {
+  const kw = search.value.trim().toLowerCase()
+  return inventory.value.filter((item) => !kw || [item.name, item.server_name, item.server_host, item.url, item.ports].some((value) => String(value || '').toLowerCase().includes(kw)))
+})
 
 function statusDotClass(st) {
   if (st === 'online' || st === 'up') return 'ok'
@@ -249,6 +280,13 @@ async function reload(silent=false) {
   } finally {
     loading.value = false
   }
+}
+
+async function loadInventory() {
+  inventoryLoading.value = true
+  try { inventory.value = await api.get('/services/all') }
+  catch (error) { toast(`完整服务清单加载失败：${error.message}`, 'error') }
+  finally { inventoryLoading.value = false }
 }
 
 async function loadHealthOverview(){try{const data=await api.get('/modules/service-catalog/api/v1/health-overview',{hours:24});overview.value=data||{summary:{},items:[]};const healthByKey=new Map((data.items||[]).map(item=>[item.key,item]));services.value=services.value.map(service=>{const health=healthByKey.get(service.key);return health?{...service,...health}:service});localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}))}catch{/* 总览失败不影响服务入口 */}}
@@ -360,7 +398,7 @@ async function deleteManualService(service) {
   }
 }
 
-onMounted(()=>reload(true))
+onMounted(() => { reload(true); loadInventory() })
 </script>
 
 <style scoped>
