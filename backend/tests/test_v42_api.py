@@ -152,3 +152,26 @@ def test_system_summary_falls_back_to_recent_collector_sample(monkeypatch):
     assert response.json()["cached"] is True
     assert response.json()["stale"] is True
     assert response.json()["metrics"]["cpu"] == 12.5
+
+
+def test_process_list_retries_empty_large_agent_response_with_small_limit(monkeypatch):
+    server_id = add_host()
+    with SessionLocal() as db:
+        row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
+        row.agent_status = "running"
+        row.agent_token = "test-token"
+        db.commit()
+    requested_limits = []
+
+    def fetch(_host, _port, _token, **kwargs):
+        requested_limits.append(kwargs["limit"])
+        return {"items": [], "total": 0} if kwargs["limit"] > 50 else {"items": [{"pid": 1}], "total": 1}
+
+    monkeypatch.setattr(system_control, "fetch_agent_processes", fetch)
+
+    response = client.get(f"/api/v2/servers/{server_id}/processes?limit=300")
+
+    assert response.status_code == 200
+    assert response.json()["items"] == [{"pid": 1}]
+    assert response.json()["source"] == "agent"
+    assert requested_limits == [300, 50]

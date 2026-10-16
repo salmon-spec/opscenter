@@ -266,6 +266,11 @@ def list_processes(server_id: str, search: str = Query("", max_length=80), user:
             host, server.agent_port or 19100, server.agent_token or "",
             search=search, user=user, state=state, sort=sort, limit=limit,
         ))
+        if result is not None and not result.get("items") and limit > 50:
+            result = fetch_from_agent(server, lambda host: fetch_agent_processes(
+                host, server.agent_port or 19100, server.agent_token or "",
+                search=search, user=user, state=state, sort=sort, limit=50,
+            ))
     if result is not None:
         return {**result, "source": "agent"}
     if server.agent_type == "local" and not CONTAINERIZED:
