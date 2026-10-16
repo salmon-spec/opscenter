@@ -20,7 +20,7 @@ from page import render_page
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 KEY = "electricity"
 LOW_BALANCE_THRESHOLD = float(os.getenv("ELECTRICITY_LOW_BALANCE", "20"))
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))

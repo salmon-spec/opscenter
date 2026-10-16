@@ -1,7 +1,7 @@
 # OpsCenter electricity module — additive resources only.
 #
-# This manifest adds the electricity module (Deployment + Service + its own data volume).
-# Backend module registration, web navigation and gateway routing are managed separately.
+# Electricity runs as its own Deployment + Service and data volume; the workbench
+# adds it to the module catalog and summary through the backend integration.
 #
 # Apply order:
 #   1. kubectl apply -f opscenter-electricity-module.yaml

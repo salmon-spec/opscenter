@@ -69,7 +69,7 @@ BUILTIN_MODULES = {
     },
     "electricity": {
         "name": "电费监测",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "description": "查看国网电费余额、账单与逐日用电",
         "icon": "⚡",
         "entry_url": "/modules/electricity/ui",
