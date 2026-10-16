@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -132,7 +133,8 @@ def probe_service(service: dict):
     error = ""
     try:
         with urlopen(Request(url, headers={"User-Agent": "OpsCenter/service-catalog"}),
-                     timeout=float(service.get("probe_timeout_seconds") or 4)) as response:
+                     timeout=float(service.get("probe_timeout_seconds") or 4),
+                     context=ssl._create_unverified_context() if service.get("probe_verify_tls") is False else None) as response:
             code = response.status
     except HTTPError as response:
         code = response.code

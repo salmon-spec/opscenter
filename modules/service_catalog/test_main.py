@@ -407,6 +407,32 @@ def test_service_probe_is_saved_by_module_and_exposed_in_detail(monkeypatch):
     assert detail.json()["probe_summary"]["checks_24h"] == 1
 
 
+@pytest.mark.parametrize("verify_tls", [False, True, None])
+def test_probe_honors_per_service_tls_policy(monkeypatch, verify_tls):
+    contexts = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def fake_urlopen(_request, **kwargs):
+        contexts.append(kwargs["context"])
+        return Response()
+
+    monkeypatch.setattr(main, "urlopen", fake_urlopen)
+    result = main.probe_service({"health_url": "https://example.test/", "probe_verify_tls": verify_tls})
+
+    assert result["status"] == "up"
+    assert (contexts[0] is None) is (verify_tls is not False)
+    if verify_tls is False:
+        assert contexts[0].verify_mode == main.ssl.CERT_NONE
+
+
 def test_probe_cycle_runs_only_services_due_for_module_owned_probe(monkeypatch):
     now = datetime.now(timezone.utc)
     rows = [
