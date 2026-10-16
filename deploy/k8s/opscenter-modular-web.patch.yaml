@@ -18,7 +18,7 @@ spec:
           command:
             - /bin/sh
             - -c
-            - set -eu; cp -a /srv/v3/. /work/; tar -xzf /bundle/dist.tar.gz -C /work
+            - set -eu; tar -xzf /bundle/dist.tar.gz -C /work
           volumeMounts:
             - name: restored-v3
               mountPath: /work
