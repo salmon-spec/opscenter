@@ -26,7 +26,6 @@ from app.auth import (
     require_configured_operator,
     require_operator,
 )
-from app.api_keys import generate_api_key
 from app.database import Base, engine
 from app.main import app
 
@@ -208,18 +207,17 @@ def test_asymmetric_session_signing_and_legacy_window(monkeypatch, tmp_path):
     assert auth.decode_token(old) is None
 
 
-def test_browser_jwt_and_api_key_share_read_endpoints_without_anonymous_access(monkeypatch):
+def test_jwt_read_endpoints_without_api_keys(monkeypatch):
     monkeypatch.setattr(auth, "AUTH_ENABLED", True)
     monkeypatch.setattr(auth, "SECRET_KEY", "test-only-signing-key-with-more-than-32-bytes")
     monkeypatch.setattr(auth, "ADMIN_USER", "admin")
     token = auth.create_access_token(1, "admin")
-    key, _ = generate_api_key("test-reader")
-
     for path in ("/api/v2/services/health", "/api/v2/screen/summary"):
         assert client.get(path).status_code == 401
         assert client.get(path, headers={"Authorization": f"Bearer {token}"}).status_code == 200
-        assert client.get(path, headers={"Authorization": f"Bearer {key}"}).status_code == 200
         assert client.get(path, headers={"Authorization": "Bearer invalid"}).status_code == 401
+
+    assert client.get("/api/v2/keys").status_code == 404
 
     assert client.get("/api/v2/auth/me").status_code == 401
     assert client.get("/api/v2/auth/me", headers={"Authorization": f"Bearer {token}"}).json()["username"] == "admin"

@@ -135,7 +135,6 @@ const moduleNavs = [
   { path: '/kubernetes/overview', label: 'K3s 集群', icon: '☸', matches: ['/kubernetes/'] },
   { path: '/screen', label: '健康大屏', icon: '📊' },
   { path: '/alerts', label: '告警中心', icon: '🔔' },
-  { path: '/api-keys', label: '开放 API', icon: '🔑' },
   { path: '/logs', label: '日志中心', icon: '≡' },
   { path: '/modules', label: '模块管理', icon: '◇', exact: true },
 ]

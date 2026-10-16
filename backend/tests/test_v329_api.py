@@ -1,4 +1,4 @@
-"""v3.29 T2/T3 测试：开放 API 密钥 + 服务详情/大屏聚合/健康/历史指标。
+"""v3.29 服务详情/大屏聚合/健康/历史指标测试。
 
 与现有测试一致：使用独立测试库 opscenter_test，每个用例重建表。
 运行于 VM2（sys.path 指向 /opt/opscenter/backend）。
@@ -16,8 +16,6 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api_keys import hash_api_key, verify_api_key
-from app.api_keys import router as keys_router
 from app.control import router as control_router
 from app.database import get_db
 from app.models import Base, MetricHistory, Server, Service
@@ -27,7 +25,6 @@ from app.dashboard import router as dashboard_router
 def _make_app() -> FastAPI:
     """组装仅包含 v3.29 新路由的测试应用（main.py 接线前独立验证）。"""
     app = FastAPI()
-    app.include_router(keys_router)
     app.include_router(dashboard_router)
     app.include_router(control_router)
     return app
@@ -69,64 +66,11 @@ def _add_service(server: Server, name: str, url: str, category: str = "CI/CD") -
         return svc
 
 
-# ── T2 API 密钥 ──
+# ── 已退役功能 ──
 
-def test_create_and_list_api_key():
-    r = client.post("/api/v2/keys", json={"name": "大屏读取", "scope": "read"})
-    assert r.status_code == 201
-    data = r.json()
-    assert data["api_key"].startswith("oc_rt_")
-    assert data["prefix"] == data["api_key"][:10]
-
-    r = client.get("/api/v2/keys")
-    assert r.status_code == 200
-    rows = r.json()
-    assert len(rows) == 1
-    assert rows[0]["name"] == "大屏读取"
-    assert "key_hash" not in rows[0]
-    assert "api_key" not in rows[0]
-
-
-def test_create_key_scope_validation():
-    r = client.post("/api/v2/keys", json={"name": "非法", "scope": "admin"})
-    assert r.status_code == 400
-
-
-def test_verify_api_key_hash_roundtrip():
-    with get_db() as db:
-        from app.models import ApiKey
-        row = ApiKey(name="t", key_hash=hash_api_key("oc_rt_secret"), prefix="oc_rt_secr", scope="read")
-        db.add(row)
-        db.commit()
-    assert verify_api_key("oc_rt_secret") is not None
-    assert verify_api_key("oc_rt_wrong") is None
-
-
-def test_verify_api_key_throttles_last_used_writes():
-    from datetime import datetime
-    from app.models import ApiKey
-
-    original = datetime.utcnow()
-    with get_db() as db:
-        row = ApiKey(
-            name="polling", key_hash=hash_api_key("oc_rt_polling"),
-            prefix="oc_rt_poll", scope="read", last_used_at=original,
-        )
-        db.add(row)
-        db.commit()
-        row_id = row.id
-    assert verify_api_key("oc_rt_polling") is not None
-    with get_db() as db:
-        assert db.query(ApiKey).filter(ApiKey.id == row_id).one().last_used_at == original
-
-
-def test_delete_api_key():
-    r = client.post("/api/v2/keys", json={"name": "待删", "scope": "write"})
-    key_id = r.json()["id"]
-    r = client.delete(f"/api/v2/keys/{key_id}")
-    assert r.status_code == 200
-    assert client.get("/api/v2/keys").json() == []
-    assert client.delete("/api/v2/keys/00000000-0000-0000-0000-000000000000").status_code == 404
+def test_api_key_management_routes_removed():
+    assert client.get("/api/v2/keys").status_code == 404
+    assert client.post("/api/v2/keys", json={"name": "x"}).status_code == 404
 
 
 # ── T3 服务详情 ──

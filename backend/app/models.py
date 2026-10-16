@@ -594,19 +594,6 @@ class AuditLog(Base):
     status = Column(String(10), default="success")       # success/failed
 
 
-class ApiKey(Base):
-    """开放 API 密钥（v3.29, 开放 API）：存 SHA-256 哈希，仅向前端展示前缀，scope 区分读写。"""
-    __tablename__ = "api_keys"
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(50), nullable=False)
-    key_hash = Column(String(128), nullable=False, unique=True)
-    prefix = Column(String(16), nullable=False)           # 展示前缀，如 oh_rt_a1b2
-    scope = Column(String(10), default="read")            # read / write
-    enabled = Column(Boolean, default=True)
-    last_used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
 class Cluster(Base):
     """Kubernetes 集群（需求基线 2026-09-10 §4.1）：首期固定 k3s、in_cluster/kubeconfig 连接，
     数据结构按多集群设计。节点与 Server 的映射通过 servers.cluster_id / kubernetes_node_name 表达。"""

@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, ApiKey, DatabaseInstance
+from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, DatabaseInstance
 from app.credential_crypto import encrypt_secret
 from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
@@ -36,8 +36,7 @@ from app.alerting import (
 )
 from app.config import CONTAINERIZED, CORS_ORIGINS, LOCAL_AGENT_TOKEN, LOCAL_SERVER_NAME, PREVIEW_MODE
 
-# === v3.29 新增模块（T2 密钥 / T3 详情与健康大屏 / 主机操控 / T4 服务健康） ===
-from app.api_keys import router as api_keys_router
+# === v3.29 服务详情、大屏与健康路由 ===
 from app.dashboard import router as dashboard_router
 from app.control import router as control_router
 from app.service_health import run_service_health_cycle, service_health_loop
@@ -316,9 +315,8 @@ app.add_middleware(PerformanceMiddleware)
 # operator token is configured, including routes added by future modules.
 app.add_middleware(MutationAuthMiddleware)
 
-# === v3.29 路由挂载（T2 密钥 / T3 详情与健康大屏 / 主机操控） ===
+# === v3.29 服务详情与大屏路由 ===
 app.include_router(auth_router)
-app.include_router(api_keys_router)
 app.include_router(dashboard_router)
 app.include_router(control_router)
 app.include_router(plaza_router)

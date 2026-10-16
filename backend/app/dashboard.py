@@ -28,10 +28,10 @@ from app.agent_manager import (
     fetch_agent_wireguard,
     resolve_agent_host,
 )
-from app.api_keys import require_api_key
+from app.auth import get_current_user
 from app.config import CONTAINERIZED, LOCAL_AGENT_HOST
 from app.database import get_db
-from app.models import AlertEvent, AlertRule, ApiKey, DatabaseInstance, MetricHistory, PlazaHealthState, Server, Service, ServiceRelation
+from app.models import AlertEvent, AlertRule, DatabaseInstance, MetricHistory, PlazaHealthState, Server, Service, ServiceRelation
 
 router = APIRouter(prefix="/api/v2", tags=["system-health"])
 
@@ -116,7 +116,7 @@ def _service_relations(db, service_id) -> dict:
 @router.get("/services/{service_id}/detail")
 def get_service_detail(
     service_id: str,
-    _: Optional[ApiKey] = Depends(require_api_key("read")),
+    _: object = Depends(get_current_user),
 ):
     """服务详情聚合：部署位置/版本/运行时长/端口/依赖关系。"""
     try:
@@ -969,7 +969,7 @@ def _build_screen_business() -> tuple[dict, str]:
 @router.get("/screen/summary")
 def get_screen_summary(
     request: Request,
-    _: Optional[ApiKey] = Depends(require_api_key("read")),
+    _: object = Depends(get_current_user),
 ):
     """监控大屏聚合（v4.8.5 增强）：K3s 优先 + 双层服务健康 + ETag/304 + 5s 响应缓存。
 
@@ -1027,7 +1027,7 @@ def get_screen_summary(
 
 @router.get("/services/health")
 def get_services_health(
-    _: Optional[ApiKey] = Depends(require_api_key("read")),
+    _: object = Depends(get_current_user),
 ):
     """全量服务健康 + 汇总（优先复用 service_health 模块的运行态快照）。"""
     with get_db() as db:
@@ -1076,7 +1076,7 @@ def get_monitor_history(
     metric: str = Query(..., description="指标名：cpu/memory/disk/net_rx/net_tx 等"),
     start: Optional[str] = Query(None, description="开始时间（ISO 格式），默认最近 24h"),
     end: Optional[str] = Query(None, description="结束时间（ISO 格式），默认当前"),
-    _: Optional[ApiKey] = Depends(require_api_key("read")),
+    _: object = Depends(get_current_user),
 ):
     """历史指标查询（时间范围）。"""
     try:
