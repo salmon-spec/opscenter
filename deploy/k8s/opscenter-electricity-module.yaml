@@ -1,0 +1,155 @@
+# OpsCenter electricity module — additive resources only.
+#
+# This manifest adds the electricity module (Deployment + Service + its own data volume).
+# Backend module registration, web navigation and gateway routing are managed separately.
+#
+# Apply order:
+#   1. kubectl apply -f opscenter-electricity-module.yaml
+#   2. create Secret module-electricity-creds (values never stored in Git)
+#   3. register electricity in the backend built-in module catalog
+#   4. ensure the web gateway routes /modules/electricity/* to this Service
+#
+# The Secret is created out of band, for example:
+#   kubectl -n opscenter create secret generic module-electricity-creds \
+#     --from-literal=account=<phone> \
+#     --from-literal=password_digest=<32-char uppercase md5> \
+#     --from-literal=target_id=<household id> \
+#     --from-file=target_meter=<path to meter json>
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: module-electricity-data
+  namespace: opscenter
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-electricity
+  namespace: opscenter
+  labels:
+    app: module-electricity
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-electricity
+  template:
+    metadata:
+      labels:
+        app: module-electricity
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: module-electricity
+          image: opscenter/module-electricity:456ddce8
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: MODULE_AUTH_REQUIRED
+              value: "true"
+            - name: OPS_JWT_PUBLIC_KEY_FILE
+              value: /run/secrets/opscenter_jwt_public
+            - name: OPS_JWT_LEGACY_UNTIL
+              value: "2026-10-15T00:00:00Z"
+            - name: ELECTRICITY_DATA_DIR
+              value: /data
+            - name: ELECTRICITY_REFRESH_HOURS
+              value: "12"
+            - name: ELECTRICITY_LOW_BALANCE
+              value: "20"
+            - name: OPS_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: opscenter-env
+                  key: OPS_ADMIN_USER
+            - name: ELECTRICITY_ACCOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: module-electricity-creds
+                  key: account
+            - name: ELECTRICITY_PASSWORD_DIGEST
+              valueFrom:
+                secretKeyRef:
+                  name: module-electricity-creds
+                  key: password_digest
+            - name: ELECTRICITY_TARGET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: module-electricity-creds
+                  key: target_id
+            - name: ELECTRICITY_TARGET_METER
+              valueFrom:
+                secretKeyRef:
+                  name: module-electricity-creds
+                  key: target_meter
+          volumeMounts:
+            - name: opscenter-jwt-public
+              mountPath: /run/secrets/opscenter_jwt_public
+              subPath: jwt-public.pem
+              readOnly: true
+            - name: electricity-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 384Mi
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 5
+      volumes:
+        - name: opscenter-jwt-public
+          secret:
+            secretName: opscenter-jwt-keypair
+        - name: electricity-data
+          persistentVolumeClaim:
+            claimName: module-electricity-data
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - k8s-worker-01
+                      - k8s-worker-02
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-electricity
+  namespace: opscenter
+  labels:
+    app: module-electricity
+spec:
+  selector:
+    app: module-electricity
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

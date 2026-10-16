@@ -1,9 +1,4 @@
-"""Self-contained dashboard page served by the electricity module.
-
-The page reads the workbench session token that the OpsCenter front-end already
-stores in localStorage (`ops-access-token`), so it can call the module API on
-the same origin without any change to the workbench itself.
-"""
+"""Self-contained dashboard page served by the electricity module."""
 from __future__ import annotations
 
 PAGE = """<!doctype html>
@@ -71,13 +66,31 @@ th{color:var(--muted);font-weight:600;font-size:13px}
   <p class="state" id="state"></p>
 </div>
 <script>
-const TOKEN_KEY = 'ops-access-token';
 const API = '/modules/electricity/api/v1';
 const $ = (id) => document.getElementById(id);
+const framed = window.parent !== window;
+const pending = new Map();
+let requestId = 0;
+let moduleReady = !framed;
 const num = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(v))) ? '—' : Number(v).toFixed(d);
 const monthLabel = (m) => (/^\\d{6}$/.test(String(m)) ? `${String(m).slice(0,4)}-${String(m).slice(4)}` : (m || '—'));
 
-function token() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function request(path, method = 'GET') {
+  if (!framed) {
+    const token = localStorage.getItem('ops-access-token') || '';
+    return fetch(path, { method, headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      });
+  }
+  const id = `electricity-${Date.now()}-${++requestId}`;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error('模块接口请求超时')); }, 20000);
+    pending.set(id, { resolve, reject, timer });
+    window.parent.postMessage({ type: 'ops-module-api-request', id, path, method, timeoutMs: 20000 }, '*');
+  });
+}
 
 function render(data) {
   const item = (data.households || [])[0] || {};
@@ -123,29 +136,49 @@ function notice(text) {
 }
 
 async function load() {
-  if (!token()) return notice('请先在运维工作台登录，再打开本页面');
+  if (!moduleReady) return;
   try {
-    const res = await fetch(`${API}/overview`, { headers: { Authorization: `Bearer ${token()}` } });
-    if (res.status === 401) return notice('登录已失效，请在运维工作台重新登录');
-    if (!res.ok) return notice(`模块暂时不可用（HTTP ${res.status}）`);
-    render(await res.json());
+    render(await request(`${API}/overview`));
   } catch (e) {
-    notice('无法连接电费模块');
+    notice(`模块暂时不可用（${e.message}）`);
   }
 }
 
 $('refresh').onclick = async () => {
-  if (!token()) return notice('请先在运维工作台登录，再打开本页面');
+  if (!moduleReady) return;
   const btn = $('refresh'); btn.disabled = true; btn.textContent = '采集中…';
   try {
-    const res = await fetch(`${API}/refresh`, { method: 'POST', headers: { Authorization: `Bearer ${token()}` } });
-    $('state').textContent = res.ok ? '已触发采集，稍后自动刷新结果…' : `触发失败（HTTP ${res.status}）`;
+    const result = await request(`${API}/refresh`, 'POST');
+    $('state').textContent = result.triggered ? '已触发采集，稍后自动刷新结果…' : (result.message || '已有采集任务在进行');
   } catch (e) { $('state').textContent = '触发采集失败'; }
   setTimeout(async () => { btn.disabled = false; btn.textContent = '立即刷新'; await load(); }, 6000);
-  await load();
 };
 
-load();
+window.addEventListener('message', (event) => {
+  if (event.source !== window.parent) return;
+  const data = event.data || {};
+  if (data.type === 'ops-module-info') {
+    moduleReady = true;
+    $('identity').textContent = `${data.module?.name || '电费监测'} · v${data.module?.version || '0.1.0'}`;
+    load();
+  } else if (data.type === 'ops-module-api-response') {
+    const task = pending.get(data.id);
+    if (!task) return;
+    pending.delete(data.id);
+    clearTimeout(task.timer);
+    if (data.ok) task.resolve(data.data);
+    else task.reject(new Error(data.data?.message || '模块请求失败'));
+  }
+});
+
+if (framed) {
+  const announceReady = () => window.parent.postMessage({ type: 'ops-module-ready' }, '*');
+  announceReady();
+  const readyTimer = setInterval(() => { if (moduleReady) clearInterval(readyTimer); else announceReady(); }, 400);
+  setTimeout(() => clearInterval(readyTimer), 15000);
+} else {
+  load();
+}
 setInterval(load, 60000);
 </script>
 </body>

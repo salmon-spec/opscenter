@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlparse
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -65,6 +66,23 @@ BUILTIN_MODULES = {
             "readonly": True,
         },
         "sort_order": 20,
+    },
+    "electricity": {
+        "name": "电费监测",
+        "version": "0.1.0",
+        "description": "查看国网电费余额、账单与逐日用电",
+        "icon": "⚡",
+        "entry_url": "/modules/electricity/ui",
+        "runtime": "iframe",
+        "isolation": "sandboxed-iframe",
+        "capabilities": ["summary:read", "findings:read", "electricity:read", "electricity:refresh"],
+        "permissions": ["electricity:read", "electricity:refresh"],
+        "manifest": {
+            "api_prefixes": ["/modules/electricity/api/v1/"],
+            "sandbox": ["allow-scripts"],
+            "readonly": False,
+        },
+        "sort_order": 30,
     },
 }
 
@@ -161,7 +179,11 @@ def seed_extension_modules() -> None:
         for key, item in BUILTIN_MODULES.items():
             row = db.query(ExtensionModule).filter(ExtensionModule.key == key).first()
             if row is None:
-                row = ExtensionModule(key=key, running=False, status="stopped")
+                row = ExtensionModule(
+                    key=key,
+                    running=key == "electricity",
+                    status="running" if key == "electricity" else "stopped",
+                )
                 db.add(row)
                 changed = True
             for field, value in item.items():
@@ -384,6 +406,21 @@ def check_module_health(module_key: str, user: object = Depends(require_operator
         elif module_key == "command-code-usage":
             _apply_command_code_config(row)
             result = _record_command_code_health(row, command_code.status(force=True))
+        elif module_key == "electricity":
+            try:
+                response = requests.get("http://module-electricity:8080/health/ready", timeout=3)
+                available = response.status_code == 200
+                error = "" if available else f"健康探针返回 HTTP {response.status_code}"
+            except requests.RequestException as exc:
+                available = False
+                error = str(exc)
+            result = {
+                "available": available,
+                "configured": True,
+                "error": error,
+                "checked_at": datetime.utcnow().isoformat(),
+            }
+            _record_health(row, result)
         else:
             result = {
                 "available": bool(row.running),

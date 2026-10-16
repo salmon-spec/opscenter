@@ -58,6 +58,7 @@ const modules = ref([
   { key: 'logs', title: '日志中心', description: 'Loki 与日志查询模块状态', path: '/logs', summary: null, error: '', findings: null, findingsError: '', loading: false },
   { key: 'k3s', title: 'K3s 集群', description: '节点、工作负载、存储与事件', path: '/kubernetes/overview', summary: null, error: '', findings: null, findingsError: '', loading: false },
   { key: 'alerts', title: '告警', description: '未处理事件、等级与最近变化', path: '/alerts', summary: null, error: '', findings: null, findingsError: '', loading: false },
+  { key: 'electricity', title: '电费监测', description: '国网电费余额、最近账单与逐日用电', path: '/extensions/electricity', summary: null, error: '', findings: null, findingsError: '', loading: false },
 ])
 const refreshing = ref(false)
 

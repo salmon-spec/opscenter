@@ -13,10 +13,11 @@
 | `GET /api/v1/findings` | 低余额、采集过期、凭据缺失、部分数据待重试 |
 | `GET /api/v1/overview` | 业务明细（户号、余额、账单、近 30 日用电），需工作台会话 |
 | `POST /api/v1/refresh` | 手动触发一轮采集，需工作台会话 |
-| `GET /ui` | 自带展示页（无数据，前端读取工作台会话后自行取数） |
+| `GET /ui` | 自带展示页；在工作台中通过隔离 iframe 的 API 桥接读取数据 |
 
-网关通过 `handle_path /modules/electricity/*` 把前缀剥掉后反向代理到本模块，
-浏览器入口为 `<opscenter 入口>/modules/electricity/ui`。
+网关通过 `handle_path /modules/electricity/*` 把前缀剥掉后反向代理到本模块。
+工作台扩展模块目录注册 `/ui`，经受限的 API 桥接传递工作台会话，不把 JWT 暴露给 iframe。
+直接访问 `<opscenter 入口>/modules/electricity/ui` 仍可使用工作台本地会话。
 
 ## 数据与凭据
 
@@ -40,7 +41,8 @@ cd modules && python -m pytest electricity/test_main.py -q
 2. 新增 Secret：模块凭据（账号 / 摘要 / 目标表计）与数据卷；沿用 `opscenter-jwt-keypair` 只读公钥。
 3. 新增 Deployment + Service（与 `module-logs` 同构，`Recreate`、单副本、固定节点）。
 4. 在网关 ConfigMap 中追加 `handle_path /modules/electricity/*` 路由块并热加载。
-5. 不需要重建 backend / web 镜像，也不改动其他模块的任何资源。
+5. 后端启动时登记内置模块目录；前端将其显示在扩展导航、模块管理与值班首页。
+6. 不改动其他模块的数据或资源。
 
 ## 回滚
 
