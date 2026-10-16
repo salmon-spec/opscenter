@@ -281,10 +281,10 @@ function connRow(channel) {
   return connectivity.value?.[channel] || null
 }
 function svcStatusLabel(status) {
-  return { up: '正常', healthy: '正常', ok: '正常', down: '异常', failing: '异常', error: '异常', unknown: '未知' }[status] || status || '未知'
+  return { up: '正常', online: '正常', healthy: '正常', ok: '正常', down: '异常', offline: '异常', failing: '异常', error: '异常', stale: '数据过期', disabled: '未启用', unknown: '未检测' }[status] || status || '未检测'
 }
 function svcTagClass(status) {
-  return { up: 'tag-green', healthy: 'tag-green', ok: 'tag-green', down: 'tag-red', failing: 'tag-red', error: 'tag-red', unknown: 'tag-slate' }[status] || 'tag-slate'
+  return { up: 'tag-green', online: 'tag-green', healthy: 'tag-green', ok: 'tag-green', down: 'tag-red', offline: 'tag-red', failing: 'tag-red', error: 'tag-red' }[status] || 'tag-slate'
 }
 function alertLabel(status) {
   return { resolved: '已恢复', acked: '已确认', firing: '触发中', pending: '待处理' }[status] || status || '—'
@@ -388,10 +388,18 @@ async function loadServices() {
   svcLoading.value = true
   const id = props.hostId
   try {
-    const data = await api.get(`/servers/${id}/services`, undefined, { signal: detailController.signal, timeoutMs: 10000 })
+    const [data, catalog] = await Promise.all([
+      api.get(`/servers/${id}/services`, undefined, { signal: detailController.signal, timeoutMs: 10000 }),
+      api.get('/modules/service-catalog/api/v1/services', undefined, { signal: detailController.signal, timeoutMs: 10000 }).catch(() => []),
+    ])
     if (id === requestedId) {
-      services.value = data.services || []
-      svcNotes.value = data.notes || []
+      const byKey = new Map((Array.isArray(catalog) ? catalog : []).map(item => [item.key, item]))
+      services.value = (data.services || []).map(service => {
+        const key = `${service.source === 'manual' ? 'manual' : 'scan'}-${service.id}`
+        const current = byKey.get(key)
+        return current ? { ...service, health: { ...service.health, status: current.stale ? 'stale' : current.status } } : service
+      })
+      svcNotes.value = [...(data.notes || []).filter(note => !note.startsWith('服务双层健康')), '目录未探测的服务显示为“未检测”']
       svcLoaded.value = true
     }
   } catch (error) {

@@ -357,7 +357,17 @@ async function openHidden() {
   hiddenVisible.value = true
   hiddenLoading.value = true
   try {
-    hiddenServices.value = await api.get('/modules/service-catalog/api/v1/hidden')
+    const [plazaHidden, legacyServices] = await Promise.all([
+      api.get('/modules/service-catalog/api/v1/hidden'),
+      api.get('/services/all'),
+    ])
+    hiddenServices.value = [
+      ...plazaHidden,
+      ...legacyServices.filter((item) => item.hidden).map((item) => ({
+        ...item, id: `legacy-${item.id}`, service_id: item.id,
+        legacy_hidden: true, kind: 'scan',
+      })),
+    ]
   } catch (error) {
     toast(`隐藏服务加载失败：${error.message}`, 'error')
   } finally {
@@ -376,6 +386,7 @@ async function restoreService(service) {
     hiddenServices.value = hiddenServices.value.filter((item) => item.id !== service.id)
     toast(`${service.name} 已恢复显示`, 'success')
     await reload()
+    if (viewMode.value === 'inventory') await loadInventory()
   } catch (error) {
     toast(`恢复失败：${error.message}`, 'error')
   }

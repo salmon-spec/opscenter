@@ -262,6 +262,8 @@ spec:
           value: /run/secrets/host_monitor_db_url
         - name: HOST_MONITOR_AGENT_TOKEN_FILE
           value: /run/secrets/host_monitor_agent_token
+        - name: HOST_MONITOR_INGEST_TOKEN_FILE
+          value: /run/secrets/host_monitor_ingest_token
         - name: HOST_MONITOR_AGENT_ID
           value: 79999aaf-34ca-466c-b959-6a74023bc47d
         - name: HOST_MONITOR_AGENT_NAME
@@ -289,6 +291,10 @@ spec:
         - name: host-monitor-agent-token
           mountPath: /run/secrets/host_monitor_agent_token
           subPath: agent-token
+          readOnly: true
+        - name: host-monitor-ingest-token
+          mountPath: /run/secrets/host_monitor_ingest_token
+          subPath: token
           readOnly: true
         - name: host-monitor-internal-token
           mountPath: /run/secrets/host_monitor_internal_token
@@ -325,6 +331,9 @@ spec:
       - name: host-monitor-agent-token
         secret:
           secretName: opscenter-host-monitor-agent
+      - name: host-monitor-ingest-token
+        secret:
+          secretName: opscenter-host-monitor-ingest
       - name: host-monitor-internal-token
         secret:
           secretName: opscenter-host-monitor-internal

@@ -83,8 +83,16 @@ class MonitorStore:
         row = self.host(host_id)
         return row["last_summary"] if row and row["last_summary"] else None
 
-    def save_sample(self, host_id: str, summary: dict, values: dict[str, float], at: datetime):
+    def save_sample(self, host_id: str, summary: dict, values: dict[str, float], at: datetime,
+                    name: str = "", host: str = "", agent_port: int = 19100):
         with self.connect() as db:
+            if name and host:
+                db.execute("""
+                    INSERT INTO monitored_hosts (id, name, host, agent_port)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, host=EXCLUDED.host,
+                        agent_port=EXCLUDED.agent_port
+                """, (host_id, name, host, agent_port))
             row = db.execute("SELECT 1 FROM monitored_hosts WHERE id=%s", (host_id,)).fetchone()
             if not row:
                 raise ValueError("host is not registered")

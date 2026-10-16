@@ -28,6 +28,10 @@ spec:
               value: http://module-host-inventory:8080/api/v1/agent/telemetry
             - name: HOST_INVENTORY_INGEST_TOKEN_FILE
               value: /run/ingest/host-inventory-ingest-token
+            - name: HOST_MONITOR_INGEST_URL
+              value: http://module-host-monitor:8080/api/v1/internal/samples
+            - name: HOST_MONITOR_INGEST_TOKEN_FILE
+              value: /run/monitor/token
             - name: ALERTING_ENABLED
               value: "false"
             - name: SERVICE_HEALTH_ENABLED
@@ -40,6 +44,10 @@ spec:
               readOnly: true
             - name: host-inventory-ingest
               mountPath: /run/ingest
+              readOnly: true
+            - name: host-monitor-ingest
+              mountPath: /run/monitor/token
+              subPath: token
               readOnly: true
             - name: backend-code-opt
               mountPath: /opt/opscenter/backend/app/main.py
@@ -60,6 +68,9 @@ spec:
         - name: host-inventory-ingest
           secret:
             secretName: opscenter-host-inventory-ingest
+        - name: host-monitor-ingest
+          secret:
+            secretName: opscenter-host-monitor-ingest
         - name: backend-code-opt
           configMap:
             name: opscenter-backend-no-ai-20261015

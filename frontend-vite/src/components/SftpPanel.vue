@@ -28,7 +28,7 @@
           </td>
           <td>{{ item.is_dir ? '目录' : '文件' }}</td>
           <td class="mono">{{ item.is_dir ? '-' : fmtBytes(item.size) }}</td>
-          <td class="muted">{{ fmtTime(item.mtime) }}</td>
+          <td class="muted">{{ fmtTime(item.mtime ? item.mtime * 1000 : null) }}</td>
           <td>
             <button v-if="!item.is_dir" class="btn btn-sm" @click="download(item)">下载</button>
             <button class="btn btn-sm" @click="startRename(item)">重命名</button>

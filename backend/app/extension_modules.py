@@ -508,7 +508,10 @@ def oss_status(
         row = _require_running(db, module_key)
         if module_key == "command-code-usage":
             _apply_command_code_config(row)
-            result = _record_command_code_health(row, command_code.status(force=force))
+            result = _record_command_code_health(row, command_code.status(
+                force=force,
+                min_captured_at=row.config_updated_at if row.config_ciphertext else None,
+            ))
         elif module_key == "oss-browser":
             _oss_guard(row)
             try:

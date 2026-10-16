@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hmac
+import os
+from pathlib import Path
 from uuid import UUID
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
 
-from agent import AgentSampler
+from agent import AgentSampler, normalize
 from collector import _query_range
 from runtime.app import create_module_app, require_internal_service
 from storage import MonitorStore
@@ -47,7 +50,7 @@ def findings_provider():
 
 
 app = create_module_app(
-    key="host-monitor", version="0.2.3", summary_provider=summary_provider,
+    key="host-monitor", version="0.2.4", summary_provider=summary_provider,
     findings_provider=findings_provider,
     capabilities=["summary:read", "findings:read", "metrics:read"],
     readiness_provider=store.ping,
@@ -88,6 +91,34 @@ def internal_latest_metrics():
         hosts.append({"id": str(row["id"]), "name": row["name"], "last_sample_at": row["last_sample_at"],
                       "metrics": summary.get("metrics", {})})
     return {"collected_at": datetime.now(timezone.utc), "items": hosts}
+
+
+@app.post("/api/v1/internal/samples")
+def ingest_samples(samples: list[dict], x_opscenter_monitor_token: str = Header(default="")):
+    token_file = os.getenv("HOST_MONITOR_INGEST_TOKEN_FILE", "")
+    expected = Path(token_file).read_text(encoding="utf-8").strip() if token_file and Path(token_file).is_file() else ""
+    if not expected or not hmac.compare_digest(x_opscenter_monitor_token, expected):
+        raise HTTPException(401, "Unauthorized")
+    if not 1 <= len(samples) <= 16:
+        raise HTTPException(400, "Invalid sample count")
+    at = datetime.now(timezone.utc).replace(tzinfo=None)
+    prepared = []
+    for sample in samples:
+        try:
+            host_id = str(UUID(str(sample["id"])))
+            name, host = str(sample["name"])[:100], str(sample["host"])[:253]
+            port = int(sample.get("agent_port") or 19100)
+            values = sample["values"]
+            if not name or not host or not 1 <= port <= 65535 or not isinstance(values, dict):
+                raise ValueError
+            summary, metrics = normalize(values, host_id, at)
+            prepared.append((host_id, summary, metrics, at, name, host, port))
+        except (KeyError, TypeError, ValueError) as error:
+            raise HTTPException(400, "Invalid sample") from error
+    for item in prepared:
+        if item[0] != sampler.host_id:
+            store.save_sample(*item)
+    return {"accepted": len(prepared) - sum(item[0] == sampler.host_id for item in prepared)}
 
 
 def _query_window(start: str, end: str, resolution: str, metrics: str):

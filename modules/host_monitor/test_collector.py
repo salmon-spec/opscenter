@@ -8,7 +8,24 @@ from main import app, store
 
 
 def test_module_version():
-    assert TestClient(app).get("/api/v1/version").json()["version"] == "0.2.3"
+    assert TestClient(app).get("/api/v1/version").json()["version"] == "0.2.4"
+
+
+def test_ingest_requires_token_and_registers_sample(monkeypatch, tmp_path):
+    token = tmp_path / "token"
+    token.write_text("ingest-test", encoding="utf-8")
+    monkeypatch.setenv("HOST_MONITOR_INGEST_TOKEN_FILE", str(token))
+    calls = []
+    monkeypatch.setattr(store, "save_sample", lambda *args: calls.append(args))
+    client = TestClient(app)
+    body = [{"id": str(uuid4()), "name": "node", "host": "10.0.0.1",
+             "values": {"cpu_percent": 12}}]
+    assert client.post("/api/v1/internal/samples", json=body).status_code == 401
+    response = client.post("/api/v1/internal/samples", json=body,
+                           headers={"X-OpsCenter-Monitor-Token": "ingest-test"})
+    assert response.status_code == 200
+    assert response.json() == {"accepted": 1}
+    assert calls[0][1]["metrics"]["cpu"] == 12
 
 
 def test_internal_latest_metrics_requires_token(monkeypatch, tmp_path):

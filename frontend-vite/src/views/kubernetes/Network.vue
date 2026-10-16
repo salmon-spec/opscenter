@@ -130,7 +130,7 @@ import { useClusterContext } from '../../workbench/clusters'
 import { k8sApi, unwrap, apiErrorText } from '../../api/kubernetes'
 
 const { selectedClusterId, currentCluster, refreshClusters } = useClusterContext()
-const { isActive } = useTabActive('KubernetesNetwork')
+const { isActive, tabKey } = useTabActive('KubernetesNetwork')
 
 const POLL_MS = 15000
 const services = ref([])
@@ -290,20 +290,23 @@ function npKind(p) {
   if (p?.egress) parts.push('Egress')
   return parts.join(' + ') || '—'
 }
+// Age accepts elapsed seconds or an ISO creation timestamp.
 function fmtAge(v) {
-  if (v === null || v === undefined || v === '') return '—'
-  if (typeof v === 'number') {
-    const sec = Math.max(0, Math.round(v))
-    if (sec < 60) return `${sec}s`
-    if (sec < 3600) return `${Math.floor(sec / 60)}m`
-    if (sec < 86400) return `${Math.floor(sec / 3600)}h`
-    return `${Math.floor(sec / 86400)}d`
+  if (typeof v === 'string' && v.includes('T')) {
+    const timestamp = Date.parse(v)
+    if (Number.isFinite(timestamp)) v = (Date.now() - timestamp) / 1000
   }
-  return String(v)
+  if (v === null || v === undefined || v === '') return '—'
+  if (typeof v !== 'number') return String(v)
+  const sec = Math.max(0, Math.round(v))
+  if (sec < 60) return `${sec}s`
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h`
+  return `${Math.floor(sec / 86400)}d`
 }
 
 function restoreUi() {
-  const saved = getTabState(workbench.state.activeKey) || {}
+  const saved = getTabState(tabKey.value) || {}
   const f = saved.filters || {}
   if (typeof f.kind === 'string') filters.kind = f.kind
   if (typeof f.namespace === 'string') filters.namespace = f.namespace
@@ -314,7 +317,7 @@ function restoreUi() {
 }
 function saveUi() {
   const el = document.querySelector('.content')
-  setTabState(workbench.state.activeKey, { filters: { kind: filters.kind, namespace: filters.namespace, keyword: filters.keyword }, scrollY: el ? el.scrollTop : 0 })
+  setTabState(tabKey.value, { filters: { kind: filters.kind, namespace: filters.namespace, keyword: filters.keyword }, scrollY: el ? el.scrollTop : 0 })
 }
 
 watch(filters, () => {

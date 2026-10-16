@@ -208,7 +208,7 @@ import { k8sApi, unwrap, apiErrorText } from '../../api/kubernetes'
 const route = useRoute()
 const router = useRouter()
 const { selectedClusterId, currentCluster, refreshClusters } = useClusterContext()
-const { isActive } = useTabActive('KubernetesPods')
+const { isActive, tabKey } = useTabActive('KubernetesPods')
 
 const detailPod = computed(() => String(route.query.pod || ''))
 const detailNs = computed(() => String(route.query.ns || ''))
@@ -368,15 +368,15 @@ async function loadLogs() {
   logCtl = new AbortController()
   const { signal } = logCtl
   try {
-    const u = unwrap(await k8sApi.podLogs(cidNow, ns, name, {
+    const response = await k8sApi.podLogs(cidNow, ns, name, {
       container: logForm.container,
       tail_lines: logForm.tail,
       since_seconds: logForm.since ? Number(logForm.since) : undefined,
-    }, { signal, timeoutMs: 20000 }))
+    }, { signal, timeoutMs: 20000 })
+    const u = unwrap(response)
     if (cid() !== cidNow) return
-    const payload = u.data || {}
-    logs.value = typeof payload.data === 'string' ? payload.data : ''
-    logMeta.value = payload
+    logs.value = typeof u.data === 'string' ? u.data : ''
+    logMeta.value = { truncated: Boolean(response.truncated) }
     logErr.value = u.meta.partialErrors.length ? u.meta.partialErrors.join('；') : ''
   } catch (e) {
     if (e.name === 'AbortError' || cid() !== cidNow) return
@@ -442,16 +442,19 @@ function probesText(c) {
 function kvText(o) {
   return o && typeof o === 'object' ? Object.entries(o).map(([k, v]) => `${k} ${v}`).join(' · ') : '—'
 }
+// Age accepts elapsed seconds or an ISO creation timestamp.
 function fmtAge(v) {
-  if (v === null || v === undefined || v === '') return '—'
-  if (typeof v === 'number') {
-    const sec = Math.max(0, Math.round(v))
-    if (sec < 60) return `${sec}s`
-    if (sec < 3600) return `${Math.floor(sec / 60)}m`
-    if (sec < 86400) return `${Math.floor(sec / 3600)}h`
-    return `${Math.floor(sec / 86400)}d`
+  if (typeof v === 'string' && v.includes('T')) {
+    const timestamp = Date.parse(v)
+    if (Number.isFinite(timestamp)) v = (Date.now() - timestamp) / 1000
   }
-  return String(v)
+  if (v === null || v === undefined || v === '') return '—'
+  if (typeof v !== 'number') return String(v)
+  const sec = Math.max(0, Math.round(v))
+  if (sec < 60) return `${sec}s`
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h`
+  return `${Math.floor(sec / 86400)}d`
 }
 function evTime(ev) {
   const v = ev?.last_timestamp || ev?.first_timestamp || ev?.time || ''
@@ -467,7 +470,7 @@ function evMsg(ev) { return ev?.message || ev?.msg || ev?.note || ev?.reason || 
 function evType(ev) { return ev?.type || '—' }
 
 function restoreUi() {
-  const saved = getTabState(workbench.state.activeKey) || {}
+  const saved = getTabState(tabKey.value) || {}
   if (!detailMode.value) {
     const f = saved.filters || {}
     if (typeof f.namespace === 'string') filters.namespace = f.namespace
@@ -483,7 +486,7 @@ function saveUi() {
   const el = document.querySelector('.content')
   const patch = { scrollY: el ? el.scrollTop : 0 }
   if (!detailMode.value) patch.filters = { namespace: filters.namespace, node: filters.node, phase: filters.phase, keyword: filters.keyword }
-  setTabState(workbench.state.activeKey, patch)
+  setTabState(tabKey.value, patch)
 }
 
 watch(filters, () => {

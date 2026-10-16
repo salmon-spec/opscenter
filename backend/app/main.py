@@ -3686,7 +3686,7 @@ def _collect_agent_metrics():
         with get_db() as db:
             targets = [
                 SimpleNamespace(
-                    id=srv.id, host=srv.host, lan_ip=srv.lan_ip, agent_type=srv.agent_type,
+                    id=srv.id, name=srv.name, host=srv.host, lan_ip=srv.lan_ip, agent_type=srv.agent_type,
                     agent_port=srv.agent_port or 19100, agent_token=srv.agent_token or "",
                     agent_version=srv.agent_version,
                 )
@@ -3715,6 +3715,7 @@ def _collect_agent_metrics():
                     print(f"Agent metrics collection error for {target.host}: {exc}")
                     samples[target.id] = None
 
+        bridge_samples = []
         # One short transaction per host avoids holding multiple server row locks.
         for target in sorted(targets, key=lambda item: str(item.id)):
             data = samples.get(target.id)
@@ -3777,6 +3778,24 @@ def _collect_agent_metrics():
                 srv.last_seen = now
                 srv.agent_status = "running"
                 db.commit()
+
+            bridge_samples.append({
+                "id": str(target.id), "name": target.name, "host": target.lan_ip or target.host,
+                "agent_port": target.agent_port, "values": data,
+            })
+
+        ingest_url = os.getenv("HOST_MONITOR_INGEST_URL", "").strip()
+        token_file = os.getenv("HOST_MONITOR_INGEST_TOKEN_FILE", "").strip()
+        if bridge_samples and ingest_url and token_file:
+            import json
+            from urllib.request import Request, urlopen
+            with open(token_file, encoding="utf-8") as secret:
+                token = secret.read().strip()
+            if token:
+                request = Request(ingest_url, data=json.dumps(bridge_samples).encode(), method="POST",
+                                  headers={"Content-Type": "application/json", "X-OpsCenter-Monitor-Token": token})
+                with urlopen(request, timeout=5):
+                    pass
 
     except Exception as exc:
         print(f"Agent metrics collection error: {exc}")

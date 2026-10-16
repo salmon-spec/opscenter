@@ -103,7 +103,7 @@ def _parse_iso(value: Any) -> datetime | None:
 
 def _iso_from_epoch(value: Any) -> str | None:
     numeric = _number(value)
-    if numeric is None:
+    if numeric is None or numeric <= 0:
         return None
     if numeric > 100_000_000_000:
         numeric /= 1000
@@ -512,6 +512,43 @@ class CommandCodeUsageMonitor:
                 "windows": {},
             }
 
+    def snapshot_status(self, min_captured_at: datetime | None = None) -> dict | None:
+        """Serve the latest sample while the upstream collector refreshes in the background."""
+        with get_db() as db:
+            row = db.query(CommandCodeUsageSnapshot).order_by(CommandCodeUsageSnapshot.captured_at.desc()).first()
+            if not row or (min_captured_at and row.captured_at < min_captured_at):
+                return None
+            sample = {name: getattr(row, name) for name in (
+                "scope_key", "captured_at", "plan_id", "period_start", "total_credits",
+                "total_cost", "total_tokens", "total_tokens_in", "total_tokens_out",
+                "total_count", "completed_count", "failed_count", "monthly_remaining",
+                "five_hour_used", "weekly_used",
+            )}
+        checked_at = sample["captured_at"].replace(tzinfo=timezone.utc)
+        count = sample["total_count"] or 0
+        result = {
+            "configured": True, "available": True, "snapshot_only": True, "stale": True,
+            "source": "module" if self._config_snapshot() else "environment",
+            "api_base": self._effective_config()["api_base"], "latency_ms": None,
+            "error": "当前显示上次采样；实时采集仍在后台进行",
+            "checked_at": checked_at.isoformat().replace("+00:00", "Z"),
+            "plan": {"id": sample["plan_id"], "name": _plan_info(sample["plan_id"] or "")["name"],
+                     "current_period_start": sample["period_start"]},
+            "credits": {"remaining_total": sample["monthly_remaining"]},
+            "windows": {"five_hour": {"used": sample["five_hour_used"]},
+                        "weekly": {"used": sample["weekly_used"]}},
+            "usage": {
+                "total_count": count, "completed_count": sample["completed_count"],
+                "failed_count": sample["failed_count"], "total_cost": sample["total_cost"],
+                "total_credits": sample["total_credits"], "total_tokens": sample["total_tokens"],
+                "total_tokens_in": sample["total_tokens_in"], "total_tokens_out": sample["total_tokens_out"],
+                "average_cost": sample["total_cost"] / count if count and sample["total_cost"] is not None else None,
+                "success_rate": sample["completed_count"] * 100 / count if count and sample["completed_count"] is not None else None,
+            },
+        }
+        result["history"] = self._build_history(result, sample["scope_key"], checked_at)
+        return result
+
     def _fetch_usage(self, config: dict, record_history: bool = True) -> dict:
 
         started = time.perf_counter()
@@ -564,7 +601,8 @@ class CommandCodeUsageMonitor:
             self._decorate_history(result, self._snapshot_scope(whoami))
         return result
 
-    def fetch_usage(self, force: bool = False, config: dict | None = None) -> dict:
+    def fetch_usage(self, force: bool = False, config: dict | None = None,
+                    min_captured_at: datetime | None = None) -> dict:
         effective = self._effective_config(config)
         if not effective["api_key"]:
             return {
@@ -579,11 +617,17 @@ class CommandCodeUsageMonitor:
         if config is not None:
             return self._fetch_usage(effective)
 
-        ttl = effective["refresh_interval_seconds"]
-        now = time.monotonic()
         with self._cache_lock:
-            if not force and self._cache is not None and now - self._cache_at < ttl:
-                return copy.deepcopy(self._cache)
+            if not force and self._cache is not None:
+                cached = copy.deepcopy(self._cache)
+                if time.monotonic() - self._cache_at > effective["refresh_interval_seconds"] * 2:
+                    cached["error"] = "最近一次采集尚未更新，当前显示上次成功数据"
+                    cached["stale"] = True
+                return cached
+        if not force and min_captured_at is not None:
+            snapshot = self.snapshot_status(min_captured_at)
+            if snapshot is not None:
+                return snapshot
         result = self._fetch_usage(effective)
         if result.get("available"):
             with self._cache_lock:
@@ -591,9 +635,9 @@ class CommandCodeUsageMonitor:
                 self._cache_at = time.monotonic()
         return result
 
-    def status(self, force: bool = False) -> dict:
+    def status(self, force: bool = False, min_captured_at: datetime | None = None) -> dict:
         try:
-            return self.fetch_usage(force=force)
+            return self.fetch_usage(force=force, min_captured_at=min_captured_at)
         except CommandCodeUsageError as exc:
             return {
                 "configured": self.configured(),

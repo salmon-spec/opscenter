@@ -365,7 +365,7 @@ const podAbnormal = computed(() => {
   if (!p) return null
   const top = Array.isArray(p.restart_top) ? p.restart_top[0] : null
   return {
-    count: Number(p.failed ?? 0) + Number(p.pending ?? 0) + Number(top?.restarts ?? 0),
+    count: Number(p.failed ?? 0) + Number(p.pending ?? 0),
     top: top || null,
   }
 })

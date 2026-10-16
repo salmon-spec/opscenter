@@ -48,7 +48,7 @@
 ── 持久化：localStorage 'ops-workbench-tabs-v1' = { version, activeKey, tabs(仅元数据), states }
     只存非敏感 UI 状态；不存密码/Token/凭证/终端缓冲/日志内容。刷新后恢复全部页签（仅元数据），
     routeName 无法映射到现存路由的页签直接丢弃。 */
-import { computed, reactive, ref, unref } from 'vue'
+import { computed, reactive, ref, unref, watchEffect } from 'vue'
 import { useHostContext } from '../hostContext'
 import { useClusterContext } from './clusters'
 
@@ -276,7 +276,9 @@ export function isRouteActive(name) {
 export function useTabActive(routeName) {
   const getter = typeof routeName === 'function' ? routeName : () => unref(routeName)
   const isActive = computed(() => isRouteActive(getter()))
-  return { isActive }
+  const tabKey = ref('')
+  watchEffect(() => { if (isActive.value) tabKey.value = state.activeKey })
+  return { isActive, tabKey }
 }
 
 export const aliveNames = computed(() => {

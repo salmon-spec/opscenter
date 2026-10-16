@@ -467,6 +467,7 @@
       const weekly = windows.weekly || {}
       const account = health.account || {}
       const subscribed = String(plan.status || '').toLowerCase()
+      const sampled = Boolean(health.snapshot_only)
       const planName = plan.name || plan.id || '未知套餐'
 
       setText('planValue', planName)
@@ -477,15 +478,15 @@
       setText('averageValue', credits(usage.average_cost))
       setText('tokenValue', tokens(usage.total_tokens))
       setText('tokenSplitValue', `${tokens(usage.total_tokens_in)} in / ${tokens(usage.total_tokens_out)} out`)
-      setText('successValue', `${number(usage.success_rate).toFixed(number(usage.success_rate) % 1 ? 2 : 0)}%`)
+      setText('successValue', usage.success_rate === null || usage.success_rate === undefined ? '-' : `${number(usage.success_rate).toFixed(number(usage.success_rate) % 1 ? 2 : 0)}%`)
       setText('failedValue', `失败 ${integer(usage.failed_count)}`)
 
       const monthlyPercent = number(credit.usage_percent)
-      setText('monthlyPercentValue', `${monthlyPercent.toFixed(1)}%`)
-      setText('monthlyUsedValue', `${creditValue(credit.total_spent)} / ${creditValue(credit.total_pool)}`)
+      setText('monthlyPercentValue', sampled ? '-' : `${monthlyPercent.toFixed(1)}%`)
+      setText('monthlyUsedValue', sampled ? '-' : `${creditValue(credit.total_spent)} / ${creditValue(credit.total_pool)}`)
       setText('creditRemainingValue', `剩余 ${creditValue(credit.remaining_total)}`)
       setText('monthlyResetValue', plan.current_period_end ? `重置 ${formatDate(plan.current_period_end)}` : '-')
-      setProgress('creditProgress', monthlyPercent)
+      setProgress('creditProgress', sampled ? 0 : monthlyPercent)
       setTag('creditPoolTag', planName, 'brand')
 
       setTag('subscriptionTag', subscribed || '-', subscribed === 'active' ? 'ok' : 'warn')
@@ -496,17 +497,17 @@
       setText('planIdValue', plan.id || '-')
 
       const fivePercent = number(fiveHour.percent)
-      setText('fiveHourPercentValue', `${fivePercent.toFixed(1)}%`)
+      setText('fiveHourPercentValue', sampled ? '-' : `${fivePercent.toFixed(1)}%`)
       setText('fiveHourUsedValue', `${creditValue(fiveHour.used)} / ${creditValue(fiveHour.cap)}`)
       setProgress('fiveHourProgress', fivePercent)
-      setTag('fiveHourTag', fiveHour.exceeded ? '已超限' : (windows.limited ? '限速中' : '未启用'), fiveHour.exceeded ? 'err' : 'ok')
+      setTag('fiveHourTag', sampled ? '历史采样' : (fiveHour.exceeded ? '已超限' : (windows.limited ? '限速中' : '未启用')), fiveHour.exceeded ? 'err' : 'ok')
       setText('fiveHourResetValue', formatDate(fiveHour.reset_at))
 
       const weeklyPercent = number(weekly.percent)
-      setText('weeklyPercentValue', `${weeklyPercent.toFixed(1)}%`)
+      setText('weeklyPercentValue', sampled ? '-' : `${weeklyPercent.toFixed(1)}%`)
       setText('weeklyUsedValue', `${creditValue(weekly.used)} / ${creditValue(weekly.cap)}`)
       setProgress('weeklyProgress', weeklyPercent)
-      setTag('weeklyTag', weekly.exceeded ? '已超限' : (windows.limited ? '限速中' : '未启用'), weekly.exceeded ? 'err' : 'ok')
+      setTag('weeklyTag', sampled ? '历史采样' : (weekly.exceeded ? '已超限' : (windows.limited ? '限速中' : '未启用')), weekly.exceeded ? 'err' : 'ok')
       setText('weeklyResetValue', formatDate(weekly.reset_at))
 
       renderUsageWindow('hour', 'hour', health.history)
@@ -657,7 +658,7 @@
         state.info = data.module || {}
         setText('subtitle', `${state.info.name || '模型用量'} · v${state.info.version || '1.0.0'} · 只读监控`)
         loadConfig()
-        loadHealth(true)
+        loadHealth(false)
       } else if (data.type === 'ops-module-api-response') {
         const task = pending.get(data.id)
         if (!task) return

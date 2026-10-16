@@ -223,12 +223,15 @@ def _collect_processes(sort_key, limit=10, search='', user='', state=''):
                 continue
             if parts[3] == 'ps':
                 continue
-            row = {
-                'pid': int(parts[0]), 'ppid': int(parts[1]), 'user': parts[2],
-                'command': parts[3], 'cpu_percent': float(parts[4]),
-                'memory_percent': float(parts[5]), 'rss_bytes': int(parts[6]) * 1024,
-                'state': parts[7],
-            }
+            try:
+                row = {
+                    'pid': int(parts[0]), 'ppid': int(parts[1]), 'user': parts[2],
+                    'command': parts[3], 'cpu_percent': float(parts[4]),
+                    'memory_percent': float(parts[5]), 'rss_bytes': int(parts[6]) * 1024,
+                    'state': parts[7],
+                }
+            except ValueError:
+                continue
             if search and search.lower() not in f"{row['pid']} {row['command']} {row['user']}".lower():
                 continue
             if user and row['user'] != user:
