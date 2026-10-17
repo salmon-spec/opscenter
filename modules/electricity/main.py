@@ -30,7 +30,7 @@ from page_notify import render_notify_page
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -790,8 +790,11 @@ def _build_stats(granularity: str, limit: int, now: datetime) -> dict:
             rows.append({"label": f"{label[:4]}-{label[4:6]}", "kwh": float(kwh or 0),
                          "cost": float(cost or 0), "estimated": estimated,
                          "source": "国网账单" if not estimated else "公布电量 × 均价"})
-        current = {"label": f"{ctx['month_label'][:4]}-{ctx['month_label'][4:6]}",
-                   "kwh": None, "cost": ctx["month_cost"],
+        month_prefix = f"{ctx['month_label'][:4]}-{ctx['month_label'][4:6]}"
+        month_kwh = round(sum(float(item.get("kwh") or 0) for item in (ctx["daily"] or [])
+                              if str(item.get("day", "")).startswith(month_prefix)), 2)
+        current = {"label": month_prefix,
+                   "kwh": month_kwh or None, "cost": ctx["month_cost"],
                    "estimated": bool(ctx["month_cost_estimated"]), "source": "本月（进行中）"}
         if rows and rows[0]["label"] == current["label"]:
             rows[0] = current
@@ -841,9 +844,11 @@ def usage_stats(granularity: str = Query(default="day"), limit: int = Query(defa
 
 @app.get("/ui/notify", response_class=HTMLResponse)
 def notify_ui():
-    return HTMLResponse(render_notify_page())
+    # no-store: the dashboard is actively developed; a cached page would keep
+    # calling removed APIs and confuse the operator.
+    return HTMLResponse(render_notify_page(), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui():
-    return HTMLResponse(render_page())
+    return HTMLResponse(render_page(), headers={"Cache-Control": "no-store"})

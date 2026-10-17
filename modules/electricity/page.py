@@ -121,10 +121,13 @@ const num = (v, d = 2) => (v === null || v === undefined || Number.isNaN(Number(
 const LABEL = { day: '日期', month: '月份', year: '年份' };
 const RANGE_LABEL = { day: '天', month: '个月', year: '年' };
 
-function request(path, method = 'GET', body) {
+function request(path, method = 'GET', body, query) {
+  // IMPORTANT: inside the workbench iframe the API bridge rejects paths that
+  // carry a query string, so parameters must travel in `data.query`.
   if (!framed) {
+    const qs = query ? '?' + new URLSearchParams(query).toString() : '';
     const token = localStorage.getItem('ops-access-token') || '';
-    return fetch(path, {
+    return fetch(path + qs, {
       method,
       headers: Object.assign({}, token ? { Authorization: `Bearer ${token}` } : {}, body ? { 'Content-Type': 'application/json' } : {}),
       body: body ? JSON.stringify(body) : undefined,
@@ -134,7 +137,7 @@ function request(path, method = 'GET', body) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('模块接口请求超时')); }, 30000);
     pending.set(id, { resolve, reject, timer });
-    window.parent.postMessage({ type: 'ops-module-api-request', id, path, method, body, timeoutMs: 30000 }, '*');
+    window.parent.postMessage({ type: 'ops-module-api-request', id, path, method, body, query, timeoutMs: 30000 }, '*');
   });
 }
 
@@ -195,7 +198,7 @@ function renderHistory(rows) {
 
 async function loadStats() {
   try {
-    renderStats(await request(`${API}/stats?granularity=${gran}&limit=${range}`));
+    renderStats(await request(`${API}/stats`, 'GET', undefined, { granularity: gran, limit: range }));
   } catch (e) { $('stats-hint').textContent = `统计接口不可用（${e.message}）`; }
 }
 
@@ -215,7 +218,7 @@ async function load() {
     return;
   }
   await loadStats();
-  try { renderHistory((await request(`${API}/alerts?history=10`)).history || []); }
+  try { renderHistory((await request(`${API}/alerts`, 'GET', undefined, { history: 10 })).history || []); }
   catch (e) { $('history').innerHTML = '<tr><td colspan="4" class="hint">通知记录不可用</td></tr>'; }
 }
 

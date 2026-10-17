@@ -924,7 +924,7 @@ def test_report_csv_export(monkeypatch):
 def test_page_contains_new_sections():
     page = client.get("/ui").text
     for fragment in ("当前电费余额", "本月花费", "预计可用", "电费统计",
-                     "按天", "按月", "按年", "通知设置", "stats?granularity"):
+                     "按天", "按月", "按年", "通知设置", "granularity: gran"):
         assert fragment in page
     for gone in ("阶梯电价", "分时用电", "采集诊断", "预付费"):
         assert gone not in page

@@ -343,8 +343,10 @@ def build_channel_payload(channel: dict, text: str, alert: dict, action: str) ->
                          "template": "html"}}
 
     if kind == "sms":
-        # Generic SMS gateway contract: put your provider's adapter in front of it.
+        # Generic contract: a gateway (e.g. the standalone module-sms) that
+        # accepts {phone, message}. Extra headers ride along (X-SMS-Token etc.).
         return {"method": "POST", "url": channel.get("webhook", ""),
+                "headers": channel.get("headers") or {},
                 "json": {"phone": channel.get("phone") or channel.get("target", ""),
                          "message": text[:480],
                          "sign": channel.get("sign", ""),

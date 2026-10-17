@@ -65,7 +65,7 @@ code{background:#eef5f2;border-radius:5px;padding:1px 5px;font-size:12px}
 
   <section>
     <h2 id="form-title">添加通知人</h2>
-    <p class="hint">地址按方式填写：飞书/企微/钉钉/Webhook 填机器人地址；Server酱 填 SendKey；PushPlus 填 token；邮箱填收件地址（需先在下方填写 SMTP）；短信填手机号（需先配置短信网关）；Bark/ntfy 填推送地址。</p>
+    <p class="hint">地址按方式填写：飞书/企微/钉钉/Webhook 填机器人地址；Server酱 填 SendKey；PushPlus 填 token；邮箱填收件地址（需先在下方填写 SMTP）；短信填手机号（走独立 module-sms 网关，需在 extra 里带 X-SMS-Token）；Bark/ntfy 填推送地址。</p>
     <form id="target-form" onsubmit="return false">
       <label>名称<input id="f-name" placeholder="如：秋水的微信" /></label>
       <label>通知方式<select id="f-type"></select></label>
@@ -117,10 +117,13 @@ const ACTION = { firing: '首次告警', 're-fire': '重复提醒', resolved: '�
 const esc = (v) => String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, (c) =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function request(path, method = 'GET', body) {
+function request(path, method = 'GET', body, query) {
+  // IMPORTANT: inside the workbench iframe the API bridge rejects paths that
+  // carry a query string, so parameters must travel in `data.query`.
   if (!framed) {
+    const qs = query ? '?' + new URLSearchParams(query).toString() : '';
     const token = localStorage.getItem('ops-access-token') || '';
-    return fetch(path, {
+    return fetch(path + qs, {
       method,
       headers: Object.assign({}, token ? { Authorization: `Bearer ${token}` } : {}, body ? { 'Content-Type': 'application/json' } : {}),
       body: body ? JSON.stringify(body) : undefined,
@@ -130,7 +133,7 @@ function request(path, method = 'GET', body) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { pending.delete(id); reject(new Error('请求超时')); }, 30000);
     pending.set(id, { resolve, reject, timer });
-    window.parent.postMessage({ type: 'ops-module-api-request', id, path, method, body, timeoutMs: 30000 }, '*');
+    window.parent.postMessage({ type: 'ops-module-api-request', id, path, method, body, query, timeoutMs: 30000 }, '*');
   });
 }
 
@@ -179,7 +182,7 @@ async function load() {
     $('s-sms').value = data.settings?.sms_webhook || '';
     $('s-sign').value = data.settings?.sms_sign || '';
     $('s-tpl').value = data.settings?.sms_template || '';
-    renderHistory(await request(`${API}/alerts?history=20`));
+    renderHistory(await request(`${API}/alerts`, 'GET', undefined, { history: 20 }));
   } catch (e) { setState(`加载失败：${e.message}`, true); }
 }
 
