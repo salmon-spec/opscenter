@@ -27,14 +27,12 @@ PAGE = """<!doctype html>
 body{margin:0;background:var(--bg);color:var(--text);font:14.5px/1.55 system-ui,-apple-system,"Microsoft YaHei",sans-serif}
 .wrap{max-width:1020px;margin:0 auto;padding:0 18px 52px}
 
-/* ---- 顶栏：品牌 + Tab（适配工作台风格） ---- */
-.topbar{position:sticky;top:0;z-index:20;background:rgba(244,246,250,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--border)}
-.topbar-in{max-width:1020px;margin:0 auto;padding:10px 18px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
-.brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:15.5px;color:var(--text)}
-.brand .dot{width:10px;height:10px;border-radius:3px;background:var(--brand)}
-.tabs{display:inline-flex;background:#e8ecf3;border-radius:9px;padding:3px;gap:3px}
-.tabs button{border:0;background:transparent;color:var(--muted);font:600 13.5px/1 system-ui;padding:8px 18px;border-radius:7px;cursor:pointer;transition:all .15s}
-.tabs button.active{background:var(--brand);color:#fff;box-shadow:0 1px 6px #2563eb55}
+/* ---- 顶栏：仿工作台 ModuleTabs（k8s 集群页同款切换） ---- */
+.topbar{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--border)}
+.topbar-in{max-width:1020px;margin:0 auto;padding:6px 14px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.module-tabs{display:flex;align-items:center;gap:4px;overflow-x:auto}
+.module-tab{height:31px;padding:0 14px;display:flex;align-items:center;border-radius:7px;color:var(--muted);font-size:13px;font-weight:600;background:transparent;border:0;cursor:pointer;white-space:nowrap;transition:color .14s,background .14s}
+.module-tab:hover,.module-tab.active{color:var(--brand);background:#eff6ff}
 .btn{font:600 13px/1 system-ui;background:var(--brand);color:#fff;border:0;border-radius:8px;padding:9px 15px;cursor:pointer}
 .btn[disabled]{opacity:.55;cursor:default}
 .btn.ghost{background:#fff;color:var(--brand);border:1px solid var(--border)}
@@ -130,11 +128,10 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
 </head>
 <body>
 <div class="topbar"><div class="topbar-in">
-  <div class="brand"><span class="dot"></span>电费监测</div>
-  <div class="tabs" id="tabs">
-    <button data-view="main" class="active">⚡ 电费监测</button>
-    <button data-view="notify">🔔 通知设置</button>
-  </div>
+  <nav class="module-tabs" id="tabs" aria-label="模块导航">
+    <button class="module-tab active" data-view="main">电费监测</button>
+    <button class="module-tab" data-view="notify">通知设置</button>
+  </nav>
   <div><button class="btn" id="refresh">立即刷新</button></div>
 </div></div>
 
