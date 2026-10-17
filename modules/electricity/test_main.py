@@ -131,9 +131,9 @@ def test_module_contract_and_page():
     assert page.status_code == 200
     assert "电费监测" in page.text
     assert "ops-access-token" in page.text
-    # alert panel is part of the self-contained page
-    assert "提醒告警" in page.text
-    assert "/api/v1/alerts" in page.text or "alerts/test" in page.text
+    # v0.6.0 dashboard: focused cards + adjustable stats table + notify link
+    assert "电费统计" in page.text and "通知设置" in page.text
+    assert "当前电费余额" in page.text and "本月花费" in page.text and "预计可用" in page.text
 
 
 # --------------------------------------------------------------------------- #
@@ -404,6 +404,8 @@ def _patch_store(monkeypatch, balance=54.47, arrears=None, daily=None, snapshot=
     monkeypatch.setattr(main.store, "daily_history", lambda days=120: [])
     monkeypatch.setattr(main.store, "monthly_history", lambda months=24: [])
     monkeypatch.setattr(main.store, "list_raw", lambda limit=40: [])
+    monkeypatch.setattr(main.store, "notify_config", lambda: {"targets": [], "settings": {}})
+    monkeypatch.setattr(main.store, "notify_targets", lambda enabled_only=False: [])
 
 
 def test_alerts_api_returns_items_and_context(monkeypatch):
@@ -921,8 +923,17 @@ def test_report_csv_export(monkeypatch):
 
 def test_page_contains_new_sections():
     page = client.get("/ui").text
-    for fragment in ("提醒告警", "阶梯电价", "分时用电", "用电趋势与预测", "采集诊断",
-                     "ops-module-download-request", "prepaid"):
+    for fragment in ("当前电费余额", "本月花费", "预计可用", "电费统计",
+                     "按天", "按月", "按年", "通知设置", "stats?granularity"):
+        assert fragment in page
+    for gone in ("阶梯电价", "分时用电", "采集诊断", "预付费"):
+        assert gone not in page
+
+
+def test_notify_page_contains_target_management():
+    page = client.get("/ui/notify").text
+    for fragment in ("通知设置", "通知人", "短信", "邮箱", "飞书",
+                     "Server", "PushPlus", "notify/targets", "notify/test"):
         assert fragment in page
 
 
@@ -1054,3 +1065,147 @@ def test_summary_flags_estimated_month_cost(monkeypatch):
     summary = client.get("/api/v1/summary").json()["data"]
     assert summary["month_cost_estimated"] is True
     assert client.get("/api/v1/usage").json()["month_cost_estimated"] is True
+
+
+def test_notify_targets_crud(tmp_path, monkeypatch):
+    store = _notify_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(main.store, "notify_config", store.notify_config)
+    monkeypatch.setattr(main.store, "save_notify_config", store.save_notify_config)
+    monkeypatch.setattr(main.store, "notify_targets", store.notify_targets)
+
+    created = client.post("/api/v1/notify/targets", json={
+        "name": "秋水", "type": "wechat_serverchan", "target": "SCT_key", "min_severity": "warning"})
+    assert created.status_code == 200 and created.json()["count"] == 1
+    items = store.notify_config()["targets"]
+    assert items[0]["name"] == "秋水" and items[0]["enabled"] is True
+
+    target_id = items[0]["id"]
+    assert client.post("/api/v1/notify/targets", json={
+        "id": target_id, "name": "秋水2", "type": "wechat_serverchan",
+        "target": "SCT_key", "min_severity": "warning"}).json()["updated"] is True
+
+    listed = client.get("/api/v1/notify/targets").json()
+    assert listed["targets"][0]["target_masked"] != "SCT_key"
+    assert "SCT_key" not in listed["targets"][0]["target_masked"]
+
+    assert client.post("/api/v1/notify/targets/toggle", json={"id": target_id}).json()["enabled"] is False
+    assert client.post("/api/v1/notify/targets/delete", json={"id": target_id}).json()["count"] == 0
+    assert client.post("/api/v1/notify/targets", json={"type": "nope", "target": "x"}).status_code == 400
+    assert client.post("/api/v1/notify/targets", json={"type": "sms", "target": ""}).status_code == 400
+    assert client.post("/api/v1/notify/targets/delete", json={"id": "missing"}).status_code == 404
+
+
+def test_notify_settings_mask_password(tmp_path, monkeypatch):
+    store = _notify_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(main.store, "notify_config", store.notify_config)
+    monkeypatch.setattr(main.store, "save_notify_config", store.save_notify_config)
+    assert client.post("/api/v1/notify/settings", json={
+        "smtp_host": "smtp.example.com", "smtp_port": "465",
+        "username": "u", "password": "secret", "mail_from": "a@b.c"}).status_code == 200
+    listed = client.get("/api/v1/notify/targets").json()
+    assert listed["settings"]["smtp_host"] == "smtp.example.com"
+    assert listed["settings"]["password"] == "***"
+    # sending the mask back must not wipe the stored secret
+    assert client.post("/api/v1/notify/settings", json={"password": "***"}).status_code == 200
+    assert store.notify_config()["settings"]["password"] == "secret"
+
+
+def test_stats_day_month_year(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELECTRICITY_DATA_DIR", str(tmp_path))
+    store = storage.ElectricityStore()
+    store.append_daily_history([{"day": "2026-10-15", "kwh": 5.0}, {"day": "2026-10-16", "kwh": 6.0}])
+    store.append_monthly_history([{"month": "202609", "kwh": 173.0, "cost": 84.48},
+                                  {"month": "202608", "kwh": 150.0, "cost": 73.0}])
+    monkeypatch.setattr(main.store, "daily_history", store.daily_history)
+    monkeypatch.setattr(main.store, "monthly_history", store.monthly_history)
+    monkeypatch.setattr(main.store, "snapshot", lambda: {
+        "updated_at": "2026-10-17T10:00:00+08:00", "month_label": "202610", "month_cost": 42.55,
+        "month_cost_estimated": True,
+        "households": [{"id": "x", "balance": 52.49, "arrears": 0.0, "due": 0.0, "bills": [],
+                        "daily": [{"day": "2026-10-16", "kwh": 6.0}],
+                        "year": {"year": "2026", "kwh": 1293.0, "cost": 631.36, "price": 0.4883}}],
+        "errors": []})
+    monkeypatch.setattr(main.store, "alert_state", lambda: {})
+    monkeypatch.setattr(main.store, "notify_config", lambda: {"targets": [], "settings": {}})
+    monkeypatch.setattr(main.store, "notify_targets", lambda enabled_only=False: [])
+
+    day = client.get("/api/v1/stats?granularity=day&limit=7").json()
+    assert day["granularity"] == "day" and len(day["rows"]) == 2
+    assert day["rows"][0]["label"] == "2026-10-16"
+    assert day["rows"][0]["cost"] == pytest.approx(6.0 * 0.4883, abs=0.01)
+    assert day["totals"]["cost"] > 0
+
+    month = client.get("/api/v1/stats?granularity=month&limit=6").json()
+    labels = [row["label"] for row in month["rows"]]
+    assert labels[0] == "2026-10" and "2026-09" in labels
+    oct_row = month["rows"][0]
+    assert oct_row["estimated"] is True and oct_row["cost"] == pytest.approx(42.55)
+    assert month["rows"][1]["estimated"] is False and month["rows"][1]["source"] == "国网账单"
+    assert month["totals"]["cost"] == pytest.approx(42.55 + 84.48 + 73.0, abs=0.01)
+
+    year = client.get("/api/v1/stats?granularity=year&limit=3").json()
+    assert any(row["label"] == "2026" and row["kwh"] == pytest.approx(1293.0) for row in year["rows"])
+    assert year["rows"][0]["source"] == "年度账单合计"
+
+
+def test_alerts_test_uses_targets(monkeypatch, tmp_path):
+    store = _notify_store(tmp_path, monkeypatch, targets=[
+        {"id": "t1", "name": "秋水", "type": "wechat_serverchan", "target": "SCT_key",
+         "min_severity": "warning", "enabled": True}])
+    monkeypatch.setattr(main.store, "notify_config", store.notify_config)
+    monkeypatch.setattr(main.store, "notify_targets", store.notify_targets)
+
+    async def _fake_deliver(events, extra_lines=None, session=None):
+        return [{"channel": "wechat_serverchan", "name": "秋水", "ok": True, "status": 200, "body": "ok"}]
+
+    monkeypatch.setattr(notify, "deliver", _fake_deliver)
+    result = client.post("/api/v1/alerts/test", json={"target_id": "t1"}).json()
+    assert result["sent"] == 1 and result["results"][0]["name"] == "秋水"
+
+    assert client.post("/api/v1/alerts/test", json={"target_id": "nope"}).status_code == 404
+
+
+def _notify_store(tmp_path, monkeypatch, targets=None, settings=None):
+    monkeypatch.setenv("ELECTRICITY_DATA_DIR", str(tmp_path))
+    store = storage.ElectricityStore()
+    if targets is not None or settings is not None:
+        store.save_notify_config({"targets": targets or [], "settings": settings or {}})
+    return store
+
+
+def test_target_to_channel_variants():
+    feishu = notify.target_to_channel({"type": "feishu", "name": "群", "target": "https://hook", "id": "a"})
+    assert feishu["webhook"] == "https://hook" and feishu["name"] == "群"
+    chan = notify.target_to_channel({"type": "wechat_serverchan", "target": "SCT123", "id": "b"})
+    assert chan["sendkey"] == "SCT123"
+    push = notify.target_to_channel({"type": "wechat_pushplus", "target": "tok123", "id": "c"})
+    assert push["token"] == "tok123"
+    email = notify.target_to_channel({"type": "email", "target": "me@example.com", "id": "d",
+                                      "extra": {"smtp_host": "smtp.x", "smtp_port": 465}})
+    assert email["mail_to"] == ["me@example.com"] and email["smtp_host"] == "smtp.x"
+    sms = notify.target_to_channel({"type": "sms", "target": "13800000000", "id": "e",
+                                    "extra": {"webhook": "https://gw/send"}})
+    assert sms["phone"] == "13800000000" and sms["webhook"] == "https://gw/send"
+
+
+def test_sms_payload_carries_phone_and_gateway():
+    plan = notify.build_channel_payload(
+        {"type": "sms", "webhook": "https://gw/send", "phone": "13800000000"},
+        "\u26a1\ufe0f 电费告警｜余额偏低\n\n请充值",
+        {"id": "electricity:low", "severity": "warning", "title": "t"}, "firing")
+    assert plan["json"]["phone"] == "13800000000"
+    assert plan["json"]["message"].startswith("\u26a1\ufe0f")
+
+
+def test_pushplus_payload_uses_html_template():
+    plan = notify.build_channel_payload(
+        {"type": "wechat_pushplus", "token": "tok"},
+        "line1\nline2", {"id": "x", "severity": "info", "title": "t"}, "firing")
+    assert plan["url"].endswith("/send") and "<br/>" in plan["json"]["content"]
+
+
+def test_disabled_target_is_skipped():
+    notify.import_targets([{"id": "t1", "name": "停用", "type": "wechat_serverchan",
+                            "target": "SCT", "enabled": False}], {})
+    assert notify.destinations() == []
+    notify.import_targets([], {})

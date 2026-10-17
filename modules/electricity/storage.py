@@ -11,6 +11,7 @@ Layout under ``ELECTRICITY_DATA_DIR`` (default ``/data``)::
     daily_history.jsonl      per-published-day kWh (append-only, deduped on read)
     monthly_history.jsonl    per-month kWh / cost (append-only, deduped on read)
     raw/                     captured upstream payloads (opt-in, redacted)
+    notify.json              notification targets (people / groups) + settings
     web_session.json         State Grid web session
 """
 from __future__ import annotations
@@ -158,6 +159,7 @@ class ElectricityStore:
         self.daily_history_path = self.dir / "daily_history.jsonl"
         self.monthly_history_path = self.dir / "monthly_history.jsonl"
         self.raw_dir = self.dir / "raw"
+        self.notify_path = self.dir / "notify.json"
         self.session_path = self.dir / "web_session.json"
 
     # ---------- credentials (injected by the deployment, never written to disk) ----------
@@ -279,6 +281,27 @@ class ElectricityStore:
         except OSError:
             return 0
         return dropped
+
+    # ---------- notification targets (people / groups) ----------
+    def notify_config(self) -> dict:
+        value = read_json(self.notify_path, {}) or {}
+        targets = value.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        return {"targets": [item for item in targets if isinstance(item, dict)],
+                "settings": value.get("settings") if isinstance(value.get("settings"), dict) else {}}
+
+    def save_notify_config(self, value: dict) -> None:
+        save_json(self.notify_path, {
+            "targets": [item for item in (value.get("targets") or []) if isinstance(item, dict)],
+            "settings": value.get("settings") or {},
+        })
+
+    def notify_targets(self, enabled_only: bool = False) -> list[dict]:
+        targets = self.notify_config()["targets"]
+        if enabled_only:
+            targets = [item for item in targets if item.get("enabled", True)]
+        return targets
 
     # ---------- raw payload capture (opt-in, redacted) ----------
     def raw_capture_enabled(self) -> bool:

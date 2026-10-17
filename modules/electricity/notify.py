@@ -39,6 +39,11 @@ from aiohttp import ClientSession
 
 TZ = timezone(timedelta(hours=8))
 
+# Notification targets configured from the module's own page (people / groups).
+# Kept module-level like the breaker so `main` can inject them each round.
+_targets: list[dict] = []
+_settings: dict = {}
+
 SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 ICONS = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}
 COLORS = {"info": "blue", "warning": "orange", "critical": "red"}
@@ -87,8 +92,66 @@ def channels() -> list[dict]:
     return items
 
 
+def import_targets(targets: list[dict] | None, settings: dict | None = None) -> None:
+    """Inject the operator-defined recipients (stored in notify.json)."""
+    global _targets, _settings
+    _targets = [item for item in (targets or []) if isinstance(item, dict) and item.get("type")]
+    _settings = dict(settings or {})
+
+
+def export_targets() -> list[dict]:
+    return [dict(item) for item in _targets]
+
+
+def target_to_channel(item: dict) -> dict:
+    """Normalise a recipient record into the internal channel shape."""
+    kind = item.get("type")
+    address = str(item.get("target") or "").strip()
+    channel = {
+        "type": kind,
+        "name": item.get("name") or address or kind,
+        "min_severity": item.get("min_severity") or "warning",
+        "_target_id": item.get("id"),
+    }
+    extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+    channel.update({key: value for key, value in extra.items() if value not in (None, "")})
+
+    if kind == "email":
+        channel["mail_to"] = [address]
+        for key in ("smtp_host", "smtp_port", "username", "password", "mail_from"):
+            if _settings.get(key) not in (None, ""):
+                channel.setdefault(key, _settings[key])
+    elif kind == "sms":
+        channel.setdefault("webhook", item.get("webhook") or _settings.get("sms_webhook"))
+        channel["phone"] = address
+        if _settings.get("sms_sign"):
+            channel.setdefault("sign", _settings["sms_sign"])
+        if _settings.get("sms_template"):
+            channel.setdefault("template", _settings["sms_template"])
+    elif kind in {"wechat_serverchan", "serverchan"}:
+        channel["sendkey"] = address
+    elif kind == "wechat_pushplus":
+        channel["token"] = address
+    elif kind == "ntfy":
+        channel["webhook"] = extra.get("webhook") or "https://ntfy.sh"
+        channel["topic"] = address or extra.get("topic") or "electricity"
+    else:  # feishu / wecom / dingtalk / webhook / bark
+        channel["webhook"] = address or extra.get("webhook", "")
+    return channel
+
+
+def destinations() -> list[dict]:
+    """Env-configured channels plus operator-defined recipients."""
+    items = list(channels())
+    for item in _targets:
+        if item.get("enabled", True) is False:
+            continue
+        items.append(target_to_channel(item))
+    return items
+
+
 def enabled() -> bool:
-    return bool(channels())
+    return bool(destinations())
 
 
 def alert_url() -> str:
@@ -265,6 +328,29 @@ def build_channel_payload(channel: dict, text: str, alert: dict, action: str) ->
                          "markdown": {"title": title,
                                       "text": f"### {title}｜{alert.get('title', '')}\n\n{text}"}}}
 
+    if kind in {"wechat_serverchan", "serverchan"}:
+        key = channel.get("sendkey") or channel.get("webhook", "")
+        url = key if str(key).startswith("http") else f"https://sctapi.ftqq.com/{key}.send"
+        return {"method": "POST", "url": url,
+                "data": {"title": f"{title}｜{alert.get('title', '')}", "desp": text}}
+
+    if kind == "wechat_pushplus":
+        token = channel.get("token") or channel.get("webhook", "")
+        return {"method": "POST", "url": "https://www.pushplus.plus/send",
+                "json": {"token": token,
+                         "title": f"{title}｜{alert.get('title', '')}",
+                         "content": text.replace("\n", "<br/>"),
+                         "template": "html"}}
+
+    if kind == "sms":
+        # Generic SMS gateway contract: put your provider's adapter in front of it.
+        return {"method": "POST", "url": channel.get("webhook", ""),
+                "json": {"phone": channel.get("phone") or channel.get("target", ""),
+                         "message": text[:480],
+                         "sign": channel.get("sign", ""),
+                         "template": channel.get("template", ""),
+                         "alert_id": alert.get("id")}}
+
     if kind == "serverchan":
         key = channel.get("sendkey") or channel.get("webhook", "")
         url = key if key.startswith("http") else f"https://sctapi.ftqq.com/{key}.send"
@@ -381,7 +467,7 @@ async def _send_email(channel: dict, subject: str, text: str, timeout: float) ->
 async def deliver(events: list[dict], extra_lines: list[str] | None = None,
                   session: ClientSession | None = None) -> list[dict]:
     """Send every event through every eligible channel. Never raises."""
-    plans = channels()
+    plans = destinations()
     if not plans or not events:
         return []
     timeout = float(os.getenv("ELECTRICITY_NOTIFY_TIMEOUT", "10") or 10)
@@ -400,9 +486,10 @@ async def deliver(events: list[dict], extra_lines: list[str] | None = None,
                 if not _severity_ok(channel.get("min_severity", "warning"), severity):
                     continue
                 kind = channel.get("type")
+                label = channel.get("name") or kind
                 key = _channel_key(channel, index)
                 if not _breaker_allows(key, now):
-                    results.append({"channel": kind, "alert": alert.get("id"),
+                    results.append({"channel": kind, "name": label, "alert": alert.get("id"),
                                     "action": event.get("action"), "ok": False, "status": 0,
                                     "body": "circuit open", "skipped": True})
                     continue
@@ -419,8 +506,8 @@ async def deliver(events: list[dict], extra_lines: list[str] | None = None,
                 except Exception as exc:  # noqa: BLE001 - one channel must not break the others
                     outcome = {"ok": False, "status": 0, "body": type(exc).__name__}
                 _record_result(key, bool(outcome.get("ok")), outcome.get("body"), now)
-                results.append({"channel": kind, "alert": alert.get("id"), "action": event.get("action"),
-                                **outcome})
+                results.append({"channel": kind, "name": label, "alert": alert.get("id"),
+                                "action": event.get("action"), **outcome})
                 if not outcome.get("ok"):
                     logging.warning("electricity notify failed channel=%s alert=%s status=%s body=%s",
                                     kind, alert.get("id"), outcome.get("status"),
@@ -431,13 +518,22 @@ async def deliver(events: list[dict], extra_lines: list[str] | None = None,
     return results
 
 
-async def send_test(session: ClientSession | None = None) -> list[dict]:
-    """Send one synthetic critical message to validate the setup."""
+async def send_test(target_id: str | None = None, session: ClientSession | None = None) -> list[dict]:
+    """Send one synthetic critical message (optionally to a single recipient)."""
     sample = {
         "id": "electricity:test", "rule": "test", "resource_id": "electricity",
-        "severity": "critical", "title": "测试告警（手动触发）",
+        "severity": "critical", "title": "测试通知（手动触发）",
         "summary": "这是一条来自运维工作台电费监测模块的测试通知，收到即表示通道配置可用。",
         "observed_at": datetime.now(timezone.utc),
     }
+    if target_id:
+        global _targets
+        keep, _targets = _targets, [t for t in _targets if str(t.get("id")) == str(target_id)]
+        try:
+            return await deliver([{"action": "firing", "alert": sample}],
+                                 extra_lines=["触发方式：通知设置页「测试」"],
+                                 session=session)
+        finally:
+            _targets = keep
     return await deliver([{"action": "firing", "alert": sample}],
                          extra_lines=["触发方式：POST /api/v1/alerts/test"], session=session)

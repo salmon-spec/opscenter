@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import uuid
 import logging
 import os
 from contextlib import asynccontextmanager, suppress
@@ -25,10 +26,11 @@ import alerts as alerting
 import notify
 from collector import collect, describe_error, probe, relogin_count
 from page import render_page
+from page_notify import render_notify_page
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.5.2"
+VERSION = "0.6.0"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -202,6 +204,10 @@ async def evaluate_alerts(trigger: str = "schedule") -> dict:
         delivery: list[dict] = []
         if events:
             notify.import_breaker(state.get("channel_health"))
+            notify.import_targets(store.notify_targets(enabled_only=True),
+                                  store.notify_config().get("settings") or {})
+            notify.import_targets(store.notify_targets(enabled_only=True),
+                                  store.notify_config().get("settings") or {})
             try:
                 delivery = await notify.deliver(events,
                                                 extra_lines=[f"当前余额：{ctx['balance']}",
@@ -218,7 +224,7 @@ async def evaluate_alerts(trigger: str = "schedule") -> dict:
                     "alert_id": (event.get("alert") or {}).get("id"),
                     "severity": (event.get("alert") or {}).get("severity"),
                     "title": (event.get("alert") or {}).get("title"),
-                    "channels": [item["channel"] for item in delivery],
+                    "channels": [f"{item.get('channel')}:{item.get('name')}" for item in delivery],
                     "delivered": all(item.get("ok") for item in delivery) if delivery else None,
                 }
                 for event in events
@@ -461,8 +467,8 @@ def list_alerts(history: int = Query(default=20, ge=0, le=200)):
         },
         "silences": state.get("silences") or {},
         "channel_health": state.get("channel_health") or {},
-        "channels": [{"type": item.get("type"), "min_severity": item.get("min_severity", "warning")}
-                     for item in notify.channels()],
+        "channels": [{"type": item.get("type"), "name": item.get("name"), "min_severity": item.get("min_severity", "warning")}
+                     for item in notify.destinations()],
         "items": items,
         "history": store.alert_history(history),
     }
@@ -471,7 +477,7 @@ def list_alerts(history: int = Query(default=20, ge=0, le=200)):
 @app.get("/api/v1/alerts/rules")
 def list_rules():
     document = alerting.rules_documentation(_cfg())
-    document["channel_count"] = len(notify.channels())
+    document["channel_count"] = len(notify.destinations())
     document["collect_window"] = _env("ELECTRICITY_COLLECT_WINDOW") or "未限制"
     document["job_start_time"] = _env("ELECTRICITY_JOB_START_TIME") or "未启用（按固定间隔）"
     document["alert_url"] = notify.alert_url() or None
@@ -479,19 +485,25 @@ def list_rules():
 
 
 @app.post("/api/v1/alerts/test")
-async def test_notification():
-    if not notify.channels():
-        raise HTTPException(503, "未配置任何通知通道（ELECTRICITY_NOTIFY_CHANNELS 为空）")
+async def test_notification(payload: dict = Body(default={})):
+    target_id = str(payload.get("target_id") or "") or None
+    # targets must be imported BEFORE the destinations check
+    notify.import_targets(store.notify_targets(enabled_only=True),
+                          store.notify_config().get("settings") or {})
+    if target_id and not any(str(item.get("id")) == target_id for item in store.notify_targets()):
+        raise HTTPException(404, "通知人不存在")
+    if not notify.destinations():
+        raise HTTPException(503, "尚未配置任何通知方式（环境变量为空且通知设置页无启用的通知人）")
     state = store.alert_state()
     notify.import_breaker(state.get("channel_health"))
-    delivery = await notify.send_test()
+    delivery = await notify.send_test(payload.get("target_id") if isinstance(payload, dict) else None)
     state["channel_health"] = notify.export_breaker()
     store.save_alert_state(state)
     store.append_alert_history([{
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "trigger": "manual-test", "action": "test", "alert_id": "electricity:test",
         "severity": "critical", "title": "测试告警（手动触发）",
-        "channels": [item["channel"] for item in delivery],
+        "channels": [f"{item.get('channel')}:{item.get('name')}" for item in delivery],
         "delivered": all(item.get("ok") for item in delivery) if delivery else None,
     }])
     return {"sent": len(delivery), "results": delivery}
@@ -597,6 +609,239 @@ def report_csv(month: str = Query(default="", max_length=6)):
     headers = {"Content-Disposition": f'attachment; filename="electricity-{target}.csv"'}
     return PlainTextResponse(content="\ufeff" + buffer.getvalue(),
                              media_type="text/csv; charset=utf-8", headers=headers)
+
+
+
+# --------------------------------------------------------------------------- #
+# notification targets (v0.6.0): people / groups managed on the notify page
+# --------------------------------------------------------------------------- #
+ALLOWED_TARGET_TYPES = {
+    "sms": "短信（经自建短信网关转发）",
+    "email": "邮箱",
+    "feishu": "飞书群机器人",
+    "wecom": "企业微信群机器人",
+    "wechat_serverchan": "微信推送（Server 酱）",
+    "wechat_pushplus": "微信推送（PushPlus）",
+    "dingtalk": "钉钉机器人",
+    "bark": "Bark（iOS）",
+    "ntfy": "ntfy",
+    "webhook": "自定义 Webhook",
+}
+
+
+def _mask_target(kind: str, value: str) -> str:
+    value = value or ""
+    if len(value) <= 6:
+        return value
+    if "@" in value:
+        head, _, domain = value.partition("@")
+        return f"{head[:2]}***@{domain}" if domain else value[:2] + "***"
+    return value[:4] + "***" + value[-4:]
+
+
+@app.get("/api/v1/notify/targets")
+def list_notify_targets():
+    config = store.notify_config()
+    masked = []
+    for item in config["targets"]:
+        entry = dict(item)
+        entry["target_masked"] = _mask_target(str(item.get("type")), str(item.get("target") or ""))
+        masked.append(entry)
+    settings = dict(config.get("settings") or {})
+    for secret_key in ("password", "sms_sign"):
+        if settings.get(secret_key):
+            settings[secret_key] = "***"
+    return {
+        "source": KEY,
+        "types": ALLOWED_TARGET_TYPES,
+        "targets": masked,
+        "settings": settings,
+        "smtp_ready": bool((config.get("settings") or {}).get("smtp_host")),
+        "sms_gateway_ready": bool((config.get("settings") or {}).get("sms_webhook")),
+    }
+
+
+@app.post("/api/v1/notify/targets")
+def upsert_notify_target(payload: dict = Body(default={})):
+    """Create or update one recipient: {id?, name, type, target, min_severity, enabled, extra?}."""
+    kind = str(payload.get("type") or "").strip()
+    if kind not in ALLOWED_TARGET_TYPES:
+        raise HTTPException(400, f"不支持的通知方式：{kind or '空'}")
+    target_value = str(payload.get("target") or "").strip()
+    if not target_value:
+        raise HTTPException(400, "通知地址不能为空")
+    name = str(payload.get("name") or "").strip() or target_value[:24]
+    severity = str(payload.get("min_severity") or "warning")
+    if severity not in alerting.SEVERITY_ORDER:
+        raise HTTPException(400, "min_severity 仅支持 info / warning / critical")
+
+    config = store.notify_config()
+    item_id = str(payload.get("id") or "")
+    updated = False
+    for item in config["targets"]:
+        if item_id and str(item.get("id")) == item_id:
+            item.update({
+                "name": name, "type": kind, "target": target_value, "min_severity": severity,
+                "enabled": bool(payload.get("enabled", item.get("enabled", True))),
+                "extra": payload.get("extra") if isinstance(payload.get("extra"), dict)
+                         else item.get("extra") or {},
+            })
+            updated = True
+            break
+    if not updated:
+        config["targets"].append({
+            "id": uuid.uuid4().hex[:12], "name": name, "type": kind, "target": target_value,
+            "min_severity": severity, "enabled": bool(payload.get("enabled", True)),
+            "extra": payload.get("extra") if isinstance(payload.get("extra"), dict) else {},
+        })
+    store.save_notify_config(config)
+    return {"ok": True, "updated": updated, "count": len(config["targets"])}
+
+
+@app.post("/api/v1/notify/targets/delete")
+def delete_notify_target(payload: dict = Body(default={})):
+    item_id = str(payload.get("id") or "")
+    if not item_id:
+        raise HTTPException(400, "缺少 id")
+    config = store.notify_config()
+    before = len(config["targets"])
+    config["targets"] = [item for item in config["targets"] if str(item.get("id")) != item_id]
+    if len(config["targets"]) == before:
+        raise HTTPException(404, "通知人不存在")
+    store.save_notify_config(config)
+    return {"ok": True, "removed": item_id, "count": len(config["targets"])}
+
+
+@app.post("/api/v1/notify/targets/toggle")
+def toggle_notify_target(payload: dict = Body(default={})):
+    item_id = str(payload.get("id") or "")
+    config = store.notify_config()
+    for item in config["targets"]:
+        if str(item.get("id")) == item_id:
+            item["enabled"] = not bool(item.get("enabled", True))
+            store.save_notify_config(config)
+            return {"ok": True, "id": item_id, "enabled": item["enabled"]}
+    raise HTTPException(404, "通知人不存在")
+
+
+@app.post("/api/v1/notify/settings")
+def save_notify_settings(payload: dict = Body(default={})):
+    """SMTP credentials for email targets + the generic SMS gateway address."""
+    config = store.notify_config()
+    settings = dict(config.get("settings") or {})
+    for key in ("smtp_host", "smtp_port", "username", "password", "mail_from",
+                "sms_webhook", "sms_sign", "sms_template"):
+        if key in payload:
+            value = payload.get(key)
+            if key == "password" and value in (None, "", "***"):
+                continue  # keep the stored secret when the form sends the mask back
+            settings[key] = str(value).strip() if value is not None else ""
+    store.save_notify_config({**config, "settings": settings})
+    masked = {key: ("***" if key == "password" and value else value)
+              for key, value in settings.items()}
+    return {"ok": True, "settings": masked}
+
+
+@app.post("/api/v1/notify/test")
+async def test_notify_target(payload: dict = Body(default={})):
+    """Send a test message to one recipient (or to every enabled destination)."""
+    target_id = str(payload.get("target_id") or "") or None
+    notify.import_targets(store.notify_targets(enabled_only=True),
+                          store.notify_config().get("settings") or {})
+    if target_id and not any(str(item.get("id")) == target_id for item in store.notify_targets()):
+        raise HTTPException(404, "通知人不存在")
+    if not notify.destinations():
+        raise HTTPException(503, "尚未配置任何可用的通知方式")
+    delivery = await notify.send_test(target_id)
+    store.append_alert_history([{
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "trigger": "notify-test", "action": "test", "alert_id": "electricity:test",
+        "severity": "critical", "title": "测试通知（通知设置页）",
+        "channels": [f"{item.get('channel')}:{item.get('name')}" for item in delivery],
+        "delivered": all(item.get("ok") for item in delivery) if delivery else None,
+    }])
+    return {"sent": len(delivery), "results": delivery}
+
+
+# --------------------------------------------------------------------------- #
+# usage statistics (v0.6.0): day / month / year spending
+# --------------------------------------------------------------------------- #
+def _build_stats(granularity: str, limit: int, now: datetime) -> dict:
+    cfg = _cfg()
+    ctx = _current_context(now)
+    price = ctx["price_per_kwh"]
+    granularity = granularity if granularity in {"day", "month", "year"} else "day"
+    rows: list[dict] = []
+
+    if granularity == "day":
+        for item in store.daily_history(limit):
+            kwh = float(item.get("kwh") or 0)
+            rows.append({"label": str(item.get("day")), "kwh": round(kwh, 2),
+                         "cost": round(kwh * price, 2), "estimated": True,
+                         "source": "公布电量 × 均价"})
+    elif granularity == "month":
+        for item in store.monthly_history(limit):
+            label = str(item.get("month"))
+            kwh = item.get("kwh")
+            cost = item.get("cost")
+            estimated = cost is None
+            if estimated:
+                cost = round(float(kwh or 0) * price, 2)
+            rows.append({"label": f"{label[:4]}-{label[4:6]}", "kwh": float(kwh or 0),
+                         "cost": float(cost or 0), "estimated": estimated,
+                         "source": "国网账单" if not estimated else "公布电量 × 均价"})
+        current = {"label": f"{ctx['month_label'][:4]}-{ctx['month_label'][4:6]}",
+                   "kwh": None, "cost": ctx["month_cost"],
+                   "estimated": bool(ctx["month_cost_estimated"]), "source": "本月（进行中）"}
+        if rows and rows[0]["label"] == current["label"]:
+            rows[0] = current
+        else:
+            rows.insert(0, current)
+    else:  # year
+        by_year: dict[str, dict] = {}
+        for item in store.monthly_history(240):
+            year_label = str(item.get("month"))[:4]
+            bucket = by_year.setdefault(year_label, {"kwh": 0.0, "cost": 0.0, "estimated": False})
+            bucket["kwh"] += float(item.get("kwh") or 0)
+            bucket["cost"] += float(item.get("cost") or 0)
+        year_info = ctx["year"] or {}
+        if year_info.get("kwh") is not None:
+            by_year[str(year_info.get("year") or now.astimezone(alerting.TZ).year)] = {
+                "kwh": float(year_info.get("kwh") or 0),
+                "cost": float(year_info.get("cost") or 0),
+                "estimated": False,
+            }
+        rows = [{"label": label, "kwh": round(value["kwh"], 2),
+                 "cost": round(value["cost"], 2), "estimated": value["estimated"],
+                 "source": "年度账单合计" if not value["estimated"] else "估算"}
+                for label, value in sorted(by_year.items(), reverse=True)][:limit]
+        rows = list(reversed(rows))
+
+    # month-over-month / year-over-year delta of spending
+    for index, row in enumerate(rows):
+        previous = rows[index + 1] if index + 1 < len(rows) else None
+        row["delta_pct"] = (round((row["cost"] - previous["cost"]) / previous["cost"] * 100, 1)
+                            if previous and previous["cost"] else None)
+    totals = {
+        "kwh": round(sum(row["kwh"] or 0 for row in rows), 2),
+        "cost": round(sum(row["cost"] or 0 for row in rows), 2),
+        "count": len(rows),
+        "avg": round(sum(row["cost"] or 0 for row in rows) / len(rows), 2) if rows else None,
+    }
+    return {"source": KEY, "granularity": granularity, "limit": limit,
+            "price_per_kwh": price, "price_source": ctx["price_source"],
+            "rows": rows, "totals": totals,
+            "current_balance": ctx["balance"], "remaining_days": ctx["remaining_days"]}
+
+
+@app.get("/api/v1/stats")
+def usage_stats(granularity: str = Query(default="day"), limit: int = Query(default=30, ge=1, le=730)):
+    return _build_stats(granularity, limit, datetime.now(timezone.utc))
+
+
+@app.get("/ui/notify", response_class=HTMLResponse)
+def notify_ui():
+    return HTMLResponse(render_notify_page())
 
 
 @app.get("/ui", response_class=HTMLResponse)
