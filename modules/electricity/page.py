@@ -150,7 +150,7 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
   <section>
     <div class="sec-head">
       <h2>电费统计</h2>
-      <span class="hint" id="stats-hint">花费按真实均价折算；仅估算值会标注。</span>
+      <span class="hint" id="stats-hint">花费按真实均价折算。</span>
     </div>
     <div class="sumline" id="sumline"></div>
     <div class="sec-head" style="margin-bottom:10px">
@@ -311,7 +311,7 @@ function renderAlertLine(data) {
 function renderStats(data) {
   const rows = (data.rows || []).slice().sort((a, b) => String(b.label).localeCompare(String(a.label)));
   const t = data.totals || {};
-  $('stats-hint').textContent = `单价 ${num(data.price_per_kwh, 4)} 元/度（${data.price_source === 'year-average' ? '年度账单实算' : '配置值'}）；仅估算值标注。`;
+  $('stats-hint').textContent = `单价 ${num(data.price_per_kwh, 4)} 元/度（${data.price_source === 'year-average' ? '年度账单实算' : '配置值'}）。`;
   $('sumline').innerHTML =
     `<span>合计花费 <b>${num(t.cost)}</b> 元</span><span>合计用电 <b>${num(t.kwh, 1)}</b> 度</span>` +
     `<span>${UNIT[data.granularity] || '均'} <b>${num(t.avg)}</b> 元</span><span>共 <b>${rows.length}</b> 期</span>`;
@@ -319,12 +319,11 @@ function renderStats(data) {
     const d = row.delta_pct;
     const dChip = (d === null || d === undefined) ? '' :
       `<span class="chip ${d > 5 ? 'up' : d < -5 ? 'down' : 'flat'}">${d > 0 ? '↑' : '↓'} ${Math.abs(d)}%</span>`;
-    const est = row.estimated ? '<span class="chip est">估算</span>' : '';
     const now = row.source && String(row.source).includes('进行中') ? ' now' : '';
     return `<div class="blk${now}"><div class="d">${esc(row.label)}</div>` +
-      `<div class="c">${num(row.cost)}<small>元</small></div>` +
-      `<div class="k">${num(row.kwh, 1)} 度</div>` +
-      `<div class="foot">${dChip}${est}</div></div>`;
+      `<div class="c">${num(row.kwh, 1)}<small>度</small></div>` +
+      `<div class="k">${num(row.cost)} 元</div>` +
+      `<div class="foot">${dChip}</div></div>`;
   }).join('') : '<p class="hint">暂无数据</p>';
 }
 
