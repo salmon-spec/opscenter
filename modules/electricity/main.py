@@ -25,12 +25,11 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 import alerts as alerting
 import notify
 from collector import collect, describe_error, probe, relogin_count
-from page import render_page
-from page_notify import render_notify_page
+from page import render_page  # merged page: tabs [电费监测 | 通知设置]
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -846,7 +845,7 @@ def usage_stats(granularity: str = Query(default="day"), limit: int = Query(defa
 def notify_ui():
     # no-store: the dashboard is actively developed; a cached page would keep
     # calling removed APIs and confuse the operator.
-    return HTMLResponse(render_notify_page(), headers={"Cache-Control": "no-store"})
+    return HTMLResponse(render_page(), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/ui", response_class=HTMLResponse)
