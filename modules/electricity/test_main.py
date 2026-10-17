@@ -38,7 +38,8 @@ def test_bills_and_daily_usage_are_sorted_and_bounded():
         {"month": "202607", "monthEleCost": "30", "monthEleNum": "7"},
         {"month": "202606", "monthEleCost": "40", "monthEleNum": "8"},
     ])
-    assert [row["month"] for row in bills] == ["202609", "202608", "202607"]
+    # v0.5.1: all months returned by the upstream (≈9) are kept, newest first.
+    assert [row["month"] for row in bills] == ["202609", "202608", "202607", "202606"]
 
     daily = collector.daily_usage([
         {"day": "2026-10-14", "dayElePq": "1.5"},
@@ -925,3 +926,93 @@ def test_page_contains_new_sections():
         assert fragment in page
 
 
+
+
+# --------------------------------------------------------------------------- #
+# v0.5.1 — real payload fields (annual totals, penalty, prepay, bill periods)
+# --------------------------------------------------------------------------- #
+def test_summarize_derives_effective_price_from_year_totals():
+    meter = {"consNo_dst": "1101062733110", "consNo": "1", "orgNo": "1", "proNo": "11102"}
+    balance = {"sumMoney": "52.49", "historyOwe": "0", "penalty": "0", "prepayBal": "0",
+               "totalPq": "173.0", "consType": "1", "amtTime": "2026-10-17 00:00:00"}
+    bills = [{"month": "202609", "monthEleCost": "84.48", "monthEleNum": "173",
+              "avgEle": "0", "mrDate": "2026-10-01 04:29:24",
+              "begDate": "2026-09-01 00:00:00", "endDate": "2026-09-30 00:00:00"}]
+    data_info = {"totalEleNum": "1293", "totalEleCost": "631.36", "year": "2026"}
+    row = collector.summarize(meter, balance, bills, data_info=data_info)
+    assert row["year"]["price"] == pytest.approx(0.4883, abs=0.0001)
+    assert row["year"]["kwh"] == pytest.approx(1293.0)
+    assert row["penalty"] == pytest.approx(0.0)
+    assert row["prepay"] == pytest.approx(0.0)
+    assert row["period_kwh"] == pytest.approx(173.0)
+    assert row["bills"][0]["bill_date"] == "2026-10-01"
+    assert row["bills"][0]["period_start"] == "2026-09-01"
+
+
+def test_summarize_keeps_twelve_bills():
+    meter = {"consNo_dst": "x", "consNo": "1", "orgNo": "1", "proNo": "11102"}
+    bills = [{"month": f"2026{month:02d}", "monthEleCost": "10", "monthEleNum": "5"}
+             for month in range(1, 13)]
+    row = collector.summarize(meter, {"sumMoney": "1"}, bills)
+    assert len(row["bills"]) == 12
+    assert row["bills"][0]["month"] == "202612"
+
+
+def test_penalty_rule_is_critical():
+    now = datetime.now(timezone.utc)
+    snapshot = {
+        "updated_at": now.isoformat(timespec="seconds"),
+        "households": [{"id": "x", "balance": 300.0, "arrears": 0.0, "penalty": 12.34,
+                        "prepay": 0.0, "due": 0.0, "bills": [],
+                        "daily": [{"day": "2026-10-15", "kwh": 5.0}]}],
+        "errors": [], "_balance_history": [],
+    }
+    ctx = alerting.build_context(snapshot, True, now, alerting.config())
+    items = alerting.evaluate_rules(ctx, now, _cfg())
+    penalty = next(item for item in items if item["id"] == alerting.RULE_PENALTY)
+    assert penalty["severity"] == "critical"
+    assert penalty["value"] == pytest.approx(12.34)
+
+
+def test_effective_price_overrides_env_constant():
+    now = datetime.now(timezone.utc)
+    snapshot = {
+        "updated_at": now.isoformat(timespec="seconds"),
+        "households": [{"id": "x", "balance": 100.0, "arrears": 0.0, "due": 0.0, "bills": [],
+                        "daily": [{"day": "2026-10-15", "kwh": 10.0}],
+                        "year": {"year": "2026", "kwh": 1293.0, "cost": 631.36, "price": 0.4883}}],
+        "errors": [], "_balance_history": [],
+    }
+    monkeypatch_cfg = alerting.config()
+    monkeypatch_cfg["price_per_kwh"] = 0.9          # deliberately wrong
+    ctx = alerting.build_context(snapshot, True, now, monkeypatch_cfg)
+    assert ctx["price_source"] == "year-average"
+    assert ctx["price_per_kwh"] == pytest.approx(0.4883)
+    # 100 元 / (10 度 * 0.4883) ≈ 20.5 天
+    assert ctx["remaining_days"] == pytest.approx(100 / (10 * 0.4883), abs=0.2)
+    assert ctx["estimated_daily_cost"] == pytest.approx(4.883, abs=0.01)
+
+    snapshot["households"][0].pop("year")
+    ctx = alerting.build_context(snapshot, True, now, monkeypatch_cfg)
+    assert ctx["price_source"] == "env"
+    assert ctx["price_per_kwh"] == pytest.approx(0.9)
+
+
+def test_summary_and_usage_expose_price_source(monkeypatch):
+    now = datetime.now(timezone.utc)
+    snapshot = {
+        "updated_at": now.isoformat(timespec="seconds"), "month_label": "202610", "month_cost": 40.0,
+        "households": [{"id": "x", "balance": 100.0, "arrears": 0.0, "penalty": 0.0, "prepay": 0.0,
+                        "due": 0.0, "bills": [], "daily": [{"day": "2026-10-15", "kwh": 5.0}],
+                        "year": {"year": "2026", "kwh": 1293.0, "cost": 631.36, "price": 0.4883}}],
+        "errors": [],
+    }
+    _patch_store(monkeypatch, snapshot=snapshot)
+    summary = client.get("/api/v1/summary").json()["data"]
+    assert summary["price_source"] == "year-average"
+    assert summary["year_kwh"] == pytest.approx(1293.0)
+    assert summary["forecast_7d_cost"] is not None
+
+    usage = client.get("/api/v1/usage").json()
+    assert usage["price_source"] == "year-average"
+    assert usage["year"]["price"] == pytest.approx(0.4883)

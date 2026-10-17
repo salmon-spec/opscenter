@@ -49,7 +49,7 @@ ACCOUNT_CODES = {
 TZ = dt.timezone(dt.timedelta(hours=8))
 DAILY_WINDOW_DAYS = 40
 DAILY_KEEP = 30
-BILL_KEEP = 3
+BILL_KEEP = 12   # 国网一次返回约 9 个月，全部留下做年度与同比
 
 LOGIN_WINDOW_HOURS = 12
 _login_events: list[datetime] = []
@@ -100,7 +100,10 @@ def latest_bills(rows):
     good = [r for r in rows if isinstance(r, dict) and str(r.get("month", "")).isdigit()]
     good.sort(key=lambda r: r["month"], reverse=True)
     return [{"month": r["month"], "cost": money(r.get("monthEleCost")),
-             "kwh": money(r.get("monthEleNum"))} for r in good[:BILL_KEEP]]
+             "kwh": money(r.get("monthEleNum")), "avg": money(r.get("avgEle")),
+             "bill_date": str(r.get("mrDate") or "")[:10],
+             "period_start": str(r.get("begDate") or "")[:10],
+             "period_end": str(r.get("endDate") or "")[:10]} for r in good[:BILL_KEEP]]
 
 
 def daily_usage(rows):
@@ -291,16 +294,34 @@ def probe_payload(channel, meter, year):
     return bill_payload(channel, meter, year)
 
 
-def summarize(meter, balance, bills, steps=None, tou=None):
+def summarize(meter, balance, bills, steps=None, tou=None, data_info=None):
     row = {"id": str(meter["consNo_dst"]),
            "name": str(meter.get("consName_dst") or meter.get("consName") or ""),
            "address": str(meter.get("elecAddr_dst") or meter.get("elecAddr") or ""),
-           "balance": balance_of(balance), "due": money(balance.get("estiAmt")),
-           "arrears": money(balance.get("historyOwe")), "bills": latest_bills(bills)}
+           "balance": balance_of(balance),
+           # estiAmt is absent from the live payload; keep the lookup for other provinces.
+           "due": money(balance.get("estiAmt")),
+           "arrears": money(balance.get("historyOwe")),
+           "penalty": money(balance.get("penalty")),
+           "prepay": money(balance.get("prepayBal")),
+           "period_kwh": money(balance.get("totalPq")),
+           "amt_time": str(balance.get("amtTime") or "")[:19],
+           "cons_type": str(balance.get("consType") or ""),
+           "bills": latest_bills(bills)}
     if steps:
         row["steps"] = steps
     if tou:
         row["tou"] = tou
+    if isinstance(data_info, dict) and data_info:
+        year_kwh = money(data_info.get("totalEleNum"))
+        year_cost = money(data_info.get("totalEleCost"))
+        row["year"] = {
+            "year": str(data_info.get("year") or ""),
+            "kwh": year_kwh,
+            "cost": year_cost,
+            # Real, tariff-inclusive average price — far better than a guessed constant.
+            "price": round(year_cost / year_kwh, 4) if year_kwh and year_cost else None,
+        }
     return row
 
 
@@ -368,7 +389,7 @@ async def collect(store: ElectricityStore) -> dict:
             store.save_raw("bill", bill_request, bill_response)
             bill = business(bill_response)
             month_rows = bill.get("mothEleList") or []
-            row = summarize(meter, bal_rows[0], month_rows)
+            row = summarize(meter, bal_rows[0], month_rows, data_info=bill.get("dataInfo"))
 
             # tiered tariff / time-of-use live in the bill or daily payloads;
             # try both, tolerate misses.

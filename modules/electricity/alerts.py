@@ -30,6 +30,7 @@ RULE_CREDENTIALS = "electricity:credentials"
 RULE_NO_DATA = "electricity:no-data"
 RULE_STALE = "electricity:stale"
 RULE_ARREARS = "electricity:arrears"
+RULE_PENALTY = "electricity:penalty"
 RULE_BALANCE_CRITICAL = "electricity:balance-critical"
 RULE_BALANCE_LOW = "electricity:balance-low"
 RULE_DEPLETION = "electricity:depletion"
@@ -242,7 +243,7 @@ def remaining_days(balance: float | None, ctx: dict, cfg: dict) -> tuple[float |
         left = balance
         days = 0.0
         for candidate in steps[idx:]:
-            price = _as_float(candidate.get("price")) or cfg["price_per_kwh"]
+            price = _as_float(candidate.get("price")) or ctx.get("effective_price") or cfg["price_per_kwh"]
             remain_kwh = _as_float(candidate.get("remain"))
             capacity = (remain_kwh * price) if remain_kwh and remain_kwh > 0 else None
             if capacity is None or capacity >= left:
@@ -261,7 +262,8 @@ def remaining_days(balance: float | None, ctx: dict, cfg: dict) -> tuple[float |
     if measured and measured > 0:
         return round(balance / measured, 1), measured, "measured"
     if daily_kwh:
-        cost = round(daily_kwh * cfg["price_per_kwh"], 3)
+        price = ctx.get("effective_price") or cfg["price_per_kwh"]
+        cost = round(daily_kwh * price, 3)
         if cost > 0:
             return round(balance / cost, 1), cost, "kwh-price"
     return None, None, "none"
@@ -308,6 +310,9 @@ def build_context(snapshot: dict, configured: bool, now: datetime, cfg: dict | N
         "daily_history_points": len(snapshot.get("_daily_history") or []),
         "monthly_history_points": len(snapshot.get("_monthly_history") or []),
         "relogin_count": int(row.get("relogin_count") or snapshot.get("relogin_count") or 0),
+        "penalty": float(row["penalty"]) if isinstance(row.get("penalty"), (int, float)) else None,
+        "prepay": float(row["prepay"]) if isinstance(row.get("prepay"), (int, float)) else None,
+        "year": row.get("year") if isinstance(row.get("year"), dict) else None,
         "month_cost": None,
         "month_label": str(snapshot.get("month_label") or now.astimezone(TZ).strftime("%Y%m")),
         "forecast": forecast_usage(daily, 7),
@@ -319,6 +324,15 @@ def build_context(snapshot: dict, configured: bool, now: datetime, cfg: dict | N
         month_cost = snapshot.get("month_cost")
     if isinstance(month_cost, (int, float)):
         ctx["month_cost"] = float(month_cost)
+    # Real tariff-inclusive average price from the year-to-date bill totals.
+    year = ctx["year"] or {}
+    effective = year.get("price") if isinstance(year.get("price"), (int, float)) else None
+    ctx["effective_price"] = effective
+    ctx["price_source"] = "year-average" if effective else "env"
+    if effective:
+        ctx["price_per_kwh"] = effective
+    else:
+        ctx["price_per_kwh"] = cfg["price_per_kwh"]
     ctx["remaining_days"], ctx["estimated_daily_cost"], ctx["estimate_source"] = remaining_days(balance, ctx, cfg)
     ctx["month_cost_projection"] = _month_projection(ctx["month_cost"], now)
     return ctx
@@ -375,6 +389,14 @@ def evaluate_rules(ctx: dict, now: datetime, cfg: dict | None = None) -> list[di
             RULE_ARREARS, "critical", "存在待缴欠费",
             f"国网已产生欠费 {float(arrears):.2f} 元；若已签约智能交费，欠费可能直接触发停电，请尽快缴纳。",
             ctx, now, value=round(float(arrears), 2),
+        ))
+
+    penalty = ctx.get("penalty")
+    if isinstance(penalty, (int, float)) and float(penalty) > 0:
+        items.append(_alert(
+            RULE_PENALTY, "critical", "已产生电费违约金",
+            f"国网已计违约金 {float(penalty):.2f} 元，说明存在逾期未缴，请立即处理以免影响用电。",
+            ctx, now, value=round(float(penalty), 2),
         ))
 
     balance = ctx["balance"]
@@ -660,6 +682,7 @@ def rules_documentation(cfg: dict | None = None) -> dict:
         {"id": RULE_STALE, "severity": "warning",
          "title": f"采集结果超过 {cfg['stale_after_seconds'] // 3600} 小时未更新"},
         {"id": RULE_ARREARS, "severity": "critical", "title": "存在待缴欠费（>0 元）"},
+        {"id": RULE_PENALTY, "severity": "critical", "title": "已产生电费违约金（>0 元）"},
         {"id": RULE_BALANCE_CRITICAL, "severity": "critical", "title": f"余额 < {cfg['critical_balance']:g} 元"},
         {"id": RULE_BALANCE_LOW, "severity": "warning", "title": f"余额 < {cfg['low_balance']:g} 元"},
         {"id": RULE_DEPLETION, "severity": "warning",

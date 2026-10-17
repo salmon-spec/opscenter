@@ -109,6 +109,7 @@ textarea{width:100%;min-height:120px;font:12px/1.5 ui-monospace,Menlo,Consolas,m
     <div class="card"><div class="label">最近已公布日电量</div><div class="value">—</div><div class="note">—</div></div>
     <div class="card"><div class="label">本月电费</div><div class="value">—</div><div class="note">—</div></div>
     <div class="card"><div class="label">近 7 个公布日日均</div><div class="value">—</div><div class="note">—</div></div>
+    <div class="card"><div class="label">年度累计</div><div class="value">—</div><div class="note">—</div></div>
   </div>
 
   <section>
@@ -231,6 +232,7 @@ function renderOverview(data) {
   const low = bal !== null && bal !== undefined && Number(bal) < 20;
   const days = data.remaining_days;
   const forecast = data.forecast || {};
+  const year = item.year || {};
 
   $('identity').textContent = `${item.name || '未找到户号'} · 户号尾号 ${String(item.id || '').slice(-4) || '----'}`;
 
@@ -249,12 +251,22 @@ function renderOverview(data) {
     card('本月电费', num(data.month_cost), '元', budgetNote),
     card('近 7 个公布日日均', num(avg), '度',
       forecast.total_kwh ? `未来 7 日预计 ${num(forecast.total_kwh, 1)} 度` : `共 ${recent.length} 天`),
+    card('年度累计', num(year.kwh, 0), '度',
+      (year.cost ? `${num(year.cost)} 元` : '—') +
+      (data.price_per_kwh ? ` · 均价 ${num(data.price_per_kwh, 4)} 元/度` : '')),
   ].join('');
 
   const arrears = Number(item.arrears || 0);
-  $('prepaid').innerHTML = arrears > 0
-    ? `<div class="banner crit"><b>⚠️ 存在待缴欠费 ${num(arrears)} 元。</b>若已签约智能交费，电费为预付费模式，欠费可能直接触发停电，请立即缴纳。</div>`
-    : `<div class="banner">提示：若已签约国网「智能交费」，电费由后付费转为预付费，欠费即停电。本模块会在余额与欠费上主动告警。</div>`;
+  const penalty = Number(item.penalty || 0);
+  const prepay = Number(item.prepay || 0);
+  const priceNote = data.price_source === 'year-average'
+    ? `计费均价 ${num(data.price_per_kwh, 4)} 元/度（按年度账单实算）`
+    : `计费均价 ${num(data.price_per_kwh, 4)} 元/度（配置值，未取得年度账单）`;
+  $('prepaid').innerHTML = penalty > 0
+    ? `<div class="banner crit"><b>🚨 已产生违约金 ${num(penalty)} 元。</b>说明存在逾期未缴，请立即处理；违约记录可能影响后续用电。${priceNote}。</div>`
+    : (arrears > 0
+      ? `<div class="banner crit"><b>⚠️ 存在待缴欠费 ${num(arrears)} 元。</b>若已签约智能交费，电费为预付费模式，欠费可能直接触发停电，请立即缴纳。${priceNote}。</div>`
+      : `<div class="banner">若已签约国网「智能交费」，电费由后付费转为预付费，欠费即停电。${priceNote}${prepay > 0 ? `；另有预存余额 ${num(prepay)} 元` : ''}。</div>`);
 
   $('bills').innerHTML = (item.bills || []).length ? item.bills.map((r) =>
     `<tr><td>${monthLabel(r.month)}</td><td>${num(r.kwh)} 度</td><td>${num(r.cost)} 元</td></tr>`).join('')

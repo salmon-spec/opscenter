@@ -28,7 +28,7 @@ from page import render_page
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -116,8 +116,15 @@ def summary_provider():
         "estimated_daily_cost": ctx["estimated_daily_cost"],
         "remaining_days": ctx["remaining_days"],
         "forecast_7d_kwh": ctx["forecast"]["total_kwh"],
-        "forecast_7d_cost": (round(ctx["forecast"]["total_kwh"] * cfg["price_per_kwh"], 2)
+        "forecast_7d_cost": (round(ctx["forecast"]["total_kwh"] * ctx["price_per_kwh"], 2)
                              if ctx["forecast"]["total_kwh"] else None),
+        # Real tariff-inclusive price derived from year-to-date bill totals.
+        "price_per_kwh": ctx["price_per_kwh"],
+        "price_source": ctx["price_source"],
+        "year_kwh": (ctx["year"] or {}).get("kwh"),
+        "year_cost": (ctx["year"] or {}).get("cost"),
+        "penalty": ctx["penalty"],
+        "prepay": ctx["prepay"],
         "month_cost": ctx["month_cost"],
         "month_cost_projection": ctx["month_cost_projection"],
         "monthly_budget": cfg["monthly_budget"] or None,
@@ -350,6 +357,8 @@ def overview():
         "status": _status.get("message"),
         "remaining_days": ctx["remaining_days"],
         "estimated_daily_cost": ctx["estimated_daily_cost"],
+        "price_per_kwh": ctx["price_per_kwh"],
+        "price_source": ctx["price_source"],
         "forecast": ctx["forecast"],
         "month_cost": ctx["month_cost"],
         "month_cost_projection": ctx["month_cost_projection"],
@@ -384,6 +393,11 @@ def usage(history: int = Query(default=120, ge=1, le=730)):
         "remaining_days": ctx["remaining_days"],
         "estimated_daily_cost": ctx["estimated_daily_cost"],
         "estimate_source": ctx["estimate_source"],
+        "price_per_kwh": ctx["price_per_kwh"],
+        "price_source": ctx["price_source"],
+        "year": ctx["year"],
+        "penalty": ctx["penalty"],
+        "prepay": ctx["prepay"],
         "daily_history": store.daily_history(history),
         "monthly_history": store.monthly_history(24),
         "month_cost": ctx["month_cost"],
