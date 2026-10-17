@@ -29,7 +29,7 @@ from page import render_page  # merged page: tabs [电费监测 | 通知设置]
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))

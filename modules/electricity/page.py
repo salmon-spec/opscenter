@@ -25,11 +25,11 @@ PAGE = """<!doctype html>
 --warn-bg:#fff7ed;--err:#dc2626;--err-bg:#fef2f2;--radius:10px}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:14.5px/1.55 system-ui,-apple-system,"Microsoft YaHei",sans-serif}
-.wrap{max-width:1020px;margin:0 auto;padding:0 18px 52px}
+.wrap{max-width:1440px;margin:0 auto;padding:0 24px 44px}
 
 /* ---- 顶栏：仿工作台 ModuleTabs（k8s 集群页同款切换） ---- */
 .topbar{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--border)}
-.topbar-in{max-width:1020px;margin:0 auto;padding:6px 14px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.topbar-in{max-width:1440px;margin:0 auto;padding:6px 24px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
 .module-tabs{display:flex;align-items:center;gap:4px;overflow-x:auto}
 .module-tab{height:31px;padding:0 14px;display:flex;align-items:center;border-radius:7px;color:var(--muted);font-size:13px;font-weight:600;background:transparent;border:0;cursor:pointer;white-space:nowrap;transition:color .14s,background .14s}
 .module-tab:hover,.module-tab.active{color:var(--brand);background:#eff6ff}
