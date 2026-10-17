@@ -1016,3 +1016,41 @@ def test_summary_and_usage_expose_price_source(monkeypatch):
     usage = client.get("/api/v1/usage").json()
     assert usage["price_source"] == "year-average"
     assert usage["year"]["price"] == pytest.approx(0.4883)
+
+
+# --------------------------------------------------------------------------- #
+# v0.5.2 — month-to-date cost estimate for postpaid accounts
+# --------------------------------------------------------------------------- #
+def test_month_cost_estimate_from_daily_and_price():
+    now = datetime(2026, 10, 17, 10, 0, tzinfo=alerting.TZ)
+    label, cost, estimated = collector.month_cost_of([{"month": "202609", "cost": 84.48}], now)
+    assert label == "202610" and cost is None and estimated is True
+
+    daily = [{"day": "2026-10-15", "kwh": 5.0}, {"day": "2026-10-16", "kwh": 6.0},
+             {"day": "2026-09-30", "kwh": 99.0}]
+    assert collector.estimate_month_cost(daily, label, 0.4883) == pytest.approx(11 * 0.4883, abs=0.01)
+
+    # a published bill wins over the estimate
+    label2, cost2, estimated2 = collector.month_cost_of(
+        [{"month": "202610", "cost": 12.5}], now)
+    assert cost2 == pytest.approx(12.5) and estimated2 is False
+
+
+def test_month_cost_estimate_needs_price():
+    assert collector.estimate_month_cost([{"day": "2026-10-15", "kwh": 5.0}], "202610", None) is None
+    assert collector.estimate_month_cost([], "202610", 0.4883) is None
+
+
+def test_summary_flags_estimated_month_cost(monkeypatch):
+    now = datetime.now(timezone.utc)
+    snapshot = {
+        "updated_at": now.isoformat(timespec="seconds"), "month_label": "202610",
+        "month_cost": 11.0, "month_cost_estimated": True,
+        "households": [{"id": "x", "balance": 100.0, "arrears": 0.0, "penalty": 0.0, "prepay": 0.0,
+                        "due": 0.0, "bills": [], "daily": [{"day": "2026-10-15", "kwh": 5.0}]}],
+        "errors": [],
+    }
+    _patch_store(monkeypatch, snapshot=snapshot)
+    summary = client.get("/api/v1/summary").json()["data"]
+    assert summary["month_cost_estimated"] is True
+    assert client.get("/api/v1/usage").json()["month_cost_estimated"] is True

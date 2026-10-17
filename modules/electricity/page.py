@@ -248,7 +248,7 @@ function renderOverview(data) {
       data.estimated_daily_cost ? `日均约 ${num(data.estimated_daily_cost)} 元` : '数据不足',
       days !== null && days !== undefined && Number(days) < 5),
     card('最近已公布日电量', num(last.kwh), '度', last.day || '暂无数据'),
-    card('本月电费', num(data.month_cost), '元', budgetNote),
+    card('本月电费', num(data.month_cost), '元', (data.month_cost_estimated ? '估算值 · ' : '') + budgetNote),
     card('近 7 个公布日日均', num(avg), '度',
       forecast.total_kwh ? `未来 7 日预计 ${num(forecast.total_kwh, 1)} 度` : `共 ${recent.length} 天`),
     card('年度累计', num(year.kwh, 0), '度',

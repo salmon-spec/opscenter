@@ -28,7 +28,7 @@ from page import render_page
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -126,6 +126,7 @@ def summary_provider():
         "penalty": ctx["penalty"],
         "prepay": ctx["prepay"],
         "month_cost": ctx["month_cost"],
+        "month_cost_estimated": ctx["month_cost_estimated"],
         "month_cost_projection": ctx["month_cost_projection"],
         "monthly_budget": cfg["monthly_budget"] or None,
         "step_stage": (alerting.current_step(ctx["steps"]) or {}).get("stage"),
@@ -401,6 +402,7 @@ def usage(history: int = Query(default=120, ge=1, le=730)):
         "daily_history": store.daily_history(history),
         "monthly_history": store.monthly_history(24),
         "month_cost": ctx["month_cost"],
+        "month_cost_estimated": ctx["month_cost_estimated"],
         "month_cost_projection": ctx["month_cost_projection"],
         "month_label": ctx["month_label"],
         "monthly_budget": _cfg()["monthly_budget"] or None,

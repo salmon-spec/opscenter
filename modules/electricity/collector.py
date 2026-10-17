@@ -325,13 +325,34 @@ def summarize(meter, balance, bills, steps=None, tou=None, data_info=None):
     return row
 
 
-def month_cost_of(bills: list, now: datetime) -> tuple[str, float | None]:
-    """Cost billed so far for the current month (published bills only)."""
+def month_cost_of(bills: list, now: datetime) -> tuple[str, float | None, bool]:
+    """Cost for the current month.
+
+    Returns ``(label, cost, estimated)``. Postpaid accounts only get a bill after
+    the meter reading, so mid-month we estimate from the days already published
+    times the real year-to-date average price; ``estimated`` tells the UI/API so
+    the number is never presented as billed fact.
+    """
     label = now.astimezone(TZ).strftime("%Y%m")
     for item in bills or []:
-        if str(item.get("month")) == label:
-            return label, item.get("cost")
-    return label, None
+        if str(item.get("month")) == label and item.get("cost") is not None:
+            return label, item.get("cost"), False
+    return label, None, True
+
+
+def estimate_month_cost(daily: list, label: str, price: float | None) -> float | None:
+    """Month-to-date cost from published daily kWh at the real average price."""
+    if not label or not price:
+        return None
+    prefix = f"{label[:4]}-{label[4:6]}"
+    total = 0.0
+    for item in daily or []:
+        try:
+            if str(item.get("day", "")).startswith(prefix):
+                total += float(item.get("kwh") or 0)
+        except (TypeError, ValueError):
+            continue
+    return round(total * float(price), 2) if total > 0 else None
 
 
 def relogin_count() -> int:
@@ -422,11 +443,15 @@ async def collect(store: ElectricityStore) -> dict:
                 errors.append("逐日用电：" + str(exc))
                 row["daily"] = previous.get(ident, {}).get("daily", [])
 
-            label, cost = month_cost_of(row.get("bills") or [], datetime.now(timezone.utc))
+            label, cost, estimated = month_cost_of(row.get("bills") or [], datetime.now(timezone.utc))
+            if estimated:
+                cost = estimate_month_cost(row.get("daily") or [], label,
+                                           (row.get("year") or {}).get("price"))
+            month_estimated = estimated and cost is not None
             households.append(row)
         except Exception as exc:  # noqa: BLE001
             errors.append(ident[-4:] + "：" + str(exc))
-            label, cost = None, None
+            label, cost, month_estimated = None, None, False
             if ident in previous:
                 households.append(previous[ident])
 
@@ -442,6 +467,7 @@ async def collect(store: ElectricityStore) -> dict:
     if label:
         snapshot["month_label"] = label
         snapshot["month_cost"] = cost
+        snapshot["month_cost_estimated"] = bool(cost is not None and month_estimated)
     else:
         previous_snapshot = store.snapshot()
         snapshot["month_label"] = previous_snapshot.get("month_label")

@@ -314,6 +314,7 @@ def build_context(snapshot: dict, configured: bool, now: datetime, cfg: dict | N
         "prepay": float(row["prepay"]) if isinstance(row.get("prepay"), (int, float)) else None,
         "year": row.get("year") if isinstance(row.get("year"), dict) else None,
         "month_cost": None,
+        "month_cost_estimated": bool(snapshot.get("month_cost_estimated")),
         "month_label": str(snapshot.get("month_label") or now.astimezone(TZ).strftime("%Y%m")),
         "forecast": forecast_usage(daily, 7),
     }
