@@ -1,0 +1,30 @@
+pipeline {
+  agent { label 'built-in' }
+  options { disableConcurrentBuilds(abortPrevious: false); timeout(time: 90, unit: 'MINUTES') }
+  parameters {
+    string(name: 'GIT_SHA', defaultValue: 'main', description: 'Forgejo branch or commit')
+  }
+  environment {
+    PVE = 'root@10.66.66.3'
+    SSH_OPTS = '-i /var/jenkins_home/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=15'
+  }
+  stages {
+    stage('validate') {
+      steps {
+        script {
+          if (!(params.GIT_SHA ==~ /[0-9a-fA-F]{7,40}|main|release\/[0-9.]+/)) {
+            error "Invalid GIT_SHA: ${params.GIT_SHA}"
+          }
+        }
+      }
+    }
+    stage('build and test (PVE)') {
+      steps {
+        sh 'ssh $SSH_OPTS $PVE "bash /root/ci/oc-ci-build.sh $GIT_SHA"'
+      }
+    }
+  }
+  post {
+    success { echo 'OpsCenter release candidate built and tested. Production promotion requires source/ConfigMap reconciliation.' }
+  }
+}
