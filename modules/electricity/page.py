@@ -204,7 +204,7 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
 
   <div class="form-card">
     <h2 id="form-title">添加通知人</h2>
-    <p class="note" style="margin:4px 0 12px">地址按方式填写：飞书 / 企微 / 钉钉 / Webhook 填机器人地址；Server酱 填 SendKey；PushPlus 填 token；邮箱填收件地址（需先在下方填 SMTP）；短信填手机号（走独立 module-sms 网关）；Bark / ntfy 填推送地址。</p>
+    <p class="note" style="margin:4px 0 12px">Apprise 短信填 <code>twilio://SID:TOKEN@发送号码/接收号码</code> 或 <code>httpsms://KEY@发送号码/接收号码</code>；微信填 <code>wecombot://机器人Key</code>、Server酱的 <code>schan://SendKey</code> 或 PushPlus / WxPusher 地址；邮件填 <code>mailtos://...</code>。地址含凭据，保存后只显示遮罩；原有飞书、邮箱等通道继续可用。</p>
     <form onsubmit="return false">
       <label>名称<input id="f-name" placeholder="如：秋水的微信"></label>
       <label>通知方式<select id="f-type"></select></label>
@@ -223,7 +223,7 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
 
   <div class="form-card">
     <h2>通道基础设施（可选）</h2>
-    <p class="note" style="margin:4px 0 12px">邮箱通道需要 SMTP；短信通道对接独立的 module-sms 网关（能接收 <code>{"phone","message"}</code> JSON）。</p>
+    <p class="note" style="margin:4px 0 12px">以下设置只供原有邮箱 / 短信网关通道使用。Apprise 渠道在通知人地址中配置供应商；短信需要供应商账号或已配对的 Android 网关，微信需要机器人 Key / 推送 Token，邮件需要 SMTP 账号。</p>
     <form onsubmit="return false">
       <label>SMTP 服务器<input id="s-smtp" placeholder="smtp.example.com"></label>
       <label>SMTP 端口<input id="s-port" placeholder="465"></label>
@@ -456,6 +456,11 @@ async function load() {
 /* ---- 通知设置 ---- */
 let editing = null;
 const TYPE_LABEL = {};
+const TARGET_HINT = {
+  apprise_sms: 'twilio://SID:TOKEN@发送号码/接收号码',
+  apprise_wechat: 'wecombot://机器人Key 或 schan://SendKey',
+  apprise_email: 'mailtos://邮件服务地址?user=...&pass=...&to=...',
+};
 
 function renderTargets(data) {
   const targets = data.targets || [];
@@ -488,6 +493,7 @@ async function loadNotify() {
       select.innerHTML = Object.entries(data.types || {}).map(([value, label]) =>
         `<option value="${esc(value)}">${esc(label)}</option>`).join('');
     }
+    if (!editing) $('f-target').placeholder = TARGET_HINT[select.value] || '按上方说明填写';
     renderTargets(data);
     $('s-smtp').value = data.settings?.smtp_host || '';
     $('s-port').value = data.settings?.smtp_port || '';
@@ -513,7 +519,7 @@ $('f-save').onclick = async () => {
     await request(`${API}/notify/targets`, 'POST', payload);
     setState(editing ? '通知人已更新' : '通知人已添加');
     editing = null; $('f-name').value = ''; $('f-target').value = '';
-    $('f-target').placeholder = '按上方说明填写';
+    $('f-target').placeholder = TARGET_HINT[$('f-type').value] || '按上方说明填写';
     $('form-title').textContent = '添加通知人';
     await loadNotify();
   } catch (e) { setState(`保存失败：${e.message}`, true); }
@@ -521,8 +527,13 @@ $('f-save').onclick = async () => {
 
 $('f-reset').onclick = () => {
   editing = null; $('f-name').value = ''; $('f-target').value = '';
-  $('f-target').placeholder = '按上方说明填写';
+  $('f-target').placeholder = TARGET_HINT[$('f-type').value] || '按上方说明填写';
   $('form-title').textContent = '添加通知人';
+};
+
+$('f-type').onchange = () => {
+  $('f-target').placeholder = editing ? '切换方式时需填写新地址' :
+    (TARGET_HINT[$('f-type').value] || '按上方说明填写');
 };
 
 $('s-save').onclick = async () => {

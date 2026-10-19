@@ -1,14 +1,16 @@
 """Multi-channel notification delivery for the electricity module.
 
-Only ``aiohttp`` (already a module dependency) plus the standard library are
-used, so no extra pip package is required. Channels are described by JSON in
+Built-in channels use ``aiohttp`` and the standard library; the optional
+Apprise-backed targets use the bundled ``apprise`` package. Channels are
+described by JSON in
 ``ELECTRICITY_NOTIFY_CHANNELS``::
 
     [{"type": "feishu", "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/xxx",
       "secret": "", "min_severity": "warning"}]
 
 Supported types: ``webhook`` / ``feishu`` / ``wecom`` / ``dingtalk`` /
-``serverchan`` / ``bark`` / ``ntfy`` / ``email``.
+``serverchan`` / ``bark`` / ``ntfy`` / ``email`` and three Apprise-backed
+SMS / WeChat / email targets.
 
 The unified-URL idea (feishu://, wecombot://, bark://, ntfy://…) is borrowed
 from Apprise; we only implement the channels that actually make sense for a
@@ -51,6 +53,32 @@ ACTION_TITLES = {"firing": "电费告警", "re-fire": "电费告警（仍未恢�
 
 # channel key -> {failures, open_until, last_error, last_ok_at}
 _breaker: dict[str, dict] = {}
+
+# Keep Apprise URLs in three narrow groups.  Apprise itself understands many
+# schemes, including local/config services that must not be accepted as a
+# recipient address from the workbench.
+APPRISE_SCHEMES = {
+    "apprise_sms": {"twilio", "httpsms"},
+    "apprise_wechat": {"wecombot", "schan", "pushplus", "wxpusher"},
+    "apprise_email": {"mailto", "mailtos"},
+}
+
+
+def valid_apprise_url(kind: str, value: str) -> bool:
+    """Allow only the documented outbound notification providers."""
+    if kind not in APPRISE_SCHEMES or not value or len(value) > 2048:
+        return False
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        if parsed.scheme.lower() not in APPRISE_SCHEMES[kind] or not parsed.netloc:
+            return False
+        import apprise
+
+        logging.getLogger("apprise").setLevel(logging.CRITICAL)
+        service = apprise.Apprise(asset=apprise.AppriseAsset(secure_logging=True))
+        return bool(service.add(value) and len(service) == 1)
+    except (ImportError, ValueError):
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -116,7 +144,9 @@ def target_to_channel(item: dict) -> dict:
     extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
     channel.update({key: value for key, value in extra.items() if value not in (None, "")})
 
-    if kind == "email":
+    if kind in APPRISE_SCHEMES:
+        channel["apprise_url"] = address
+    elif kind == "email":
         channel["mail_to"] = [address]
         for key in ("smtp_host", "smtp_port", "username", "password", "mail_from"):
             if _settings.get(key) not in (None, ""):
@@ -470,6 +500,31 @@ async def _send_email(channel: dict, subject: str, text: str, timeout: float) ->
         return {"ok": False, "status": 0, "body": "smtp timeout"}
 
 
+async def _send_apprise(channel: dict, title: str, text: str, timeout: float) -> dict:
+    """Send through the bundled Apprise library without exposing its URL in logs."""
+    kind = str(channel.get("type") or "")
+    url = str(channel.get("apprise_url") or "")
+    if not valid_apprise_url(kind, url):
+        return {"ok": False, "status": 0, "body": "Apprise 通道地址无效"}
+    try:
+        import apprise
+
+        logging.getLogger("apprise").setLevel(logging.CRITICAL)
+        service = apprise.Apprise(asset=apprise.AppriseAsset(secure_logging=True,
+                                                            service_timeout=timeout))
+        if not service.add(url) or len(service) != 1:
+            return {"ok": False, "status": 0, "body": "Apprise 通道配置无效"}
+        body = text if kind != "apprise_sms" else f"{title} {text.splitlines()[2] if len(text.splitlines()) > 2 else ''}"[:65]
+        result = await asyncio.wait_for(service.async_notify(title=title if kind != "apprise_sms" else "",
+                                                               body=body), timeout=timeout + 5)
+        return {"ok": bool(result), "status": 0,
+                "body": "Apprise 发送成功" if result else "Apprise 发送失败"}
+    except asyncio.TimeoutError:
+        return {"ok": False, "status": 0, "body": "Apprise 发送超时"}
+    except Exception as exc:  # noqa: BLE001 - a single channel must not stop evaluation
+        return {"ok": False, "status": 0, "body": f"Apprise {type(exc).__name__}"}
+
+
 async def deliver(events: list[dict], extra_lines: list[str] | None = None,
                   session: ClientSession | None = None,
                   channels_override: list[dict] | None = None) -> list[dict]:
@@ -501,7 +556,9 @@ async def deliver(events: list[dict], extra_lines: list[str] | None = None,
                                     "body": "circuit open", "skipped": True})
                     continue
                 try:
-                    if kind == "email":
+                    if kind in APPRISE_SCHEMES:
+                        outcome = await _send_apprise(channel, f"电费告警｜{alert.get('title', '')}", text, timeout)
+                    elif kind == "email":
                         outcome = await _send_email(channel, f"电费告警｜{alert.get('title', '')}",
                                                    text, timeout)
                     else:

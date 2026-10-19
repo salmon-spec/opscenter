@@ -29,7 +29,7 @@ from page import render_page  # merged page: tabs [电费监测 | 通知设置]
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.7.5"
+VERSION = "0.7.6"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -623,6 +623,9 @@ def report_csv(month: str = Query(default="", max_length=6)):
 # notification targets (v0.6.0): people / groups managed on the notify page
 # --------------------------------------------------------------------------- #
 ALLOWED_TARGET_TYPES = {
+    "apprise_sms": "短信（Apprise：Twilio / httpSMS）",
+    "apprise_wechat": "微信推送（Apprise：企微 / Server酱 / PushPlus / WxPusher）",
+    "apprise_email": "邮件（Apprise）",
     "sms": "短信（经自建短信网关转发）",
     "email": "邮箱",
     "feishu": "飞书群机器人",
@@ -638,6 +641,9 @@ ALLOWED_TARGET_TYPES = {
 
 def _mask_target(kind: str, value: str) -> str:
     value = value or ""
+    if kind in notify.APPRISE_SCHEMES:
+        scheme = value.partition("://")[0]
+        return f"{scheme}://***"
     if len(value) <= 6:
         return value
     if "@" in value:
@@ -692,6 +698,8 @@ def upsert_notify_target(payload: dict = Body(default={})):
         target_value = str(existing.get("target") or "")
     if not target_value:
         raise HTTPException(400, "通知地址不能为空")
+    if kind in notify.APPRISE_SCHEMES and not notify.valid_apprise_url(kind, target_value):
+        raise HTTPException(400, "Apprise 地址与所选通知方式不匹配")
     name = str(payload.get("name") or "").strip() or (str(existing.get("name") or "") if existing else kind)
     updated = False
     for item in config["targets"]:

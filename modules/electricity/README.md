@@ -1,4 +1,4 @@
-# electricity — 国家电网电费监测模块（v0.5.0）
+# electricity — 国家电网电费监测模块（v0.7.6）
 
 独立业务模块，把一个户号的电费余额、最近账单和逐日用电纳入运维工作台，
 并在余额/欠费/阶梯升档/预算超支/采集异常时主动推送提醒。
@@ -75,6 +75,21 @@
   （用于捕捉"数据变旧""余额随实测速率逼近阈值"这类与采集无关的变化）。
 
 ### 通知通道
+
+工作台「通知设置」新增三种 [Apprise](https://github.com/caronc/apprise) 渠道。
+Apprise `2.0.1`（[BSD-2-Clause](https://github.com/caronc/apprise/blob/master/LICENSE)）
+随电费模块镜像安装，不需要另建 Apprise 服务；现有通知人和环境变量通道继续可用。
+
+| 页面方式 | 地址示例 | 外部准备 |
+|---|---|---|
+| 短信（Apprise） | `twilio://SID:TOKEN@发送号码/接收号码` 或 `httpsms://KEY@发送号码/接收号码` | [Twilio](https://github.com/caronc/apprise/wiki/Notify_twilio) 账号与号码，或 [httpSMS](https://github.com/NdoleStudio/httpsms) 的 Android 手机、SIM 卡及 API Key |
+| 微信推送（Apprise） | `wecombot://机器人Key`、`schan://SendKey`、`pushplus://Token`、`wxpusher://AppToken/UID` | 对应服务已开通，机器人或推送 Token 已获取；企微群机器人消息在企业微信群显示 |
+| 邮件（Apprise） | `mailtos://smtp.example.com:465?user=发件账号&pass=授权码&to=收件地址` | SMTP 服务及授权码；特殊字符须按 URL 编码 |
+
+Apprise 短信正文限制为最多 65 个字符，避免一条告警拆成多条收费短信。
+三类 URL 的服务协议在保存时校验，原始 URL 保存在模块数据卷的 `notify.json`（0600），
+列表仅回显渠道名称与遮罩地址。真实发送需外部账号/设备就绪；页面「测试」只发送给所选通知人。
+`httpsms://` 使用的是 Apprise 对 httpSMS 服务的客户端集成；httpSMS 服务与手机本身不随模块镜像安装。
 
 `ELECTRICITY_NOTIFY_CHANNELS` 为 JSON 数组，逐通道可设 `min_severity` 做分级路由：
 

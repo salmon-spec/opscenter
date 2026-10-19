@@ -1126,6 +1126,75 @@ def test_notify_targets_crud(tmp_path, monkeypatch):
     assert client.post("/api/v1/notify/targets/delete", json={"id": "missing"}).status_code == 404
 
 
+def test_apprise_target_validation_and_masking(tmp_path, monkeypatch):
+    store = _notify_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(main.store, "notify_config", store.notify_config)
+    monkeypatch.setattr(main.store, "save_notify_config", store.save_notify_config)
+    cases = [
+        ("apprise_sms", "twilio://ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb@+15550000000/+8613800000000"),
+        ("apprise_wechat", "wecombot://cccccccccccccccccccccccccccccccc"),
+        ("apprise_email", "mailtos://example.com:465?user=a%40example.com&pass=private-password&smtp=smtp.example.com&to=b%40example.com"),
+    ]
+    for kind, address in cases:
+        response = client.post("/api/v1/notify/targets", json={
+            "name": kind, "type": kind, "target": address})
+        assert response.status_code == 200, response.text
+    result = client.get("/api/v1/notify/targets").json()
+    assert len(result["targets"]) == 3
+    assert all(item["target_masked"].endswith("://***") for item in result["targets"])
+    assert not any("target" in item or "extra" in item for item in result["targets"])
+    assert "bbbbbbbb" not in str(result) and "private-password" not in str(result)
+    assert client.post("/api/v1/notify/targets", json={
+        "type": "apprise_sms", "target": "file:///etc/passwd"}).status_code == 400
+    assert client.post("/api/v1/notify/targets", json={
+        "type": "apprise_email", "target": cases[1][1]}).status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apprise_sms_delivery_is_short_and_uses_bundled_library(monkeypatch):
+    import apprise
+
+    captured = {}
+
+    async def fake_notify(self, **kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(apprise.Apprise, "async_notify", fake_notify)
+    channel = {"type": "apprise_sms", "apprise_url":
+               "twilio://ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb@+15550000000/+8613800000000"}
+    result = await notify._send_apprise(channel, "电费告警", "标题\n\n" + "用电异常" * 40, 3)
+    assert result["ok"] is True and len(captured["body"]) <= 65
+    assert "bbbbbbbb" not in str(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,address", [
+    ("apprise_sms", "httpsms://apikey@+8613800000000/+8613900000000"),
+    ("apprise_wechat", "schan://SCTaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+    ("apprise_email", "mailtos://example.com:465?user=a%40example.com&pass=secret&smtp=smtp.example.com&to=b%40example.com"),
+])
+async def test_apprise_target_routes_through_delivery(monkeypatch, kind, address):
+    import apprise
+
+    called = []
+
+    async def fake_notify(self, **kwargs):
+        called.append(kwargs)
+        return True
+
+    monkeypatch.setattr(apprise.Apprise, "async_notify", fake_notify)
+    notify.import_breaker({})
+    channel = notify.target_to_channel({
+        "id": "apprise-1", "name": "测试", "type": kind, "target": address,
+        "min_severity": "warning", "enabled": True})
+    result = await notify.deliver([{"action": "firing", "alert": {
+        "id": "electricity:test", "severity": "warning", "title": "余额不足", "summary": "请充值"}}],
+        channels_override=[channel])
+    assert len(called) == 1 and result[0]["ok"] is True
+    assert address not in str(result)
+
+
 def test_notify_settings_mask_password(tmp_path, monkeypatch):
     store = _notify_store(tmp_path, monkeypatch)
     monkeypatch.setattr(main.store, "notify_config", store.notify_config)
