@@ -64,6 +64,26 @@ h2{margin:0;font-size:15px}
 .seg button{border:0;background:transparent;color:var(--muted);font:600 12.5px/1 system-ui;padding:7px 13px;border-radius:6px;cursor:pointer}
 .seg button.active{background:#fff;color:var(--brand);box-shadow:0 1px 4px #0f1b2d1f}
 
+/* ---- 按日统计：自然月日历 ---- */
+.calendar-nav{display:flex;align-items:center;gap:10px;color:var(--text)}
+.calendar-nav strong{min-width:88px;text-align:center;font-size:13px;font-variant-numeric:tabular-nums}
+.calendar-nav button{width:29px;height:29px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--brand);font-size:19px;line-height:1;cursor:pointer}
+.calendar-nav button:disabled{color:#cbd5e1;cursor:default}
+.calendar{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:7px}
+.calendar-nav[hidden],.calendar[hidden],.blocks[hidden]{display:none}
+.weekday{display:flex;justify-content:center;align-items:center;gap:5px;padding:5px 0 7px;color:var(--muted);font-size:11px;font-weight:700}
+.week-icon{display:grid;place-items:center;width:22px;height:22px;border-radius:7px;background:var(--brand-soft);color:var(--brand);font-size:11px}
+.weekday.weekend .week-icon{background:#fff7ed;color:#c2410c}
+.day-cell{min-height:85px;border:1px solid var(--border);border-radius:9px;padding:7px 8px;background:#fff;font-variant-numeric:tabular-nums}
+.day-cell.empty{border-color:transparent;background:transparent}
+.day-cell.today{border-color:var(--brand);background:#f8fbff}
+.day-cell.future{background:#f8fafc;color:#9ca3af}
+.day-cell .date{font-size:12px;font-weight:800}
+.day-cell .usage{margin-top:5px;font-size:15px;font-weight:800;color:var(--text)}
+.day-cell .usage small{font-size:10px;font-weight:500;color:var(--muted)}
+.day-cell .cost{font-size:10px;color:var(--muted)}
+.day-cell .missing{margin-top:8px;font-size:10px;color:#9ca3af}
+
 /* ---- 统计小块 ---- */
 .blocks{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:7px}
 .blk{background:#fff;border:1px solid var(--border);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:1px;transition:all .15s;animation:pop .22s ease both}
@@ -123,7 +143,7 @@ input,select{font:inherit;padding:8px 10px;border:1px solid var(--border);border
 code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11.5px}
 .state{margin-top:14px;font-size:12.5px;color:var(--muted);min-height:18px}
 .state.err{color:var(--err)}
-@media(max-width:680px){.row .meta{display:none}.hcard .value{font-size:26px}}
+@media(max-width:680px){.row .meta{display:none}.hcard .value{font-size:26px}.calendar{gap:3px}.day-cell{min-height:68px;padding:4px}.day-cell .usage{font-size:12px}.day-cell .cost{font-size:9px}.weekday{gap:2px;font-size:9px}.week-icon{width:17px;height:17px}}
 </style>
 </head>
 <body>
@@ -159,8 +179,11 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
         <button data-gran="month">按月</button>
         <button data-gran="year">按年</button>
       </span>
-      <span class="seg" id="seg-range"></span>
+      <span class="calendar-nav" id="calendar-nav">
+        <button id="cal-prev" aria-label="上个月">‹</button><strong id="cal-title"></strong><button id="cal-next" aria-label="下个月">›</button>
+      </span>
     </div>
+    <div class="calendar" id="calendar"></div>
     <div class="blocks" id="blocks"></div>
   </section>
 
@@ -224,9 +247,9 @@ const pending = new Map();
 let requestId = 0;
 let moduleReady = !framed;
 let gran = 'day';
-let range = 30;
-const RANGES = { day: [7, 14, 30], month: [3, 6, 12] };
-const DEF = { day: 30, month: 12, year: 50 };   // 按天默认 30 天、按月默认 12 月、按年全部
+let calendarMonth = '';
+let latestMonth = '';
+let statsRequestId = 0;
 const UNIT = { day: '日均', month: '月均', year: '年均' };
 const ACTION = { firing: '首次告警', 're-fire': '重复提醒', resolved: '已恢复', test: '测试推送' };
 const esc = (v) => String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, (c) =>
@@ -273,6 +296,10 @@ function renderOverview(data) {
     ? `预算 ${num(data.monthly_budget)} 元 · 预计月末 ${num(data.month_cost_projection)} 元`
     : (data.month_cost_projection ? `按当前节奏预计月末 ${num(data.month_cost_projection)} 元` : '暂无可折算数据');
   const price = data.price_per_kwh ? ` · 单价 ${num(data.price_per_kwh, 4)} 元/度` : '';
+  if (!calendarMonth && /^[0-9]{6}$/.test(data.month_label || '')) {
+    calendarMonth = `${data.month_label.slice(0, 4)}-${data.month_label.slice(4)}`;
+    latestMonth = calendarMonth;
+  }
 
   $('card-balance').className = 'hcard primary';
   $('card-balance').innerHTML =
@@ -288,7 +315,9 @@ function renderOverview(data) {
   $('card-days').innerHTML =
     `<div class="label">预计可用</div>` +
     `<div class="value">${num(days, 1)}<small> 天</small></div>` +
-    `<div class="note">日均约 ${num(data.estimated_daily_cost)} 元 · 近 7 日均 ${num(data.average_7d_kwh, 1)} 度</div>`;
+    `<div class="note">${data.estimate_source === 'kwh-price' ? `按近 7 个用电日均 ${num(data.average_7d_kwh, 1)} 度 × ${num(data.price_per_kwh, 4)} 元/度` :
+      data.estimate_source === 'tiered-kwh-price' ? '按近 7 个用电日与分档单价估算' :
+      data.estimate_source === 'measured' ? '缺少用电量，按余额变动估算' : '暂无足够用电数据'} · 约 ${num(data.estimated_daily_cost)} 元/天</div>`;
   setState(`采集：${(data.updated_at || '尚未采集').replace('T', ' ')}` +
     ((data.errors || []).length ? ` · 待重试：${(data.errors || []).join('；')}` : ''), (data.errors || []).length > 0);
 }
@@ -310,8 +339,15 @@ function renderAlertLine(data) {
 
 function renderStats(data) {
   const rows = (data.rows || []).slice().sort((a, b) => String(b.label).localeCompare(String(a.label)));
-  const t = data.totals || {};
   $('stats-hint').textContent = `单价 ${num(data.price_per_kwh, 4)} 元/度（${data.price_source === 'year-average' ? '年度账单实算' : '配置值'}）。`;
+  $('calendar').hidden = data.granularity !== 'day';
+  $('calendar-nav').hidden = data.granularity !== 'day';
+  $('blocks').hidden = data.granularity === 'day';
+  if (data.granularity === 'day') {
+    renderCalendar(rows);
+    return;
+  }
+  const t = data.totals || {};
   $('sumline').innerHTML =
     `<span>合计花费 <b>${num(t.cost)}</b> 元</span><span>合计用电 <b>${num(t.kwh, 1)}</b> 度</span>` +
     `<span>${UNIT[data.granularity] || '均'} <b>${num(t.avg)}</b> 元</span><span>共 <b>${rows.length}</b> 期</span>`;
@@ -327,6 +363,36 @@ function renderStats(data) {
   }).join('') : '<p class="hint">暂无数据</p>';
 }
 
+function renderCalendar(rows) {
+  if (!calendarMonth) calendarMonth = new Date().toISOString().slice(0, 7);
+  if (!latestMonth) latestMonth = calendarMonth;
+  const [year, month] = calendarMonth.split('-').map(Number);
+  const firstWeekday = (new Date(Date.UTC(year, month - 1, 1)).getUTCDay() + 6) % 7;
+  const days = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const byDay = new Map(rows.map((row) => [row.label, row]));
+  const currentRows = rows.filter((row) => row.label.startsWith(calendarMonth));
+  const kwh = currentRows.reduce((sum, row) => sum + (Number(row.kwh) || 0), 0);
+  const cost = currentRows.reduce((sum, row) => sum + (Number(row.cost) || 0), 0);
+  $('sumline').innerHTML = `<span>已公布 <b>${currentRows.length}</b> 天</span><span>用电 <b>${num(kwh, 1)}</b> 度</span>` +
+    `<span>折算花费 <b>${num(cost)}</b> 元</span><span>日均 <b>${currentRows.length ? num(cost / currentRows.length) : '—'}</b> 元</span>`;
+  $('cal-title').textContent = `${year} 年 ${month} 月`;
+  $('cal-next').disabled = calendarMonth >= latestMonth;
+  const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+  const header = weekdays.map((label, index) => `<div class="weekday${index > 4 ? ' weekend' : ''}"><span class="week-icon">${label}</span>周${label}</div>`).join('');
+  const blanks = '<div class="day-cell empty" aria-hidden="true"></div>'.repeat(firstWeekday);
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' });
+  const cells = Array.from({ length: days }, (_, index) => {
+    const day = `${calendarMonth}-${String(index + 1).padStart(2, '0')}`;
+    const row = byDay.get(day);
+    const future = day > today;
+    return `<div class="day-cell${day === today ? ' today' : ''}${future ? ' future' : ''}">` +
+      `<div class="date">${index + 1}</div>` +
+      (row ? `<div class="usage">${num(row.kwh, 1)}<small> 度</small></div><div class="cost">约 ${num(row.cost)} 元</div>` :
+        `<div class="missing">${future ? '待公布' : '暂无数据'}</div>`) + '</div>';
+  }).join('');
+  $('calendar').innerHTML = header + blanks + cells;
+}
+
 function renderHistory(rows) {
   $('history').innerHTML = rows.length ? rows.map((h) => {
     const failed = h.delivered === false;
@@ -338,18 +404,30 @@ function renderHistory(rows) {
   }).join('') : '<p class="hint">暂无推送记录；到「通知设置」添加通知人后即可接收。</p>';
 }
 
-function renderRangeButtons() {
-  const seg = $('seg-range');
-  if (gran === 'year') { seg.style.display = 'none'; return; }
-  seg.style.display = '';
-  seg.innerHTML = RANGES[gran].map((value) =>
-    `<button data-range="${value}" class="${value === range ? 'active' : ''}">近 ${value} ${gran === 'day' ? '天' : '月'}</button>`).join('');
-}
+document.querySelectorAll('#seg-gran button').forEach((button) => button.addEventListener('click', () => {
+  gran = button.dataset.gran;
+  document.querySelectorAll('#seg-gran button').forEach((item) => item.classList.toggle('active', item === button));
+  loadStats();
+}));
+$('cal-prev').onclick = () => {
+  const [year, month] = calendarMonth.split('-').map(Number);
+  calendarMonth = new Date(Date.UTC(year, month - 2, 1)).toISOString().slice(0, 7);
+  loadStats();
+};
+$('cal-next').onclick = () => {
+  if (calendarMonth >= latestMonth) return;
+  const [year, month] = calendarMonth.split('-').map(Number);
+  calendarMonth = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 7);
+  loadStats();
+};
 
 async function loadStats() {
+  const current = ++statsRequestId;
   try {
-    renderStats(await request(`${API}/stats`, 'GET', undefined, { granularity: gran, limit: range }));
-  } catch (e) { $('stats-hint').textContent = `统计接口不可用（${e.message}）`; }
+    const data = await request(`${API}/stats`, 'GET', undefined,
+      { granularity: gran, limit: gran === 'day' ? 730 : gran === 'month' ? 12 : 50 });
+    if (current === statsRequestId) renderStats(data);
+  } catch (e) { if (current === statsRequestId) $('stats-hint').textContent = `统计接口不可用（${e.message}）`; }
 }
 
 function setState(text, error) {
@@ -430,11 +508,12 @@ $('f-save').onclick = async () => {
     target: $('f-target').value.trim(),
     min_severity: $('f-sev').value,
   };
-  if (!payload.target) return setState('地址不能为空', true);
+  if (!payload.target && !editing) return setState('地址不能为空', true);
   try {
     await request(`${API}/notify/targets`, 'POST', payload);
     setState(editing ? '通知人已更新' : '通知人已添加');
     editing = null; $('f-name').value = ''; $('f-target').value = '';
+    $('f-target').placeholder = '按上方说明填写';
     $('form-title').textContent = '添加通知人';
     await loadNotify();
   } catch (e) { setState(`保存失败：${e.message}`, true); }
@@ -442,6 +521,7 @@ $('f-save').onclick = async () => {
 
 $('f-reset').onclick = () => {
   editing = null; $('f-name').value = ''; $('f-target').value = '';
+  $('f-target').placeholder = '按上方说明填写';
   $('form-title').textContent = '添加通知人';
 };
 
@@ -478,7 +558,8 @@ $('targets').addEventListener('click', async (event) => {
       editing = item.id;
       $('f-name').value = item.name || '';
       $('f-type').value = item.type;
-      $('f-target').value = item.target || '';
+      $('f-target').value = '';
+      $('f-target').placeholder = `留空保留原地址（${item.target_masked || '已保存'}）`;
       $('f-sev').value = item.min_severity || 'warning';
       $('form-title').textContent = `编辑通知人：${item.name}`;
       selectView('notify');
@@ -512,7 +593,6 @@ window.addEventListener('message', (event) => {
   const data = event.data || {};
   if (data.type === 'ops-module-info') {
     moduleReady = true;
-    renderRangeButtons();
     load();
     loadNotify();
   } else if (data.type === 'ops-module-api-response') {
@@ -531,7 +611,6 @@ if (framed) {
   const readyTimer = setInterval(() => { if (moduleReady) clearInterval(readyTimer); else announceReady(); }, 400);
   setTimeout(() => clearInterval(readyTimer), 15000);
 } else {
-  renderRangeButtons();
   load();
   loadNotify();
 }

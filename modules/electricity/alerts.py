@@ -130,10 +130,10 @@ def daily_average(daily: list, days: int = 7) -> float | None:
 
 
 def measured_burn_rate(history: list) -> float | None:
-    """Measured 元/天 from stored balance observations, when we have ≥2 samples.
+    """Fallback 元/天 from balance observations when daily kWh is unavailable.
 
-    More trustworthy than ``kWh × price`` because it already contains the real
-    tariff, tiered pricing and any arrears deductions.
+    Balance changes can include recharges or adjustments, so published usage
+    and the known price take precedence when estimating depletion.
     """
     points = []
     for item in history or []:
@@ -258,14 +258,14 @@ def remaining_days(balance: float | None, ctx: dict, cfg: dict) -> tuple[float |
         if days > 0:
             return round(days, 1), round(balance / days, 3), "tiered-kwh-price"
 
-    measured = ctx.get("measured_daily_cost")
-    if measured and measured > 0:
-        return round(balance / measured, 1), measured, "measured"
     if daily_kwh:
         price = ctx.get("effective_price") or cfg["price_per_kwh"]
         cost = round(daily_kwh * price, 3)
         if cost > 0:
             return round(balance / cost, 1), cost, "kwh-price"
+    measured = ctx.get("measured_daily_cost")
+    if measured and measured > 0:
+        return round(balance / measured, 1), measured, "measured"
     return None, None, "none"
 
 

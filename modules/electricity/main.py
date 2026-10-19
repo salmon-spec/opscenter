@@ -29,7 +29,7 @@ from page import render_page  # merged page: tabs [电费监测 | 通知设置]
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.7.3"
+VERSION = "0.7.5"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -205,8 +205,6 @@ async def evaluate_alerts(trigger: str = "schedule") -> dict:
             notify.import_breaker(state.get("channel_health"))
             notify.import_targets(store.notify_targets(enabled_only=True),
                                   store.notify_config().get("settings") or {})
-            notify.import_targets(store.notify_targets(enabled_only=True),
-                                  store.notify_config().get("settings") or {})
             try:
                 delivery = await notify.deliver(events,
                                                 extra_lines=[f"当前余额：{ctx['balance']}",
@@ -215,19 +213,22 @@ async def evaluate_alerts(trigger: str = "schedule") -> dict:
             except Exception as exc:  # noqa: BLE001 - notification must never break collection
                 logging.warning("electricity notify dispatch failed: %s", type(exc).__name__)
             state["channel_health"] = notify.export_breaker()
-            store.append_alert_history([
-                {
+            history = []
+            for event in events:
+                alert = event.get("alert") or {}
+                sent = [item for item in delivery if item.get("alert") == alert.get("id")
+                        and item.get("action") == event.get("action")]
+                history.append({
                     "at": now.isoformat(timespec="seconds"),
                     "trigger": trigger,
                     "action": event.get("action"),
-                    "alert_id": (event.get("alert") or {}).get("id"),
-                    "severity": (event.get("alert") or {}).get("severity"),
-                    "title": (event.get("alert") or {}).get("title"),
-                    "channels": [f"{item.get('channel')}:{item.get('name')}" for item in delivery],
-                    "delivered": all(item.get("ok") for item in delivery) if delivery else None,
-                }
-                for event in events
-            ])
+                    "alert_id": alert.get("id"),
+                    "severity": alert.get("severity"),
+                    "title": alert.get("title"),
+                    "channels": [f"{item.get('channel')}:{item.get('name')}" for item in sent],
+                    "delivered": all(item.get("ok") for item in sent) if sent else None,
+                })
+            store.append_alert_history(history)
 
         state["active"] = result["state"]["active"]
         state["updated_at"] = now.isoformat(timespec="seconds")
@@ -363,6 +364,8 @@ def overview():
         "status": _status.get("message"),
         "remaining_days": ctx["remaining_days"],
         "estimated_daily_cost": ctx["estimated_daily_cost"],
+        "estimate_source": ctx["estimate_source"],
+        "average_7d_kwh": ctx["average_7d_kwh"],
         "price_per_kwh": ctx["price_per_kwh"],
         "price_source": ctx["price_source"],
         "forecast": ctx["forecast"],
@@ -485,27 +488,32 @@ def list_rules():
 
 @app.post("/api/v1/alerts/test")
 async def test_notification(payload: dict = Body(default={})):
-    target_id = str(payload.get("target_id") or "") or None
-    # targets must be imported BEFORE the destinations check
-    notify.import_targets(store.notify_targets(enabled_only=True),
-                          store.notify_config().get("settings") or {})
-    if target_id and not any(str(item.get("id")) == target_id for item in store.notify_targets()):
-        raise HTTPException(404, "通知人不存在")
-    if not notify.destinations():
-        raise HTTPException(503, "尚未配置任何通知方式（环境变量为空且通知设置页无启用的通知人）")
-    state = store.alert_state()
-    notify.import_breaker(state.get("channel_health"))
-    delivery = await notify.send_test(payload.get("target_id") if isinstance(payload, dict) else None)
-    state["channel_health"] = notify.export_breaker()
-    store.save_alert_state(state)
-    store.append_alert_history([{
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "trigger": "manual-test", "action": "test", "alert_id": "electricity:test",
-        "severity": "critical", "title": "测试告警（手动触发）",
-        "channels": [f"{item.get('channel')}:{item.get('name')}" for item in delivery],
-        "delivered": all(item.get("ok") for item in delivery) if delivery else None,
-    }])
-    return {"sent": len(delivery), "results": delivery}
+    return await _dispatch_test_notification(str(payload.get("target_id") or "") or None,
+                                             "manual-test", "测试告警（手动触发）")
+
+
+async def _dispatch_test_notification(target_id: str | None, trigger: str, title: str) -> dict:
+    async with _alert_lock:
+        targets = store.notify_targets(enabled_only=True)
+        if target_id and not any(str(item.get("id")) == target_id for item in targets):
+            exists = any(str(item.get("id")) == target_id for item in store.notify_targets())
+            raise HTTPException(400 if exists else 404, "通知人已停用或不存在")
+        notify.import_targets(targets, store.notify_config().get("settings") or {})
+        if not notify.destinations():
+            raise HTTPException(503, "尚未配置任何可用的通知方式")
+        state = store.alert_state()
+        notify.import_breaker(state.get("channel_health"))
+        delivery = await notify.send_test(target_id)
+        state["channel_health"] = notify.export_breaker()
+        store.save_alert_state(state)
+        store.append_alert_history([{
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "trigger": trigger, "action": "test", "alert_id": "electricity:test",
+            "severity": "critical", "title": title,
+            "channels": [f"{item.get('channel')}:{item.get('name')}" for item in delivery],
+            "delivered": all(item.get("ok") for item in delivery) if delivery else None,
+        }])
+        return {"sent": len(delivery), "results": delivery}
 
 
 @app.post("/api/v1/alerts/silence")
@@ -645,9 +653,11 @@ def list_notify_targets():
     for item in config["targets"]:
         entry = dict(item)
         entry["target_masked"] = _mask_target(str(item.get("type")), str(item.get("target") or ""))
+        entry.pop("target", None)
+        entry.pop("extra", None)
         masked.append(entry)
     settings = dict(config.get("settings") or {})
-    for secret_key in ("password", "sms_sign"):
+    for secret_key in ("password", "sms_sign", "sms_webhook"):
         if settings.get(secret_key):
             settings[secret_key] = "***"
     return {
@@ -667,15 +677,22 @@ def upsert_notify_target(payload: dict = Body(default={})):
     if kind not in ALLOWED_TARGET_TYPES:
         raise HTTPException(400, f"不支持的通知方式：{kind or '空'}")
     target_value = str(payload.get("target") or "").strip()
-    if not target_value:
-        raise HTTPException(400, "通知地址不能为空")
-    name = str(payload.get("name") or "").strip() or target_value[:24]
     severity = str(payload.get("min_severity") or "warning")
     if severity not in alerting.SEVERITY_ORDER:
         raise HTTPException(400, "min_severity 仅支持 info / warning / critical")
 
     config = store.notify_config()
     item_id = str(payload.get("id") or "")
+    existing = next((item for item in config["targets"] if str(item.get("id")) == item_id), None) if item_id else None
+    if item_id and existing is None:
+        raise HTTPException(404, "通知人不存在")
+    if existing and not target_value and kind != existing.get("type"):
+        raise HTTPException(400, "更改通知方式时必须填写新地址")
+    if not target_value and existing:
+        target_value = str(existing.get("target") or "")
+    if not target_value:
+        raise HTTPException(400, "通知地址不能为空")
+    name = str(payload.get("name") or "").strip() or (str(existing.get("name") or "") if existing else kind)
     updated = False
     for item in config["targets"]:
         if item_id and str(item.get("id")) == item_id:
@@ -732,11 +749,11 @@ def save_notify_settings(payload: dict = Body(default={})):
                 "sms_webhook", "sms_sign", "sms_template"):
         if key in payload:
             value = payload.get(key)
-            if key == "password" and value in (None, "", "***"):
+            if key in {"password", "sms_sign", "sms_webhook"} and value in (None, "", "***"):
                 continue  # keep the stored secret when the form sends the mask back
             settings[key] = str(value).strip() if value is not None else ""
     store.save_notify_config({**config, "settings": settings})
-    masked = {key: ("***" if key == "password" and value else value)
+    masked = {key: ("***" if key in {"password", "sms_sign", "sms_webhook"} and value else value)
               for key, value in settings.items()}
     return {"ok": True, "settings": masked}
 
@@ -744,22 +761,8 @@ def save_notify_settings(payload: dict = Body(default={})):
 @app.post("/api/v1/notify/test")
 async def test_notify_target(payload: dict = Body(default={})):
     """Send a test message to one recipient (or to every enabled destination)."""
-    target_id = str(payload.get("target_id") or "") or None
-    notify.import_targets(store.notify_targets(enabled_only=True),
-                          store.notify_config().get("settings") or {})
-    if target_id and not any(str(item.get("id")) == target_id for item in store.notify_targets()):
-        raise HTTPException(404, "通知人不存在")
-    if not notify.destinations():
-        raise HTTPException(503, "尚未配置任何可用的通知方式")
-    delivery = await notify.send_test(target_id)
-    store.append_alert_history([{
-        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "trigger": "notify-test", "action": "test", "alert_id": "electricity:test",
-        "severity": "critical", "title": "测试通知（通知设置页）",
-        "channels": [f"{item.get('channel')}:{item.get('name')}" for item in delivery],
-        "delivered": all(item.get("ok") for item in delivery) if delivery else None,
-    }])
-    return {"sent": len(delivery), "results": delivery}
+    return await _dispatch_test_notification(str(payload.get("target_id") or "") or None,
+                                             "notify-test", "测试通知（通知设置页）")
 
 
 # --------------------------------------------------------------------------- #
@@ -799,6 +802,7 @@ def _build_stats(granularity: str, limit: int, now: datetime) -> dict:
             rows[0] = current
         else:
             rows.insert(0, current)
+        rows = rows[:limit]
     else:  # year
         by_year: dict[str, dict] = {}
         for item in store.monthly_history(240):
@@ -817,7 +821,6 @@ def _build_stats(granularity: str, limit: int, now: datetime) -> dict:
                  "cost": round(value["cost"], 2), "estimated": value["estimated"],
                  "source": "年度账单合计" if not value["estimated"] else "估算"}
                 for label, value in sorted(by_year.items(), reverse=True)][:limit]
-        rows = list(reversed(rows))
 
     # month-over-month / year-over-year delta of spending
     for index, row in enumerate(rows):

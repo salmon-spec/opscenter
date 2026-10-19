@@ -120,6 +120,7 @@ def test_overview_requires_configuration_and_returns_snapshot(monkeypatch):
     monkeypatch.setattr(main.store, "snapshot", lambda: _snapshot(datetime.now(timezone.utc)))
     body = client.get("/api/v1/overview").json()
     assert body["households"][0]["balance"] == 54.47
+    assert body["average_7d_kwh"] == pytest.approx(5.045)
 
 
 def test_module_contract_and_page():
@@ -204,20 +205,38 @@ def test_depletion_rule_uses_kwh_price_estimate():
     assert alerting.RULE_DEPLETION in _ids(alerting.evaluate_rules(ctx, now, _cfg(depletion_days=30)))
 
 
-def test_depletion_prefers_measured_burn_rate():
+def test_depletion_uses_usage_before_balance_history():
     now = datetime.now(timezone.utc)
     history = [
         {"at": (now - timedelta(days=4)).isoformat(timespec="seconds"), "balance": 100.0, "id": "x"},
-        {"at": now.isoformat(timespec="seconds"), "balance": 90.0, "id": "x"},
+        {"at": now.isoformat(timespec="seconds"), "balance": 60.0, "id": "x"},
     ]
-    assert alerting.measured_burn_rate(history) == pytest.approx(2.5, abs=0.01)
+    assert alerting.measured_burn_rate(history) == pytest.approx(10.0, abs=0.01)
     assert alerting.measured_burn_rate(history[:1]) is None
     # recharge (balance went up) must not produce a bogus burn rate
     assert alerting.measured_burn_rate([history[0], {"at": history[1]["at"], "balance": 200.0}]) is None
 
     ctx = _ctx(now, balance=54.0, history=history)
-    assert ctx["estimate_source"] == "measured"
-    assert ctx["estimated_daily_cost"] == pytest.approx(2.5, abs=0.01)
+    assert ctx["estimate_source"] == "kwh-price"
+    assert ctx["estimated_daily_cost"] == pytest.approx(5 * ctx["price_per_kwh"], abs=0.01)
+    fallback = _ctx(now, balance=54.0, daily=[], history=history)
+    assert fallback["estimate_source"] == "measured"
+    assert fallback["estimated_daily_cost"] == pytest.approx(10.0, abs=0.01)
+
+
+def test_depletion_ignores_misleading_balance_drop_when_daily_usage_exists(monkeypatch):
+    monkeypatch.setenv("ELECTRICITY_PRICE_PER_KWH", "0.4883")
+    now = datetime.now(timezone.utc)
+    history = [
+        {"at": (now - timedelta(days=4)).isoformat(), "balance": 100.0},
+        {"at": now.isoformat(), "balance": 70.0},
+    ]
+    daily = [{"day": (now - timedelta(days=index + 1)).date().isoformat(), "kwh": 5.76}
+             for index in range(7)]
+    ctx = _ctx(now, balance=44.52, daily=daily, history=history)
+    assert ctx["measured_daily_cost"] == pytest.approx(7.5)
+    assert ctx["estimated_daily_cost"] == pytest.approx(2.813, abs=0.001)
+    assert ctx["remaining_days"] == pytest.approx(15.8, abs=0.1)
 
 
 def test_daily_spike_rule_thresholds():
@@ -928,6 +947,9 @@ def test_page_contains_new_sections():
         assert fragment in page
     for gone in ("阶梯电价", "分时用电", "采集诊断", "预付费"):
         assert gone not in page
+    assert 'id="calendar"' in page and 'id="cal-prev"' in page
+    assert 'id="seg-range"' not in page
+    assert "近 7 天" not in page and "近 14 天" not in page
 
 
 def test_notify_page_contains_target_management():
@@ -1087,6 +1109,15 @@ def test_notify_targets_crud(tmp_path, monkeypatch):
     listed = client.get("/api/v1/notify/targets").json()
     assert listed["targets"][0]["target_masked"] != "SCT_key"
     assert "SCT_key" not in listed["targets"][0]["target_masked"]
+    assert "target" not in listed["targets"][0]
+    assert client.post("/api/v1/notify/targets", json={
+        "id": target_id, "name": "秋水3", "type": "wechat_serverchan",
+        "target": "", "min_severity": "warning"}).json()["updated"] is True
+    assert store.notify_config()["targets"][0]["target"] == "SCT_key"
+    assert client.post("/api/v1/notify/targets", json={
+        "id": target_id, "type": "webhook", "target": ""}).status_code == 400
+    assert client.post("/api/v1/notify/targets", json={
+        "id": "missing", "type": "webhook", "target": "https://hook"}).status_code == 404
 
     assert client.post("/api/v1/notify/targets/toggle", json={"id": target_id}).json()["enabled"] is False
     assert client.post("/api/v1/notify/targets/delete", json={"id": target_id}).json()["count"] == 0
@@ -1105,9 +1136,16 @@ def test_notify_settings_mask_password(tmp_path, monkeypatch):
     listed = client.get("/api/v1/notify/targets").json()
     assert listed["settings"]["smtp_host"] == "smtp.example.com"
     assert listed["settings"]["password"] == "***"
+    assert client.post("/api/v1/notify/settings", json={
+        "sms_webhook": "https://gateway.example/send?token=secret", "sms_sign": "private-sign"}).status_code == 200
+    listed = client.get("/api/v1/notify/targets").json()
+    assert listed["settings"]["sms_webhook"] == "***"
+    assert listed["settings"]["sms_sign"] == "***"
     # sending the mask back must not wipe the stored secret
-    assert client.post("/api/v1/notify/settings", json={"password": "***"}).status_code == 200
+    assert client.post("/api/v1/notify/settings", json={
+        "password": "***", "sms_webhook": "***", "sms_sign": "***"}).status_code == 200
     assert store.notify_config()["settings"]["password"] == "secret"
+    assert store.notify_config()["settings"]["sms_webhook"].endswith("token=secret")
 
 
 def test_stats_day_month_year(tmp_path, monkeypatch):
@@ -1148,6 +1186,28 @@ def test_stats_day_month_year(tmp_path, monkeypatch):
     assert year["rows"][0]["source"] == "年度账单合计"
 
 
+def test_stats_respect_month_limit_and_compare_newest_year(monkeypatch):
+    monkeypatch.setattr(main, "_current_context", lambda now: {
+        "price_per_kwh": 0.5, "price_source": "year-average",
+        "month_label": "202610", "month_cost": 10.0, "month_cost_estimated": True,
+        "daily": [{"day": "2026-10-17", "kwh": 2.0}],
+        "year": {"year": "2026", "kwh": 400.0, "cost": 200.0},
+        "balance": 50.0, "remaining_days": 10.0,
+    })
+    monkeypatch.setattr(main.store, "monthly_history", lambda months=24: [
+        {"month": "202609", "kwh": 180.0, "cost": 90.0},
+        {"month": "202608", "kwh": 160.0, "cost": 80.0},
+        {"month": "202509", "kwh": 100.0, "cost": 50.0},
+    ][:months])
+    now = datetime(2026, 10, 19, tzinfo=timezone.utc)
+    month = main._build_stats("month", 2, now)
+    assert [row["label"] for row in month["rows"]] == ["2026-10", "2026-09"]
+    assert month["totals"]["count"] == 2
+    year = main._build_stats("year", 2, now)
+    assert [row["label"] for row in year["rows"]] == ["2026", "2025"]
+    assert year["rows"][0]["delta_pct"] == 300.0
+
+
 def test_alerts_test_uses_targets(monkeypatch, tmp_path):
     store = _notify_store(tmp_path, monkeypatch, targets=[
         {"id": "t1", "name": "秋水", "type": "wechat_serverchan", "target": "SCT_key",
@@ -1155,7 +1215,8 @@ def test_alerts_test_uses_targets(monkeypatch, tmp_path):
     monkeypatch.setattr(main.store, "notify_config", store.notify_config)
     monkeypatch.setattr(main.store, "notify_targets", store.notify_targets)
 
-    async def _fake_deliver(events, extra_lines=None, session=None):
+    async def _fake_deliver(events, extra_lines=None, session=None, channels_override=None):
+        assert len(channels_override) == 1 and channels_override[0]["_target_id"] == "t1"
         return [{"channel": "wechat_serverchan", "name": "秋水", "ok": True, "status": 200, "body": "ok"}]
 
     monkeypatch.setattr(notify, "deliver", _fake_deliver)
@@ -1163,6 +1224,33 @@ def test_alerts_test_uses_targets(monkeypatch, tmp_path):
     assert result["sent"] == 1 and result["results"][0]["name"] == "秋水"
 
     assert client.post("/api/v1/alerts/test", json={"target_id": "nope"}).status_code == 404
+
+
+def test_targeted_notification_excludes_other_channels(monkeypatch):
+    monkeypatch.setenv("ELECTRICITY_NOTIFY_WEBHOOK", "https://other.example/hook")
+    notify.import_targets([{"id": "only", "type": "webhook", "target": "https://chosen.example/hook",
+                            "enabled": True}], {})
+    notify.import_breaker({})
+    sent = []
+
+    async def fake_post(session, plan, timeout, retries):
+        sent.append(plan["url"])
+        return {"ok": True, "status": 200, "body": "ok"}
+
+    monkeypatch.setattr(notify, "_post_with_retry", fake_post)
+    result = asyncio.run(notify.send_test("only", session=object()))
+    assert len(result) == 1
+    assert sent == ["https://chosen.example/hook"]
+    assert len(notify.export_targets()) == 1
+    notify.import_targets([], {})
+
+
+def test_disabled_notification_target_cannot_be_tested(tmp_path, monkeypatch):
+    store = _notify_store(tmp_path, monkeypatch, targets=[
+        {"id": "off", "type": "webhook", "target": "https://chosen.example/hook", "enabled": False}])
+    monkeypatch.setattr(main.store, "notify_config", store.notify_config)
+    monkeypatch.setattr(main.store, "notify_targets", store.notify_targets)
+    assert client.post("/api/v1/notify/test", json={"target_id": "off"}).status_code == 400
 
 
 def _notify_store(tmp_path, monkeypatch, targets=None, settings=None):

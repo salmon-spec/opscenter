@@ -192,7 +192,11 @@ def export_breaker() -> dict:
 
 
 def _channel_key(channel: dict, index: int) -> str:
-    return f"{channel.get('type')}#{index}"
+    if channel.get("_target_id"):
+        return f"{channel.get('type')}:{channel['_target_id']}"
+    address = channel.get("webhook") or channel.get("sendkey") or channel.get("token") or channel.get("mail_to") or index
+    digest = hashlib.sha256(str(address).encode("utf-8")).hexdigest()[:12]
+    return f"{channel.get('type')}:{digest}"
 
 
 def _breaker_allows(key: str, now: datetime) -> bool:
@@ -467,9 +471,10 @@ async def _send_email(channel: dict, subject: str, text: str, timeout: float) ->
 
 
 async def deliver(events: list[dict], extra_lines: list[str] | None = None,
-                  session: ClientSession | None = None) -> list[dict]:
+                  session: ClientSession | None = None,
+                  channels_override: list[dict] | None = None) -> list[dict]:
     """Send every event through every eligible channel. Never raises."""
-    plans = destinations()
+    plans = channels_override if channels_override is not None else destinations()
     if not plans or not events:
         return []
     timeout = float(os.getenv("ELECTRICITY_NOTIFY_TIMEOUT", "10") or 10)
@@ -529,13 +534,12 @@ async def send_test(target_id: str | None = None, session: ClientSession | None 
         "observed_at": datetime.now(timezone.utc),
     }
     if target_id:
-        global _targets
-        keep, _targets = _targets, [t for t in _targets if str(t.get("id")) == str(target_id)]
-        try:
-            return await deliver([{"action": "firing", "alert": sample}],
-                                 extra_lines=["触发方式：通知设置页「测试」"],
-                                 session=session)
-        finally:
-            _targets = keep
+        target = next((item for item in _targets if str(item.get("id")) == str(target_id)
+                       and item.get("enabled", True)), None)
+        if target is None:
+            return []
+        return await deliver([{"action": "firing", "alert": sample}],
+                             extra_lines=["触发方式：通知设置页「测试」"], session=session,
+                             channels_override=[target_to_channel(target)])
     return await deliver([{"action": "firing", "alert": sample}],
                          extra_lines=["触发方式：POST /api/v1/alerts/test"], session=session)
