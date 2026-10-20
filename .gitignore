@@ -35,3 +35,6 @@ backend/*-openapi.db
 backend/.tmp/
 backend/*.db
 nul
+
+# Local production comparisons and operational scratch archives
+.source-compare/
