@@ -109,3 +109,7 @@ VM100 测试环境的 service-catalog 已把服务列表、健康概览和隐藏
 - 因 Windows Schannel 对 IP 连接不发送 SNI，Caddy 配置 `default_sni 10.66.66.6`；根证书导出至工作区 `memory/opscenter-test-caddy-root.crt`（SHA256 `E46F3348DCE2A8533A6740E5C3D067BC7331AF989BDDA981C07EFAF4AB74E5DD`）。仅导出公有根证书，未把它安装进 Windows/浏览器信任库。使用此根证书并跳过 Schannel 在线吊销状态检查后，HTTPS 首页和模块请求均 200；无信任安装时浏览器会提示证书不受信任。
 - 真实测试入口 `/v3/`、service-catalog readiness/summary、host-inventory、host-monitor、alerts、logs、K3s summary 的 HTTPS 均 200；HTTP 回退 200；受保护 POST 仍为 423；PostgreSQL ready。443 绑定实测为 `10.66.66.6:443`，未绑定 LAN 或 `0.0.0.0`。
 - 变更前备份位于 `/opt/opscenter-test/deploy/docker/pre-caddy-https-20261012-1843/`：原 Caddyfile、Compose 和 71,602,845-byte custom-format 测试 DB dump（权限 600）。仅重建测试 web/Caddy 容器；backend、数据库、业务模块和生产未改。公网可信证书仍需真实域名与公网可达的 ACME 验证条件；HTTPS 不改变身份鉴权/审计未完成的状态。
+
+## 2026-10-20 服务目录更新
+
+服务目录运行版本 `0.7.4` 移除主机扫描代理和 `services:scan` 能力，增加受编辑权限保护的 `DELETE /api/v1/services/plaza/{plaza_key}`。删除标记保存在现有资料覆盖表中，刷新来源快照不会重建入口，后续探活和摘要也排除该入口；历史凭据和探测记录保留。健康总览与广场列表均只统计可见服务，包括状态计数和综合可用率。前端 `5.5.15` 通过“服务管理”弹窗集中添加、删除、隐藏/恢复和调整顺序，包含广场服务、隐藏记录和完整清单，隐藏/恢复操作等待统计刷新完成。完整清单的旧记录沿用原删除 API。实际运行的服务不会因此停止。

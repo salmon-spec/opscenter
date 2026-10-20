@@ -10,7 +10,7 @@ from main import app
 
 
 def test_module_version_matches_release():
-    assert TestClient(app).get("/api/v1/version").json()["version"] == "0.7.2"
+    assert TestClient(app).get("/api/v1/version").json()["version"] == "0.7.4"
 
 
 class FakeStore:
@@ -44,6 +44,7 @@ class FakeStore:
 
     def update_profile(self, key, values, actor):
         self.profile_updates.append((key, values, actor))
+        self.overrides.setdefault(key, {}).update(values)
 
     def expire_snapshot(self, key):
         self.expired.append(key)
@@ -110,6 +111,52 @@ def test_health_overview_uses_module_owned_service_snapshot(monkeypatch):
     assert {item["key"]: item["status"] for item in overview["items"]} == {
         "web": "up", "db": "down", "paused": "disabled",
     }
+
+
+def test_hide_and_restore_update_plaza_counts_and_availability(monkeypatch):
+    now = datetime.now(timezone.utc)
+
+    class Store(FakeStore):
+        def __init__(self):
+            super().__init__({"services": ([
+                {"key": "web", "status": "up", "uptime_percent": 80},
+                {"key": "db", "status": "down", "uptime_percent": 20},
+                {"key": "paused", "status": "disabled", "probe_enabled": False},
+            ], now)})
+            self.prefs = {}
+
+        def preferences(self):
+            return self.prefs
+
+        def set_visibility(self, key, hidden, actor):
+            self.prefs[key] = {"hidden": hidden}
+
+    store = Store()
+    monkeypatch.setattr(main, "CatalogStore", lambda: store)
+    monkeypatch.setitem(app.dependency_overrides, app.state.require_editor, lambda: {"username": "admin"})
+    client = TestClient(app)
+
+    def summary():
+        overview = client.get("/api/v1/health-overview").json()
+        visible_keys = {item["key"] for item in client.get("/api/v1/services").json()}
+        assert {item["key"] for item in overview["items"]} == visible_keys
+        assert overview["summary"]["total"] == len(visible_keys)
+        return overview["summary"]
+
+    try:
+        assert summary()["total"] == 3
+        assert client.put("/api/v1/services/web/visibility", json={"hidden": True}).status_code == 200
+        hidden = summary()
+        assert (hidden["total"], hidden["up"], hidden["down"], hidden["disabled"]) == (2, 0, 1, 1)
+        assert hidden["average_uptime_percent"] == 20
+        assert client.put("/api/v1/services/paused/visibility", json={"hidden": True}).status_code == 200
+        assert summary()["disabled"] == 0
+        assert client.put("/api/v1/services/web/visibility", json={"hidden": False}).status_code == 200
+        restored = summary()
+        assert (restored["total"], restored["up"], restored["down"]) == (2, 1, 1)
+        assert restored["average_uptime_percent"] == 50
+    finally:
+        app.dependency_overrides.pop(app.state.require_editor, None)
 
 
 def test_service_freshness_recalculates_cached_age(monkeypatch):
@@ -286,64 +333,27 @@ def test_service_create_requires_workbench_login():
     assert response.status_code == 401
 
 
-def test_scan_route_forwards_global_session_through_module_api(monkeypatch):
-    observed = {}
-    store = FakeStore()
+def test_scan_route_is_retired():
+    assert "/api/v1/scan" not in app.openapi()["paths"]
+    assert "services:scan" not in TestClient(app).get("/api/v1/module").json()["capabilities"]
 
-    def open_source(request, timeout):
-        if request.full_url.endswith("/scan"):
-            observed["url"] = request.full_url
-            observed["method"] = request.get_method()
-            observed["authorization"] = request.get_header("Authorization")
-            observed["timeout"] = timeout
-            body = b'{"added":1,"updated":2,"servers":[]}'
-        else:
-            body = b"[]"
 
-        class Response:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_):
-                pass
-
-            def read(self):
-                return body
-
-        return Response()
-
-    monkeypatch.setenv("SERVICE_CATALOG_SOURCE_URL", "http://backend:9091/api/v2")
-    monkeypatch.setenv("SERVICE_CATALOG_SCAN_TIMEOUT_SECONDS", "90")
+def test_catalog_delete_requires_login_and_stays_deleted_after_refresh(monkeypatch):
+    now = datetime.now(timezone.utc)
+    store = FakeStore({"services": ([{"key": "builtin", "name": "Built in", "id": "plaza:builtin"}], now)})
     monkeypatch.setattr(main, "CatalogStore", lambda: store)
-    monkeypatch.setattr(main, "urlopen", open_source)
-    monkeypatch.setitem(app.dependency_overrides, app.state.require_editor, lambda: {"username": "admin", "role": "admin"})
-    response = TestClient(app).post("/api/v1/scan", headers={"Authorization": "Bearer session"})
-    monkeypatch.delitem(app.dependency_overrides, app.state.require_editor)
-
-    assert response.status_code == 200
-    assert response.json()["added"] == 1
-    assert observed == {
-        "url": "http://backend:9091/api/v2/scan",
-        "method": "POST",
-        "authorization": "Bearer session",
-        "timeout": 90,
-    }
-    assert store.expired == []
-    assert store.snapshots["services"][0] == []
-
-
-def test_scan_route_requires_workbench_token():
-    assert TestClient(app).post("/api/v1/scan").status_code == 401
-
-
-def test_scan_route_sanitizes_source_errors(monkeypatch):
-    monkeypatch.setattr("main.urlopen", lambda *args, **kwargs: (_ for _ in ()).throw(URLError("private source detail")))
-    monkeypatch.setitem(app.dependency_overrides, app.state.require_editor, lambda: {"username": "admin", "role": "admin"})
-    response = TestClient(app).post("/api/v1/scan", headers={"Authorization": "Bearer session"})
-    monkeypatch.delitem(app.dependency_overrides, app.state.require_editor)
-
-    assert response.status_code == 502
-    assert "private source detail" not in response.text
+    client = TestClient(app)
+    assert client.delete("/api/v1/services/plaza/builtin").status_code == 401
+    monkeypatch.setitem(app.dependency_overrides, app.state.require_editor, lambda: {"username": "admin"})
+    try:
+        assert client.delete("/api/v1/services/plaza/builtin").status_code == 200
+        assert store.overrides["builtin"] == {"deleted": True, "probe_enabled": False}
+        store.save_snapshot("services", [{"key": "builtin", "name": "Refreshed source"}], now)
+        assert main.services_snapshot()[0] == []
+        assert main.services_snapshot(include_hidden=True)[0] == []
+        assert client.delete("/api/v1/services/plaza/unknown").status_code == 404
+    finally:
+        app.dependency_overrides.pop(app.state.require_editor, None)
 
 
 def test_service_detail_uses_module_snapshot_and_profile(monkeypatch):

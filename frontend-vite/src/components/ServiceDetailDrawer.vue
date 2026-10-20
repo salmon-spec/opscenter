@@ -5,7 +5,7 @@
         <div class="drawer">
           <div class="drawer-head">
             <div><h3>{{ detail?.name || service?.name || '服务详情' }}</h3><div class="muted head-meta">{{ detail?.category || service?.category || '' }}</div></div>
-            <div class="head-actions"><button v-if="!readOnly && plazaKey && !editing" class="btn btn-sm" @click="startEdit">编辑信息</button><button v-if="!readOnly && isManual && !editing" class="btn btn-danger btn-sm" @click="deleteService">归档服务</button><button class="btn btn-ghost btn-sm" @click="closeDrawer">✕</button></div>
+            <div class="head-actions"><button v-if="!readOnly && plazaKey && !editing" class="btn btn-sm" @click="startEdit">编辑信息</button><button class="btn btn-ghost btn-sm" @click="closeDrawer">✕</button></div>
           </div>
           <div class="drawer-body">
             <div v-if="loading" class="loading"><span class="spinner"></span>加载中…</div>
@@ -106,13 +106,12 @@ import { api, fmtDuration, fmtTime, toast } from '../api'
 import { copyToClipboard } from '../utils/clipboard'
 
 const props = defineProps({ visible: Boolean, service: { type: Object, default: null }, readOnly: { type: Boolean, default: false } })
-const emit = defineEmits(['close', 'updated', 'deleted'])
+const emit = defineEmits(['close', 'updated'])
 const detail = ref(null), loading = ref(false), editing = ref(false), saving = ref(false), probing = ref(false), hosts = ref([])
 const credentialEditing = ref(false), credentialSaving = ref(false), revealedPasswords = reactive({}), revealTimers = new Map()
 const credentialForm = reactive({ id: '', label: '', username: '', password: '', notes: '', is_default: false })
 const form = reactive({ server_id: '', name: '', category: '', icon: '', entry_url: '', health_url: '', owner: '', documentation_url: '', tagsText: '', description: '', probe_enabled: true, probe_interval_seconds: 60, probe_timeout_seconds: 4, probe_success_statuses: '200-399,401,403', probe_verify_tls: true, probe_failure_threshold: 3, probe_recovery_threshold: 1, probe_notifications_enabled: true })
 const plazaKey = computed(() => props.service?.key || (props.service?.id?.startsWith?.('plaza:') ? props.service.id.slice(6) : ''))
-const isManual = computed(() => !!(detail.value?.manual || props.service?.manual || moduleManual.value))
 const moduleManual = computed(() => props.service?.source === 'manual' && props.service?.id?.startsWith?.('manual:'))
 const url = computed(() => detail.value?.entry_url || detail.value?.url || props.service?.entry_url || props.service?.url || '')
 const statusText = computed(() => ({ online:'在线',up:'在线',offline:'离线',down:'离线',degraded:'异常',disabled:'已停用' }[detail.value?.status || props.service?.status] || '未知'))
@@ -168,7 +167,6 @@ async function saveEdit() {
     saving.value = false
   }
 }
-async function deleteService(){const id=detail.value?.service_id||props.service?.service_id;if(!id||!confirm(`确认归档手动服务「${detail.value?.name||props.service?.name}」？`))return;try{if(moduleManual.value)await api.post(`/modules/service-catalog/api/v1/services/manual/${id}/archive`);else await api.del(`/modules/service-catalog/api/v1/legacy/services/${id}`);toast('手动服务已移出广场','success');emit('deleted');closeDrawer()}catch(error){toast(`操作失败：${error.message}`,'error')}}
 function openCredentialEditor(credential){Object.assign(credentialForm,{id:credential?.id||'',label:credential?.label||'',username:credential?.username||'',password:'',notes:credential?.notes||'',is_default:credential?.is_default||!credentials.value.length});credentialEditing.value=true}
 function cancelCredentialEditor(){credentialEditing.value=false;Object.assign(credentialForm,{id:'',label:'',username:'',password:'',notes:'',is_default:false})}
 async function saveCredential(){if(!credentialForm.label){toast('请填写凭证名称','error');return}credentialSaving.value=true;try{const payload={label:credentialForm.label,username:credentialForm.username,notes:credentialForm.notes,is_default:credentialForm.is_default};if(credentialForm.password)payload.password=credentialForm.password;const base=`/modules/service-catalog/api/v1/services/plaza/${encodeURIComponent(plazaKey.value)}/credentials`;if(credentialForm.id)await api.put(`${base}/${credentialForm.id}`,payload);else await api.post(base,payload);cancelCredentialEditor();await loadDetail();emit('updated',detail.value);toast('登录凭证已保存','success')}catch(error){toast(`凭证保存失败：${error.message}`,'error')}finally{credentialSaving.value=false}}

@@ -30,14 +30,6 @@ def get(path: str, query: dict | None = None):
         raise HTTPException(502, "服务目录数据源暂不可用") from error
 
 
-def scan_source(authorization: str):
-    result = forward_legacy("POST", "/scan", authorization,
-                            timeout=float(os.getenv("SERVICE_CATALOG_SCAN_TIMEOUT_SECONDS", "180")))
-    if not isinstance(result, dict):
-        raise HTTPException(502, "服务扫描响应格式无效")
-    return result
-
-
 def forward_legacy(method: str, path: str, authorization: str, query: dict | None = None,
                    payload: dict | None = None, timeout: float = 8):
     url = os.getenv("SERVICE_CATALOG_SOURCE_URL", "http://backend:9091/api/v2").rstrip("/") + path
@@ -96,6 +88,7 @@ def services_snapshot(include_hidden: bool = False):
                 item["url"] = override["entry_url"]
     rows.sort(key=lambda item: (preferences.get(item.get("key"), {}).get("sort_order") is None,
                                 preferences.get(item.get("key"), {}).get("sort_order") or 0))
+    rows = [item for item in rows if not item.get("deleted")]
     visible = rows if include_hidden else [item for item in rows if not preferences.get(item.get("key"), {}).get("hidden")]
     return visible, collected_at
 
@@ -185,7 +178,7 @@ def require_service_key(service_key: str):
 
 def module_health_overview(hours: int):
     now = datetime.now(timezone.utc)
-    services, collected_at = services_snapshot(include_hidden=True)
+    services, collected_at = services_snapshot()
     store = CatalogStore()
     local_health = store.probe_summaries(hours)
     cached_health = store.read_snapshot(f"health-overview:{hours}")
@@ -308,11 +301,11 @@ def readiness_provider():
 
 app = create_module_app(
     key="service-catalog",
-    version="0.7.2",
+    version="0.7.4",
     summary_provider=summary_provider,
     findings_provider=findings_provider,
     readiness_provider=readiness_provider,
-    capabilities=["summary:read", "findings:read", "services:read", "services:scan", "services:create", "services:update", "services:archive", "services:order", "services:visibility", "credentials:manage", "services:probe", "incidents:manage"],
+    capabilities=["summary:read", "findings:read", "services:read", "services:create", "services:update", "services:delete", "services:archive", "services:order", "services:visibility", "credentials:manage", "services:probe", "incidents:manage"],
 )
 auth = ModuleAuth(CatalogStore)
 auth.register(app)
@@ -439,16 +432,13 @@ def list_services():
     return services_snapshot()[0]
 
 
-@app.post("/api/v1/scan")
-def scan_services(request: FastAPIRequest, user=Depends(app.state.require_editor)):
-    result = scan_source(request.headers.get("authorization", ""))
-    try:
-        data = get("/services/plaza")
-        if isinstance(data, list):
-            CatalogStore().save_snapshot("services", data, datetime.now(timezone.utc))
-    except HTTPException:
-        pass
-    return result
+@app.delete("/api/v1/services/plaza/{plaza_key}")
+def delete_catalog_service(plaza_key: str, user=Depends(app.state.require_editor)):
+    if plaza_key not in {item.get("key") for item in services_snapshot(include_hidden=True)[0]}:
+        raise HTTPException(404, "服务不存在")
+    # Keep a tombstone outside the imported snapshot so a refresh cannot recreate the entry.
+    CatalogStore().update_profile(plaza_key, {"deleted": True, "probe_enabled": False}, user["username"])
+    return {"ok": True}
 
 
 @app.get("/api/v1/services/plaza/{plaza_key}/detail")
