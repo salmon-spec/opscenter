@@ -137,8 +137,9 @@ h2{margin:0;font-size:15px}
 .form-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-top:12px}
 .form-card h2{margin-bottom:8px}
 form{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(185px,1fr));align-items:end}
+.grid2{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
 label{font-size:12px;color:var(--muted);display:grid;gap:4px}
-input,select{font:inherit;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:#fbfcfe;color:var(--text)}
+input,select,textarea{font:inherit;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:#fbfcfe;color:var(--text)}
 .note{font-size:12px;color:var(--muted);margin:8px 0 0}
 code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11.5px}
 .state{margin-top:14px;font-size:12.5px;color:var(--muted);min-height:18px}
@@ -198,7 +199,7 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
 <!-- ======================= Tab 2：通知设置 ======================= -->
 <div id="view-notify" hidden>
   <section>
-    <div class="sec-head"><h2>通知人</h2><span class="hint" id="targets-hint">加载中…</span></div>
+    <div class="sec-head"><h2>通知人</h2><button class="btn ghost" id="test-all">测试所有启用目标</button><span class="hint" id="targets-hint">加载中…</span></div>
     <div class="persons" id="targets"></div>
   </section>
 
@@ -208,7 +209,7 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
     <form onsubmit="return false">
       <label>名称<input id="f-name" placeholder="如：秋水的微信"></label>
       <label>通知方式<select id="f-type"></select></label>
-      <label>地址 / Key<input id="f-target" placeholder="按上方说明填写"></label>
+      <label>地址 / Key<textarea id="f-target" rows="2" placeholder="可粘贴多个收件人，每行一个；也可用逗号或分号分隔"></textarea></label>
       <label>接收级别<select id="f-sev">
         <option value="warning" selected>警告及以上（推荐）</option>
         <option value="critical">仅严重</option>
@@ -218,6 +219,33 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
         <button class="btn" id="f-save">保存</button>
         <button class="btn ghost" id="f-reset" type="button">清空</button>
       </div>
+    </form>
+    <div id="pushplus-fields" hidden style="margin-top:14px">
+      <h2>PushPlus 发送选项</h2>
+      <p class="note" style="margin:4px 0 12px">默认微信公众号渠道。好友消息需先添加好友并填写好友令牌，多个令牌用英文逗号分隔。Webhook、企业微信应用等需填写 PushPlus 后台渠道编码；好友令牌与群组编码不能同时填写。</p>
+      <div class="grid2">
+        <label>发送渠道<select id="f-push-channel">
+          <option value="wechat">微信公众号</option><option value="app">PushPlus App</option><option value="extension">浏览器/桌面插件</option>
+          <option value="webhook">Webhook</option><option value="clawbot">微信 ClawBot</option><option value="cmcc">新消息 ClawBot</option>
+          <option value="qq">QQ 机器人</option><option value="cp">企业微信应用</option><option value="mail">PushPlus 邮箱</option>
+          <option value="sms">PushPlus 短信</option><option value="voice">语音</option>
+        </select></label>
+        <label>渠道编码 / option<input id="f-push-option" placeholder="按 PushPlus 后台渠道配置填写"></label>
+        <label>好友令牌 / to<input id="f-push-to" placeholder="多个令牌用英文逗号分隔"></label>
+        <label>群组编码 / topic<input id="f-push-topic" placeholder="一对多群组编码"></label>
+        <label>PushPlus 消息模板<select id="f-push-template"><option value="html">HTML</option><option value="markdown">Markdown</option><option value="txt">纯文本</option><option value="json">JSON</option></select></label>
+      </div>
+    </div>
+    <p class="note">多个地址会分别保存为通知人，告警会发送给每个已启用且级别匹配的通知人；可单独测试，也可测试全部启用目标。</p>
+  </div>
+
+  <div class="form-card">
+    <h2>消息格式</h2>
+    <p class="note" style="margin:4px 0 12px">可用变量：<code>{title}</code> 标题、<code>{summary}</code> 摘要、<code>{severity}</code> 级别、<code>{observed_at}</code> 时间、<code>{alert_id}</code> 编号、<code>{url}</code> 详情链接、<code>{action_label}</code> 动作、<code>{icon}</code> 图标。</p>
+    <form onsubmit="return false">
+      <label>消息标题<input id="s-title-template" placeholder="{icon} {action_label}｜{title}"></label>
+      <label style="grid-column:1/-1">消息正文<textarea id="s-body-template" rows="5" placeholder="{title}\n{summary}\n触发时间：{observed_at}\n告警 ID：{alert_id}\n查看详情：{url}\n来源：OpsCenter 电费监测模块"></textarea></label>
+      <div><button class="btn" id="template-save">保存消息格式</button></div>
     </form>
   </div>
 
@@ -500,6 +528,8 @@ async function loadNotify() {
     $('s-user').value = data.settings?.username || '';
     $('s-pass').value = data.settings?.password || '';
     $('s-from').value = data.settings?.mail_from || '';
+    $('s-title-template').value = data.settings?.title_template || '';
+    $('s-body-template').value = data.settings?.body_template || '';
     $('s-sms').value = data.settings?.sms_webhook || '';
     $('s-sign').value = data.settings?.sms_sign || '';
     $('s-tpl').value = data.settings?.sms_template || '';
@@ -507,33 +537,74 @@ async function loadNotify() {
 }
 
 $('f-save').onclick = async () => {
+  const kind = $('f-type').value;
+  const raw = $('f-target').value.trim();
+  const addresses = editing || kind.startsWith('apprise_') ? [raw] : raw.split(/[\\n,;，；]+/).map(value => value.trim()).filter(Boolean);
   const payload = {
     id: editing || '',
     name: $('f-name').value.trim(),
-    type: $('f-type').value,
-    target: $('f-target').value.trim(),
+    type: kind,
     min_severity: $('f-sev').value,
+    extra: kind === 'wechat_pushplus' ? {
+      pushplus_channel: $('f-push-channel').value,
+      pushplus_option: $('f-push-option').value.trim(),
+      pushplus_to: $('f-push-to').value.trim(),
+      pushplus_topic: $('f-push-topic').value.trim(),
+      pushplus_template: $('f-push-template').value,
+    } : {},
   };
-  if (!payload.target && !editing) return setState('地址不能为空', true);
+  if (!addresses.length) return setState('地址不能为空', true);
+  let savedCount = 0;
   try {
-    await request(`${API}/notify/targets`, 'POST', payload);
-    setState(editing ? '通知人已更新' : '通知人已添加');
+    for (const [index, address] of addresses.entries()) {
+      await request(`${API}/notify/targets`, 'POST', {
+        ...payload, id: editing || '', target: address,
+        name: addresses.length > 1 ? `${payload.name || '通知人'} ${index + 1}` : payload.name,
+      });
+      savedCount++;
+    }
+    setState(editing ? '通知人已更新' : `已保存 ${addresses.length} 个通知人`);
     editing = null; $('f-name').value = ''; $('f-target').value = '';
     $('f-target').placeholder = TARGET_HINT[$('f-type').value] || '按上方说明填写';
     $('form-title').textContent = '添加通知人';
+    $('pushplus-fields').hidden = true;
     await loadNotify();
-  } catch (e) { setState(`保存失败：${e.message}`, true); }
+  } catch (e) { setState(`${savedCount ? `已保存 ${savedCount} 个；` : ''}保存失败：${e.message}`, true); }
 };
 
 $('f-reset').onclick = () => {
   editing = null; $('f-name').value = ''; $('f-target').value = '';
   $('f-target').placeholder = TARGET_HINT[$('f-type').value] || '按上方说明填写';
   $('form-title').textContent = '添加通知人';
+  $('pushplus-fields').hidden = true;
+  $('f-push-option').value = ''; $('f-push-to').value = ''; $('f-push-topic').value = '';
+  $('f-push-channel').value = 'wechat'; $('f-push-template').value = 'html';
 };
 
 $('f-type').onchange = () => {
+  $('pushplus-fields').hidden = $('f-type').value !== 'wechat_pushplus';
   $('f-target').placeholder = editing ? '切换方式时需填写新地址' :
     (TARGET_HINT[$('f-type').value] || '按上方说明填写');
+};
+
+$('template-save').onclick = async () => {
+  try {
+    await request(`${API}/notify/settings`, 'POST', {
+      title_template: $('s-title-template').value,
+      body_template: $('s-body-template').value,
+    });
+    setState('消息格式已保存');
+  } catch (e) { setState(`保存失败：${e.message}`, true); }
+};
+
+$('test-all').onclick = async (event) => {
+  const button = event.currentTarget; button.disabled = true;
+  try {
+    const result = await request(`${API}/notify/test`, 'POST', {});
+    const failed = (result.results || []).filter((item) => !item.ok).length;
+    setState(`已测试 ${result.sent} 个目标` + (failed ? `，${failed} 个失败` : '，请查收'));
+  } catch (e) { setState(`测试失败：${e.message}`, true); }
+  finally { button.disabled = false; }
 };
 
 $('s-save').onclick = async () => {
@@ -572,6 +643,12 @@ $('targets').addEventListener('click', async (event) => {
       $('f-target').value = '';
       $('f-target').placeholder = `留空保留原地址（${item.target_masked || '已保存'}）`;
       $('f-sev').value = item.min_severity || 'warning';
+      $('pushplus-fields').hidden = item.type !== 'wechat_pushplus';
+      $('f-push-channel').value = item.extra?.pushplus_channel || 'wechat';
+      $('f-push-option').value = item.extra?.pushplus_option || '';
+      $('f-push-to').value = item.extra?.pushplus_to || '';
+      $('f-push-topic').value = item.extra?.pushplus_topic || '';
+      $('f-push-template').value = item.extra?.pushplus_template || 'html';
       $('form-title').textContent = `编辑通知人：${item.name}`;
       selectView('notify');
     }

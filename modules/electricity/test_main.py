@@ -126,6 +126,7 @@ def test_overview_requires_configuration_and_returns_snapshot(monkeypatch):
 def test_module_contract_and_page():
     info = client.get("/api/v1/module").json()
     assert info["key"] == "electricity"
+    assert info["version"] == "0.7.8"
     assert "electricity:read" in info["capabilities"]
     assert client.get("/health/live").json()["status"] == "ok"
     page = client.get("/ui")
@@ -952,10 +953,27 @@ def test_page_contains_new_sections():
     assert "近 7 天" not in page and "近 14 天" not in page
 
 
+def test_rendered_page_javascript_compiles():
+    import re
+    import shutil
+    import subprocess
+
+    page = client.get("/ui").text
+    assert "raw.split(/[\\n,;，；]+/)" in page
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required for the rendered JavaScript syntax check")
+    script = re.search(r"<script>(.*?)</script>", page, re.S).group(1)
+    result = subprocess.run([node, "--check"], input=script, text=True,
+                            encoding="utf-8", capture_output=True)
+    assert result.returncode == 0, result.stderr
+
+
 def test_notify_page_contains_target_management():
     page = client.get("/ui/notify").text
     for fragment in ("通知设置", "通知人", "短信", "邮箱", "飞书",
-                     "Server", "PushPlus", "notify/targets", "notify/test"):
+                     "Server", "PushPlus", "notify/targets", "notify/test",
+                     "测试所有启用目标", "消息格式", "好友令牌 / to", "群组编码 / topic"):
         assert fragment in page
 
 
@@ -1165,6 +1183,7 @@ async def test_apprise_sms_delivery_is_short_and_uses_bundled_library(monkeypatc
                "twilio://ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb@+15550000000/+8613800000000"}
     result = await notify._send_apprise(channel, "电费告警", "标题\n\n" + "用电异常" * 40, 3)
     assert result["ok"] is True and len(captured["body"]) <= 65
+    assert "用电异常" in captured["body"]
     assert "bbbbbbbb" not in str(result)
 
 
@@ -1201,10 +1220,13 @@ def test_notify_settings_mask_password(tmp_path, monkeypatch):
     monkeypatch.setattr(main.store, "save_notify_config", store.save_notify_config)
     assert client.post("/api/v1/notify/settings", json={
         "smtp_host": "smtp.example.com", "smtp_port": "465",
-        "username": "u", "password": "secret", "mail_from": "a@b.c"}).status_code == 200
+        "username": "u", "password": "secret", "mail_from": "a@b.c",
+        "title_template": "{title}", "body_template": "{summary}"}).status_code == 200
     listed = client.get("/api/v1/notify/targets").json()
     assert listed["settings"]["smtp_host"] == "smtp.example.com"
     assert listed["settings"]["password"] == "***"
+    assert listed["settings"]["title_template"] == "{title}"
+    assert listed["settings"]["body_template"] == "{summary}"
     assert client.post("/api/v1/notify/settings", json={
         "sms_webhook": "https://gateway.example/send?token=secret", "sms_sign": "private-sign"}).status_code == 200
     listed = client.get("/api/v1/notify/targets").json()
@@ -1361,8 +1383,70 @@ def test_pushplus_payload_uses_html_template():
     assert plan["url"].endswith("/send") and "<br/>" in plan["json"]["content"]
 
 
-def test_disabled_target_is_skipped():
-    notify.import_targets([{"id": "t1", "name": "停用", "type": "wechat_serverchan",
-                            "target": "SCT", "enabled": False}], {})
-    assert notify.destinations() == []
+def test_pushplus_payload_supports_channel_friends_and_group():
+    plan = notify.build_channel_payload({
+        "type": "wechat_pushplus", "token": "sender", "pushplus_channel": "mail",
+        "pushplus_to": "friend-a,friend-b", "pushplus_template": "markdown",
+        "pushplus_option": "mail-code", "_message_title": "自定义标题",
+    }, "line1\nline2", {"id": "x", "severity": "info", "title": "t"}, "firing")
+    assert plan["json"] == {
+        "token": "sender", "title": "自定义标题", "content": "line1\nline2", "template": "markdown",
+        "channel": "mail", "to": "friend-a,friend-b", "option": "mail-code",
+    }
+
+
+def test_notification_templates_are_operator_configurable(monkeypatch):
+    notify.import_targets([], {
+        "title_template": "{severity}:{title}",
+        "body_template": "{summary} at {observed_at} ({alert_id})",
+    })
+    event = {"action": "firing", "alert": {
+        "id": "electricity:test", "severity": "critical", "title": "余额不足",
+        "summary": "请充值", "observed_at": "2026-10-19T01:00:00+00:00",
+    }}
+    assert notify.render_title(event) == "critical:余额不足"
+    body = notify.render_text(event)
+    assert body.startswith("请充值 at 2026-10-19 09:00:00") and body.endswith("(electricity:test)")
     notify.import_targets([], {})
+
+
+def test_pushplus_rejects_friend_and_topic_together(tmp_path, monkeypatch):
+    store = _notify_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(main.store, "notify_config", store.notify_config)
+    monkeypatch.setattr(main.store, "save_notify_config", store.save_notify_config)
+    response = client.post("/api/v1/notify/targets", json={
+        "name": "PushPlus", "type": "wechat_pushplus", "target": "sender-token",
+        "extra": {"pushplus_to": "friend-token", "pushplus_topic": "group-code"},
+    })
+    assert response.status_code == 400
+
+
+def test_pushplus_target_settings_are_masked_and_preserved_on_edit(tmp_path, monkeypatch):
+    store = _notify_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(main.store, "notify_config", store.notify_config)
+    monkeypatch.setattr(main.store, "save_notify_config", store.save_notify_config)
+    created = client.post("/api/v1/notify/targets", json={
+        "name": "好友", "type": "wechat_pushplus", "target": "sender-token",
+        "extra": {"pushplus_channel": "wechat", "pushplus_to": "friend-secret"},
+    })
+    assert created.status_code == 200
+    target_id = store.notify_config()["targets"][0]["id"]
+    listed = client.get("/api/v1/notify/targets").json()["targets"][0]
+    assert listed["extra"]["pushplus_to"] == "***"
+    assert "friend-secret" not in str(listed)
+    updated = client.post("/api/v1/notify/targets", json={
+        "id": target_id, "type": "wechat_pushplus", "target": "",
+        "extra": {"pushplus_to": "***", "pushplus_option": "***"},
+    })
+    assert updated.status_code == 200
+    assert store.notify_config()["targets"][0]["extra"]["pushplus_to"] == "friend-secret"
+    assert client.post("/api/v1/notify/targets", json={
+        "name": "群组", "type": "wechat_pushplus", "target": "sender-token-2",
+        "extra": {"pushplus_topic": "topic-secret", "unlisted_secret": "never-return"},
+    }).status_code == 200
+    group = client.get("/api/v1/notify/targets").json()["targets"][1]
+    assert group["extra"]["pushplus_topic"] == "***"
+    assert "topic-secret" not in str(group) and "never-return" not in str(group)
+    assert client.post("/api/v1/notify/targets", json={
+        "type": "wechat_pushplus", "target": "sender-token", "extra": {"pushplus_channel": "mail"},
+    }).status_code == 400

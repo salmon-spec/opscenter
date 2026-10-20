@@ -30,6 +30,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import smtplib
 import ssl
 import time
@@ -260,38 +261,51 @@ def _record_result(key: str, ok: bool, error: str | None, now: datetime) -> None
 # --------------------------------------------------------------------------- #
 # message rendering
 # --------------------------------------------------------------------------- #
-def render_text(event: dict, extra_lines: list[str] | None = None) -> str:
-    action = event.get("action", "firing")
+def _template_value(template: str, values: dict) -> str:
+    return re.sub(r"\{([a-zA-Z_]+)\}", lambda match: str(values.get(match.group(1), match.group(0))), template)
+
+
+def _template_values(event: dict) -> dict:
     alert = event.get("alert") or event
+    action = event.get("action", "firing")
     severity = alert.get("severity", "warning")
-    icon = ICONS.get(severity, "⚠️")
-    lines = [f"{icon} {ACTION_TITLES.get(action, '电费告警')}｜{alert.get('title', '')}", ""]
-    if alert.get("summary"):
-        lines.append(str(alert["summary"]))
+    observed_text = ""
     observed = alert.get("observed_at")
     if observed:
         try:
             stamp = observed if isinstance(observed, str) else observed.isoformat(timespec="seconds")
             when = datetime.fromisoformat(stamp)
             when = when if when.tzinfo else when.replace(tzinfo=timezone.utc)
-            lines.append(f"触发时间：{when.astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S')}（北京时间）")
+            observed_text = when.astimezone(TZ).strftime("%Y-%m-%d %H:%M:%S（北京时间）")
         except (TypeError, ValueError):
             pass
-    lines.append(f"告警 ID：{alert.get('id', '-')}")
-    for line in extra_lines or []:
-        lines.append(line)
-    url = alert_url()
-    if url:
-        lines.append(f"查看详情：{url}")
-    lines.append("来源：OpsCenter 电费监测模块")
+    return {"icon": ICONS.get(severity, "⚠️"), "action_label": ACTION_TITLES.get(action, "电费告警"),
+            "title": alert.get("title", ""), "summary": alert.get("summary", ""),
+            "severity": severity, "action": action, "observed_at": observed_text,
+            "alert_id": alert.get("id", "-"), "url": alert_url()}
+
+
+def render_title(event: dict) -> str:
+    values = _template_values(event)
+    template = str(_settings.get("title_template") or "{icon} {action_label}｜{title}")
+    return _template_value(template, values)[:200]
+
+
+def render_text(event: dict, extra_lines: list[str] | None = None) -> str:
+    values = _template_values(event)
+    default = "{title}\n{summary}\n触发时间：{observed_at}\n告警 ID：{alert_id}\n查看详情：{url}\n来源：OpsCenter 电费监测模块"
+    body = _template_value(str(_settings.get("body_template") or default), values).strip()
+    body = "\n".join(line for line in body.splitlines() if not line.endswith("："))
+    lines = [body] if body else []
+    lines.extend(extra_lines or [])
     return "\n".join(lines)
 
 
-def _feishu_card(text: str, alert: dict, action: str) -> dict:
+def _feishu_card(text: str, alert: dict, action: str, title: str | None = None) -> dict:
     severity = alert.get("severity", "warning")
-    title = f"{ICONS.get(severity, '⚠️')} {ACTION_TITLES.get(action, '电费告警')}｜{alert.get('title', '')}"
+    title = title or f"{ICONS.get(severity, '⚠️')} {ACTION_TITLES.get(action, '电费告警')}｜{alert.get('title', '')}"
     fields = [
-        {"is_short": False, "text": {"tag": "lark_md", "content": str(alert.get("summary") or "")}},
+        {"is_short": False, "text": {"tag": "lark_md", "content": text}},
     ]
     details = alert.get("details") or {}
     if isinstance(details, dict) and details:
@@ -321,17 +335,16 @@ def build_channel_payload(channel: dict, text: str, alert: dict, action: str) ->
     """Request description for one channel: ``{method, url, json|data|headers}``."""
     kind = channel.get("type")
     icon = ICONS.get(alert.get("severity", "warning"), "⚠️")
-    title = f"{icon} {ACTION_TITLES.get(action, '电费告警')}"
+    title = channel.get("_message_title") or f"{icon} {ACTION_TITLES.get(action, '电费告警')}"
 
     if kind == "feishu":
         url = channel.get("webhook", "")
         use_card = str(channel.get("card", os.getenv("ELECTRICITY_NOTIFY_FEISHU_CARD", "true"))
                        ).lower() not in {"0", "false", "no"}
         if use_card:
-            payload: dict = {"msg_type": "interactive", "card": _feishu_card(text, alert, action)}
+            payload: dict = {"msg_type": "interactive", "card": _feishu_card(text, alert, action, title)}
         else:
-            body = "\n".join(text.splitlines()[2:]) if len(text.splitlines()) > 2 else text
-            payload = {"msg_type": "text", "content": {"text": f"{title}｜{alert.get('title', '')}\n\n{body}"}}
+            payload = {"msg_type": "text", "content": {"text": f"{title}\n\n{text}"}}
         secret = channel.get("secret") or ""
         if secret:
             stamp = str(int(time.time()))
@@ -345,7 +358,7 @@ def build_channel_payload(channel: dict, text: str, alert: dict, action: str) ->
     if kind == "wecom":
         return {"method": "POST", "url": channel.get("webhook", ""),
                 "json": {"msgtype": "markdown",
-                         "markdown": {"content": f"**{title}｜{alert.get('title', '')}**\n{text}"}}}
+                         "markdown": {"content": f"**{title}**\n{text}"}}}
 
     if kind == "dingtalk":
         url = channel.get("webhook", "")
@@ -360,21 +373,25 @@ def build_channel_payload(channel: dict, text: str, alert: dict, action: str) ->
         return {"method": "POST", "url": url,
                 "json": {"msgtype": "markdown",
                          "markdown": {"title": title,
-                                      "text": f"### {title}｜{alert.get('title', '')}\n\n{text}"}}}
+                                      "text": f"### {title}\n\n{text}"}}}
 
     if kind in {"wechat_serverchan", "serverchan"}:
         key = channel.get("sendkey") or channel.get("webhook", "")
         url = key if str(key).startswith("http") else f"https://sctapi.ftqq.com/{key}.send"
         return {"method": "POST", "url": url,
-                "data": {"title": f"{title}｜{alert.get('title', '')}", "desp": text}}
+                "data": {"title": title, "desp": text}}
 
     if kind == "wechat_pushplus":
         token = channel.get("token") or channel.get("webhook", "")
+        template = channel.get("pushplus_template") or "html"
+        content = text.replace("\n", "<br/>") if template == "html" else text
+        payload = {"token": token, "title": title, "content": content, "template": template}
+        for key in ("pushplus_channel", "pushplus_option", "pushplus_to", "pushplus_topic"):
+            value = channel.get(key)
+            if value:
+                payload[key.removeprefix("pushplus_")] = value
         return {"method": "POST", "url": "https://www.pushplus.plus/send",
-                "json": {"token": token,
-                         "title": f"{title}｜{alert.get('title', '')}",
-                         "content": text.replace("\n", "<br/>"),
-                         "template": "html"}}
+                "json": payload}
 
     if kind == "sms":
         # Generic contract: a gateway (e.g. the standalone module-sms) that
@@ -514,7 +531,12 @@ async def _send_apprise(channel: dict, title: str, text: str, timeout: float) ->
                                                             service_timeout=timeout))
         if not service.add(url) or len(service) != 1:
             return {"ok": False, "status": 0, "body": "Apprise 通道配置无效"}
-        body = text if kind != "apprise_sms" else f"{title} {text.splitlines()[2] if len(text.splitlines()) > 2 else ''}"[:65]
+        if kind == "apprise_sms":
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            summary = lines[1] if len(lines) > 1 else (lines[0] if lines and lines[0] != title else "")
+            body = f"{title} {summary}".strip()[:65]
+        else:
+            body = text
         result = await asyncio.wait_for(service.async_notify(title=title if kind != "apprise_sms" else "",
                                                                body=body), timeout=timeout + 5)
         return {"ok": bool(result), "status": 0,
@@ -556,10 +578,11 @@ async def deliver(events: list[dict], extra_lines: list[str] | None = None,
                                     "body": "circuit open", "skipped": True})
                     continue
                 try:
+                    channel = {**channel, "_message_title": render_title(event)}
                     if kind in APPRISE_SCHEMES:
-                        outcome = await _send_apprise(channel, f"电费告警｜{alert.get('title', '')}", text, timeout)
+                        outcome = await _send_apprise(channel, channel["_message_title"], text, timeout)
                     elif kind == "email":
-                        outcome = await _send_email(channel, f"电费告警｜{alert.get('title', '')}",
+                        outcome = await _send_email(channel, channel["_message_title"],
                                                    text, timeout)
                     else:
                         plan = build_channel_payload(channel, text, alert, event.get("action", "firing"))

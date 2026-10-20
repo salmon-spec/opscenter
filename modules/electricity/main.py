@@ -29,7 +29,7 @@ from page import render_page  # merged page: tabs [电费监测 | 通知设置]
 from runtime.app import create_module_app
 from storage import ElectricityStore
 
-VERSION = "0.7.6"
+VERSION = "0.7.8"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -660,7 +660,16 @@ def list_notify_targets():
         entry = dict(item)
         entry["target_masked"] = _mask_target(str(item.get("type")), str(item.get("target") or ""))
         entry.pop("target", None)
-        entry.pop("extra", None)
+        raw_extra = item.get("extra")
+        extra = dict(raw_extra) if isinstance(raw_extra, dict) else {}
+        if item.get("type") == "wechat_pushplus":
+            entry["extra"] = {key: ("***" if extra.get(key) else "")
+                              if key in {"pushplus_to", "pushplus_option", "pushplus_topic"}
+                              else extra[key]
+                              for key in ("pushplus_channel", "pushplus_template", "pushplus_to",
+                                          "pushplus_option", "pushplus_topic") if key in extra}
+        else:
+            entry.pop("extra", None)
         masked.append(entry)
     settings = dict(config.get("settings") or {})
     for secret_key in ("password", "sms_sign", "sms_webhook"):
@@ -700,6 +709,28 @@ def upsert_notify_target(payload: dict = Body(default={})):
         raise HTTPException(400, "通知地址不能为空")
     if kind in notify.APPRISE_SCHEMES and not notify.valid_apprise_url(kind, target_value):
         raise HTTPException(400, "Apprise 地址与所选通知方式不匹配")
+    raw_extra = existing.get("extra") if existing else None
+    extra = dict(raw_extra) if isinstance(raw_extra, dict) else {}
+    if isinstance(payload.get("extra"), dict):
+        for key, value in payload["extra"].items():
+            if key in {"pushplus_channel", "pushplus_option", "pushplus_to", "pushplus_topic", "pushplus_template"}:
+                if value not in (None, "", "***"):
+                    extra[key] = str(value).strip()
+                elif key in extra and value == "":
+                    extra.pop(key, None)
+    pushplus_channels = {"wechat", "app", "extension", "webhook", "clawbot", "cmcc", "qq", "cp", "mail", "sms", "voice"}
+    if kind == "wechat_pushplus":
+        channel = extra.get("pushplus_channel", "wechat")
+        if channel not in pushplus_channels:
+            raise HTTPException(400, "PushPlus 渠道无效")
+        if channel in {"webhook", "cp", "mail", "qq"} and not extra.get("pushplus_option"):
+            raise HTTPException(400, "当前 PushPlus 渠道需要填写渠道编码 / option")
+        if extra.get("pushplus_template", "html") not in {"html", "markdown", "txt", "json"}:
+            raise HTTPException(400, "PushPlus 消息模板类型无效")
+        if len(str(extra.get("pushplus_to") or "").split(",")) > 100:
+            raise HTTPException(400, "好友接收令牌最多填写 100 个")
+        if extra.get("pushplus_to") and extra.get("pushplus_topic"):
+            raise HTTPException(400, "好友令牌与群组编码不能同时填写")
     name = str(payload.get("name") or "").strip() or (str(existing.get("name") or "") if existing else kind)
     updated = False
     for item in config["targets"]:
@@ -707,8 +738,7 @@ def upsert_notify_target(payload: dict = Body(default={})):
             item.update({
                 "name": name, "type": kind, "target": target_value, "min_severity": severity,
                 "enabled": bool(payload.get("enabled", item.get("enabled", True))),
-                "extra": payload.get("extra") if isinstance(payload.get("extra"), dict)
-                         else item.get("extra") or {},
+                "extra": extra,
             })
             updated = True
             break
@@ -716,7 +746,7 @@ def upsert_notify_target(payload: dict = Body(default={})):
         config["targets"].append({
             "id": uuid.uuid4().hex[:12], "name": name, "type": kind, "target": target_value,
             "min_severity": severity, "enabled": bool(payload.get("enabled", True)),
-            "extra": payload.get("extra") if isinstance(payload.get("extra"), dict) else {},
+            "extra": extra,
         })
     store.save_notify_config(config)
     return {"ok": True, "updated": updated, "count": len(config["targets"])}
@@ -751,10 +781,14 @@ def toggle_notify_target(payload: dict = Body(default={})):
 @app.post("/api/v1/notify/settings")
 def save_notify_settings(payload: dict = Body(default={})):
     """SMTP credentials for email targets + the generic SMS gateway address."""
+    if len(str(payload.get("title_template") or "")) > 200:
+        raise HTTPException(400, "消息标题模板最多 200 个字符")
+    if len(str(payload.get("body_template") or "")) > 4000:
+        raise HTTPException(400, "消息正文模板最多 4000 个字符")
     config = store.notify_config()
     settings = dict(config.get("settings") or {})
     for key in ("smtp_host", "smtp_port", "username", "password", "mail_from",
-                "sms_webhook", "sms_sign", "sms_template"):
+                "sms_webhook", "sms_sign", "sms_template", "title_template", "body_template"):
         if key in payload:
             value = payload.get(key)
             if key in {"password", "sms_sign", "sms_webhook"} and value in (None, "", "***"):

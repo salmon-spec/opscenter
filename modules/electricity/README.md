@@ -1,4 +1,6 @@
-# electricity — 国家电网电费监测模块（v0.7.6）
+# electricity — 国家电网电费监测模块（v0.7.8）
+
+`0.7.8` 修复多收件人分隔表达式被 Python 转义后使页面脚本停止的问题；回归测试直接编译 `/ui` 返回的实际 JavaScript。
 
 独立业务模块，把一个户号的电费余额、最近账单和逐日用电纳入运维工作台，
 并在余额/欠费/阶梯升档/预算超支/采集异常时主动推送提醒。
@@ -164,4 +166,3 @@ cd modules && python -m pytest electricity/test_main.py -q
 其他模块与工作台入口不受影响。
 仅回滚 v0.2.0 功能时：把镜像 tag 改回上一版并恢复 ConfigMap 挂载即可，
 `alerts.json` / `alert_history.jsonl` 为新增文件，旧版本会忽略它们。
-
