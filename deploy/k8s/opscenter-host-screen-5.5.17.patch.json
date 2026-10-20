@@ -1,0 +1,1 @@
+{"spec":{"template":{"metadata":{"annotations":{"opscenter.io/host-screen-version":"5.5.17"}},"spec":{"volumes":[{"name":"restored-v3-bundle","configMap":{"name":"opscenter-v3-host-screen-20261020-r2"}}]}}}}

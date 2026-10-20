@@ -13,7 +13,16 @@
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body { background: var(--bg); color: var(--text); font: 13px/1.45 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-    button, input { font: inherit; }
+    button, input, select { font: inherit; }
+    .account-tabs { display: flex; gap: 6px; padding: 10px 16px 0; overflow-x: auto; }
+    .account-tabs:empty { display: none; }
+    .account-tabs button[aria-selected="true"] { border-color: var(--brand); color: var(--brand); background: var(--brand-soft); }
+    .balance-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 12px; }
+    .balance-grid b { display: block; font-size: 30px; margin: 12px 0; }
+    .account-tools { display: flex; gap: 8px; margin-bottom: 12px; }
+    .field select { width: 100%; height: 37px; border: 1px solid var(--border); border-radius: 7px; background: white; padding: 0 10px; }
+    .checks { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 15px; }
+    .checks label { display: flex; gap: 6px; align-items: center; }
     button { cursor: pointer; }
     .app { min-height: 100%; display: flex; flex-direction: column; }
     .head { min-height: 65px; flex: none; display: flex; align-items: center; gap: 14px; padding: 10px 16px; background: #fff; border-bottom: 1px solid var(--border); }
@@ -99,12 +108,13 @@
     .modal { position: fixed; inset: 0; z-index: 50; display: none; place-items: center; padding: 18px; }
     .modal.open { display: grid; }
     .backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, .45); }
-    .dialog { position: relative; width: min(100%, 560px); max-height: min(92vh, 700px); overflow: auto; border: 1px solid var(--border); border-radius: 9px; background: #fff; box-shadow: 0 24px 70px rgba(15, 23, 42, .24); }
+    .dialog { position: relative; width: min(100%, 640px); max-height: min(92vh, 760px); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 9px; background: #fff; box-shadow: 0 24px 70px rgba(15, 23, 42, .24); }
+    .dialog-head, .dialog-actions { flex: none; }
     .dialog-head { min-height: 60px; display: flex; align-items: center; padding: 12px 15px; border-bottom: 1px solid var(--border); }
     .dialog-head h2 { margin: 0; font-size: 16px; }
     .close { width: 31px; height: 31px; margin-left: auto; border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--muted); font-size: 18px; line-height: 1; }
-    .dialog-body { padding: 14px 15px; }
-    .config-current { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 13px; }
+    .dialog-body { padding: 14px 15px; min-height: 0; overflow-y: auto; }
+    .config-current { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 13px 0; }
     .config-current div { min-width: 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 7px; background: #fafbfd; }
     .config-current span, .config-current b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .config-current span { color: var(--muted); font-size: 10px; }
@@ -145,17 +155,19 @@
     <header class="head">
       <div class="head-copy">
         <h1>模型用量</h1>
-        <p id="subtitle">GOAT 套餐 · 只读监控</p>
+        <p id="subtitle">多厂商账户 · 用量与额度</p>
       </div>
       <div class="head-actions">
         <span class="status" id="healthStatus"><i></i><span>连接中</span></span>
-        <button class="btn" id="configButton">配置</button>
+        <button class="btn" id="configButton">账户配置</button>
         <button class="btn" id="refreshButton">刷新</button>
       </div>
     </header>
+    <nav class="account-tabs" id="accountTabs" role="tablist" aria-label="用量账户"></nav>
 
     <main class="workspace">
       <div class="notice" id="notice"></div>
+      <section class="balance-grid" id="balanceGrid" style="display:none"></section>
       <section class="metrics">
         <div class="metric"><span>套餐</span><b id="planValue">-</b><small id="planStatusValue">等待采集</small></div>
         <div class="metric"><span>账期请求</span><b id="requestValue">-</b><small id="periodBasisValue">billing period</small></div>
@@ -191,7 +203,7 @@
           <article class="usage-card"><span>最近 1 小时使用</span><b id="hourUsageValue">-</b><small id="hourUsageMeta">等待本地快照</small></article>
           <article class="usage-card"><span>最近 24 小时使用</span><b id="dayUsageValue">-</b><small id="dayUsageMeta">等待本地快照</small></article>
           <article class="usage-card"><span>最近 7 天使用</span><b id="weekUsageValue">-</b><small id="weekUsageMeta">等待本地快照</small></article>
-          <article class="usage-card"><span>当前账期使用</span><b id="monthUsageValue">-</b><small id="monthUsageMeta">官方账期累计</small></article>
+          <article class="usage-card"><span id="periodUsageLabel">当前账期使用</span><b id="monthUsageValue">-</b><small id="monthUsageMeta">接口统计累计</small></article>
         </section>
 
         <div class="layout">
@@ -271,26 +283,33 @@
     <div class="backdrop" data-close></div>
     <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="configTitle">
       <header class="dialog-head">
-        <div><h2 id="configTitle">Command Code 配置</h2></div>
+        <div><h2 id="configTitle">厂商与 API 账户</h2></div>
         <button class="close" type="button" data-close aria-label="关闭">×</button>
       </header>
       <div class="dialog-body">
+        <div class="account-tools"><button class="btn" id="newAccountButton">＋ 添加账户</button><button class="btn danger" id="deleteAccountButton">移除账户</button></div>
+        <label class="field"><span>管理账户</span><select id="accountSelect" aria-label="管理账户"></select></label>
+        <div class="form-grid">
+          <label class="field"><span>显示名称</span><input id="accountNameInput" maxlength="60" placeholder="例如：DeepSeek 工作账户"></label>
+          <label class="field"><span>厂商</span><select id="providerSelect" aria-label="厂商"><option value="command-code">Command Code</option><option value="opencode-go">OpenCode Go</option><option value="deepseek">DeepSeek</option></select></label>
+        </div>
         <div class="config-current">
           <div><span>当前来源</span><b id="configSourceValue">-</b></div>
           <div><span>API Key</span><b id="configKeyValue">-</b></div>
           <div><span>自动刷新</span><b id="configRefreshValue">-</b></div>
         </div>
-        <label class="field"><span>API Key <small>仅保存在宿主后端</small></span><input id="apiKeyInput" type="password" autocomplete="new-password" placeholder="输入 Command Code API Key"></label>
+        <label class="field"><span>API Key <small>已配置时留空保留；更换厂商或地址需重填</small></span><input id="apiKeyInput" type="password" autocomplete="new-password" placeholder="输入所选厂商的 API Key"></label>
         <label class="field"><span>API Base <small>默认官方接口</small></span><input id="apiBaseInput" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.commandcode.ai"></label>
         <div class="form-grid">
           <label class="field"><span>组织 ID <small>可留空自动发现</small></span><input id="orgIdInput" autocomplete="off" spellcheck="false" placeholder="可选"></label>
           <label class="field"><span>刷新间隔 <small>15-3600 秒</small></span><input id="refreshInput" type="number" min="15" max="3600" step="15" value="60"></label>
         </div>
         <label class="field"><span>请求超时 <small>3-60 秒</small></span><input id="timeoutInput" type="number" min="3" max="60" step="1" value="12"></label>
+        <div class="checks"><label><input type="checkbox" id="defaultAccountInput">默认显示此账户</label><label><input type="checkbox" id="showAccountInput">在顶部显示账户页签</label></div>
+        <p class="note" id="providerHelp"></p>
         <p class="note" id="configNote">API Key 加密保存，保存后不会回显。</p>
       </div>
       <footer class="dialog-actions">
-        <button class="btn danger" id="resetConfigButton" type="button">恢复环境配置</button>
         <span class="spacer"></span>
         <button class="btn" type="button" data-close>取消</button>
         <button class="btn primary" id="saveConfigButton" type="button">保存并验证</button>
@@ -300,7 +319,7 @@
 
   <script>
     const state = {
-      info: {}, config: {}, health: null, loading: false, timer: null,
+      info: {}, config: {}, health: null, loading: false, timer: null, viewId: '', requestVersion: 0, editId: '',
     }
     const pending = new Map()
     let requestId = 0
@@ -327,7 +346,7 @@
     }
 
     function credits(value) {
-      return `$${number(value).toFixed(2)}`
+      return value === null || value === undefined ? '-' : `$${number(value).toFixed(2)}`
     }
 
     function creditValue(value) {
@@ -342,10 +361,12 @@
     }
 
     function integer(value) {
+      if (value === null || value === undefined) return '-'
       return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 }).format(number(value))
     }
 
     function tokens(value) {
+      if (value === null || value === undefined) return '-'
       const size = number(value)
       if (size >= 1e9) return `${(size / 1e9).toFixed(2)}B`
       if (size >= 1e6) return `${(size / 1e6).toFixed(1)}M`
@@ -416,38 +437,99 @@
       node.className = `note${kind ? ` ${kind}` : ''}`
     }
 
+    const providers = {
+      'command-code': { name: 'Command Code', api_base: 'https://api.commandcode.ai', help: '套餐额度、账期请求与 Token；组织 ID 可留空自动发现。' },
+      'opencode-go': { name: 'OpenCode Go', api_base: 'https://opencode.ai/zen/go/v1', help: '读取 5 小时、每周和每月额度百分比与重置时间，不发送模型请求。' },
+      deepseek: { name: 'DeepSeek', api_base: 'https://api.deepseek.com', help: '读取账户余额与充值/赠送余额；公开接口未提供请求数、Token 和账期成本。' },
+    }
+    const accounts = () => state.config.accounts || []
+    const cleanAccount = (a) => Object.fromEntries(['id', 'name', 'provider', 'api_key', 'api_base', 'org_id', 'refresh_interval_seconds', 'timeout_seconds'].map(k => [k, a[k] ?? (k === 'refresh_interval_seconds' ? 60 : k === 'timeout_seconds' ? 12 : '')]))
+
     function renderConfig() {
-      const config = state.config || {}
-      setText('configSourceValue', config.source === 'module' ? '模块配置' : (config.source === 'environment' ? '系统环境' : '-'))
-      setText('configKeyValue', config.api_key_masked || '未配置')
-      setText('configRefreshValue', config.refresh_interval_seconds ? `${config.refresh_interval_seconds} 秒` : '-')
-      el('resetConfigButton').disabled = config.source !== 'module'
-      if (config.api_base) el('apiBaseInput').placeholder = config.api_base
-      if (config.org_id) el('orgIdInput').placeholder = config.org_id
-      if (config.refresh_interval_seconds) el('refreshInput').value = config.refresh_interval_seconds
-      if (config.timeout_seconds) el('timeoutInput').value = config.timeout_seconds
+      const select = el('accountSelect')
+      select.replaceChildren()
+      for (const a of accounts()) select.add(new Option(`${a.name} · ${providers[a.provider]?.name || a.provider}`, a.id))
+      if (!accounts().some(a => a.id === state.editId)) state.editId = state.config.active_account_id || accounts()[0]?.id
+      select.value = state.editId || ''
+      fillAccount()
+      renderTabs()
+    }
+
+    function fillAccount() {
+      const a = accounts().find(a => a.id === state.editId) || { provider: 'command-code' }
+      el('apiKeyInput').value = ''
+      el('accountNameInput').value = a.name || ''
+      el('providerSelect').value = a.provider
+      el('apiBaseInput').value = a.api_base || providers[a.provider].api_base
+      el('orgIdInput').value = a.org_id || ''
+      el('refreshInput').value = a.refresh_interval_seconds || 60
+      el('timeoutInput').value = a.timeout_seconds || 12
+      el('defaultAccountInput').checked = state.config.active_account_id === a.id
+      el('showAccountInput').checked = (state.config.display_account_ids || []).includes(a.id)
+      el('deleteAccountButton').disabled = !a.id || accounts().length < 2
+      el('deleteAccountButton').textContent = '移除账户'
+      setText('configSourceValue', state.config.source === 'environment' ? '系统环境' : '模块加密配置')
+      setText('configKeyValue', a.api_key_masked || '未配置')
+      setText('configRefreshValue', `${a.refresh_interval_seconds || 60} 秒`)
+      providerHelp()
+    }
+
+    function providerHelp() {
+      const id = el('providerSelect').value
+      el('providerHelp').textContent = providers[id].help
+      el('orgIdInput').closest('.field').style.display = id === 'command-code' ? '' : 'none'
+    }
+
+    function clearDashboard() {
+      state.health = null
+      state.requestVersion++
+      state.loading = false
+      el('dashboard').style.display = 'none'
+      el('balanceGrid').style.display = 'none'
+      document.querySelector('.metrics').style.display = 'none'
+      el('loadingState').style.display = 'grid'
+      el('loadingState').textContent = '正在读取所选账户'
+      setNotice('')
+    }
+
+    function renderTabs() {
+      const nav = el('accountTabs')
+      nav.replaceChildren()
+      const shown = accounts().filter(a => (state.config.display_account_ids || []).includes(a.id))
+      if (shown.length > 1) for (const a of shown) {
+        const button = document.createElement('button')
+        button.className = 'btn'
+        button.role = 'tab'
+        button.setAttribute('aria-selected', String(a.id === state.viewId))
+        button.textContent = a.name
+        button.addEventListener('click', () => { state.viewId = a.id; clearDashboard(); renderTabs(); loadHealth(); scheduleRefresh() })
+        nav.append(button)
+      }
+      const a = accounts().find(a => a.id === state.viewId)
+      setText('subtitle', a ? `${a.name} · ${providers[a.provider]?.name || a.provider}` : '请选择账户')
     }
 
     async function loadConfig() {
       try {
         state.config = await request(endpoint('config'))
-      } catch (error) {
-        state.config = { error: error.message }
-        setConfigNote(error.message, 'err')
-      }
-      renderConfig()
-      scheduleRefresh()
+        if (!accounts().some(a => a.id === state.viewId)) state.viewId = state.config.active_account_id
+        renderConfig()
+        scheduleRefresh()
+        await loadHealth()
+      } catch (error) { setNotice(error.message, 'err') }
     }
 
     function renderUsageWindow(key, elementPrefix, history) {
       const item = history?.windows?.[key] || {}
       const hasCredits = item.credits !== null && item.credits !== undefined
-      setText(`${elementPrefix}UsageValue`, hasCredits ? credits(item.credits) : '采集中')
+      setText(`${elementPrefix}UsageValue`, hasCredits ? credits(item.credits) : item.unavailable ? '-' : '采集中')
       const meta = []
       if (item.requests !== null && item.requests !== undefined) meta.push(`${integer(item.requests)} 请求`)
       if (item.tokens !== null && item.tokens !== undefined) meta.push(`${tokens(item.tokens)} Tokens`)
       if (key === 'month') {
         if (item.since) meta.push('官方账期累计')
+      } else if (item.unavailable) {
+        meta.push('接口未提供固定账期，无法计算精确增量')
       } else if (item.complete) {
         meta.push('完整覆盖')
       } else if (item.observed_seconds) {
@@ -470,6 +552,26 @@
       const sampled = Boolean(health.snapshot_only)
       const planName = plan.name || plan.id || '未知套餐'
 
+      const provider = health.provider || 'command-code'
+      const isCommand = provider === 'command-code'
+      const isDeepSeek = provider === 'deepseek'
+      document.querySelector('.metrics').style.display = isCommand ? '' : 'none'
+      document.querySelector('.quota-grid').style.display = isDeepSeek ? 'none' : ''
+      document.querySelector('.usage-grid').style.display = isCommand ? '' : 'none'
+      for (const panel of document.querySelectorAll('.layout > .panel:not(.wide)')) panel.style.display = isCommand ? '' : 'none'
+      el('balanceGrid').replaceChildren()
+      el('balanceGrid').style.display = isDeepSeek ? '' : 'none'
+      if (isDeepSeek) for (const balance of health.balances || []) {
+        const card = document.createElement('article')
+        card.className = 'quota-card'
+        const label = document.createElement('span'), amount = document.createElement('b'), detail = document.createElement('div')
+        label.textContent = `可用余额 · ${balance.currency}`
+        amount.textContent = new Intl.NumberFormat('zh-CN', { style: 'currency', currency: balance.currency }).format(balance.total_balance)
+        detail.textContent = `充值 ${balance.topped_up_balance.toFixed(2)} · 赠送 ${balance.granted_balance.toFixed(2)}`
+        detail.className = 'muted'
+        card.append(label, amount, detail)
+        el('balanceGrid').append(card)
+      }
       setText('planValue', planName)
       setText('planStatusValue', subscribed || '状态未知')
       setText('requestValue', integer(usage.total_count))
@@ -482,7 +584,7 @@
       setText('failedValue', `失败 ${integer(usage.failed_count)}`)
 
       const monthlyPercent = number(credit.usage_percent)
-      setText('monthlyPercentValue', sampled ? '-' : `${monthlyPercent.toFixed(1)}%`)
+      setText('monthlyPercentValue', sampled || credit.usage_percent == null ? '-' : `${monthlyPercent.toFixed(1)}%`)
       setText('monthlyUsedValue', sampled ? '-' : `${creditValue(credit.total_spent)} / ${creditValue(credit.total_pool)}`)
       setText('creditRemainingValue', `剩余 ${creditValue(credit.remaining_total)}`)
       setText('monthlyResetValue', plan.current_period_end ? `重置 ${formatDate(plan.current_period_end)}` : '-')
@@ -497,14 +599,14 @@
       setText('planIdValue', plan.id || '-')
 
       const fivePercent = number(fiveHour.percent)
-      setText('fiveHourPercentValue', sampled ? '-' : `${fivePercent.toFixed(1)}%`)
+      setText('fiveHourPercentValue', sampled || fiveHour.percent == null ? '-' : `${fivePercent.toFixed(1)}%`)
       setText('fiveHourUsedValue', `${creditValue(fiveHour.used)} / ${creditValue(fiveHour.cap)}`)
       setProgress('fiveHourProgress', fivePercent)
       setTag('fiveHourTag', sampled ? '历史采样' : (fiveHour.exceeded ? '已超限' : (windows.limited ? '限速中' : '未启用')), fiveHour.exceeded ? 'err' : 'ok')
       setText('fiveHourResetValue', formatDate(fiveHour.reset_at))
 
       const weeklyPercent = number(weekly.percent)
-      setText('weeklyPercentValue', sampled ? '-' : `${weeklyPercent.toFixed(1)}%`)
+      setText('weeklyPercentValue', sampled || weekly.percent == null ? '-' : `${weeklyPercent.toFixed(1)}%`)
       setText('weeklyUsedValue', `${creditValue(weekly.used)} / ${creditValue(weekly.cap)}`)
       setProgress('weeklyProgress', weeklyPercent)
       setTag('weeklyTag', sampled ? '历史采样' : (weekly.exceeded ? '已超限' : (windows.limited ? '限速中' : '未启用')), weekly.exceeded ? 'err' : 'ok')
@@ -514,6 +616,11 @@
       renderUsageWindow('day', 'day', health.history)
       renderUsageWindow('week', 'week', health.history)
       renderUsageWindow('month', 'month', health.history)
+      setText('periodUsageLabel', usage.period_basis === 'last-30-days' ? '近 30 天累计' : plan.current_period_start ? '当前账期使用' : '接口统计累计')
+      if (isCommand) {
+        for (const [item, tag] of [[fiveHour, 'fiveHourTag'], [weekly, 'weeklyTag']]) if (item.percent == null) setTag(tag, '未提供')
+        if (credit.usage_percent == null) setTag('creditPoolTag', '额度未提供')
+      }
 
       setText('totalCountValue', integer(usage.total_count))
       setText('completedCountValue', integer(usage.completed_count))
@@ -522,13 +629,24 @@
       setText('tokensInValue', tokens(usage.total_tokens_in))
       setText('tokensOutValue', tokens(usage.total_tokens_out))
       setText('tokensTotalValue', tokens(usage.total_tokens))
-      const averageTokens = usage.total_count > 0 ? usage.total_tokens / usage.total_count : 0
+      const averageTokens = usage.total_count > 0 && usage.total_tokens != null ? usage.total_tokens / usage.total_count : null
       setText('tokensAverageValue', tokens(averageTokens))
       setTag('sourceTag', health.source === 'module' ? '模块配置' : '环境变量', health.source === 'module' ? 'brand' : '')
-      setText('accountValue', account.email_masked || account.user_name || '-')
+      setText('accountValue', health.account_name || account.email_masked || account.user_name || '-')
       setText('apiBaseValue', health.api_base || '-')
       setText('checkedAtValue', formatDate(health.checked_at))
       setText('latencyValue', health.latency_ms === null || health.latency_ms === undefined ? '-' : `${number(health.latency_ms).toFixed(0)} ms`)
+      if (provider === 'opencode-go') {
+        for (const [key, prefix] of [['five_hour', 'fiveHour'], ['weekly', 'weekly'], ['monthly', 'monthly']]) {
+          const item = windows[key] || {}
+          setText(`${prefix}PercentValue`, item.percent == null ? '-' : `${number(item.percent).toFixed(1)}%`)
+          setText(`${prefix}UsedValue`, '已用额度')
+          setProgress(prefix === 'monthly' ? 'creditProgress' : `${prefix}Progress`, item.percent)
+          setTag(prefix === 'monthly' ? 'creditPoolTag' : `${prefix}Tag`, item.status === 'rate-limited' || item.percent >= 100 ? '已达上限' : '可用', item.percent >= 100 ? 'warn' : 'ok')
+          setText(`${prefix}ResetValue`, item.resets_at ? `重置 ${formatDate(item.resets_at)}` : '未提供重置时间')
+        }
+        setText('creditRemainingValue', health.use_balance == null ? '余额回退状态未提供' : health.use_balance ? '已开启余额回退' : '未开启余额回退')
+      }
     }
 
     function applyHealth(health) {
@@ -545,7 +663,7 @@
       if (!available) {
         setStatus('err', health.configured ? '采集异常' : '未配置')
         if (!hasData) {
-          el('loadingState').textContent = health.configured ? '暂无可展示数据' : 'Command Code 尚未配置'
+          el('loadingState').textContent = health.configured ? '暂无可展示数据' : '请在账户配置中添加 API Key'
           el('loadingState').style.display = 'grid'
         }
         setNotice(health.error || '模型用量采集失败', 'err')
@@ -554,23 +672,29 @@
         setNotice(health.error, 'warn')
       } else {
         setStatus('ok', '采集正常')
-        setNotice('')
+        setNotice(health.capability_note || '', 'ok')
+        if (health.can_use_api === false) { setStatus('warn', '余额不足'); setNotice('账户余额不足，模型调用不可用。', 'warn') }
       }
     }
 
     async function loadHealth(force = false) {
-      if (state.loading) return
+      if (state.loading || !state.viewId) return
+      const version = ++state.requestVersion
       state.loading = true
       el('refreshButton').disabled = true
       setStatus('', '采集中')
       try {
-        const result = await request(endpoint('status'), { force: force || undefined }, 'GET', undefined, 30000)
+        const result = await request(endpoint('status'), { force: force || undefined, account_id: state.viewId }, 'GET', undefined, 60000)
+        if (version !== state.requestVersion) return
         applyHealth(result.health || {})
       } catch (error) {
+        if (version !== state.requestVersion) return
         setStatus('err', '模块异常')
         setNotice(error.message, 'err')
-        el('loadingState').style.display = el('dashboard').style.display ? 'none' : 'grid'
+        el('loadingState').style.display = state.health?.available ? 'none' : 'grid'
+        if (!state.health?.available) el('loadingState').textContent = '读取失败，请刷新重试'
       } finally {
+        if (version !== state.requestVersion) return
         state.loading = false
         el('refreshButton').disabled = false
       }
@@ -583,7 +707,7 @@
 
     function scheduleRefresh() {
       clearRefreshTimer()
-      const seconds = Math.max(15, number(state.config.refresh_interval_seconds) || 60)
+      const seconds = Math.max(15, number(accounts().find(a => a.id === state.viewId)?.refresh_interval_seconds) || 60)
       state.timer = setTimeout(async () => {
         await loadHealth(false)
         scheduleRefresh()
@@ -591,64 +715,74 @@
     }
 
     function openConfig() {
-      el('apiKeyInput').value = ''
-      if (state.config.api_base) el('apiBaseInput').value = state.config.api_base
-      if (state.config.org_id) el('orgIdInput').value = state.config.org_id
+      state.editId = state.viewId || state.config.active_account_id
       setConfigNote('')
       renderConfig()
       el('configModal').classList.add('open')
       el('configModal').setAttribute('aria-hidden', 'false')
-      setTimeout(() => el('apiKeyInput').focus(), 0)
+      el('accountSelect').focus()
     }
 
     function closeConfig() {
       el('apiKeyInput').value = ''
       el('configModal').classList.remove('open')
       el('configModal').setAttribute('aria-hidden', 'true')
+      el('configButton').focus()
+    }
+
+    function newAccount() {
+      state.editId = ''
+      el('accountSelect').value = ''
+      fillAccount()
+      el('accountNameInput').focus()
+    }
+
+    async function persistAccounts(rows, active, shown) {
+      el('saveConfigButton').disabled = true
+      el('deleteAccountButton').disabled = true
+      setConfigNote('正在保存并验证账户，只读取用量，不调用模型...')
+      try {
+        const saved = await request(endpoint('config'), {}, 'POST', {
+          accounts: rows, active_account_id: active, display_account_ids: shown,
+        }, 90000)
+        state.config = saved
+        state.viewId = saved.active_account_id
+        clearDashboard()
+        renderConfig()
+        closeConfig()
+        await loadHealth(true)
+        scheduleRefresh()
+      } catch (error) { setConfigNote(error.message, 'err') }
+      finally { el('saveConfigButton').disabled = false; el('deleteAccountButton').disabled = accounts().length < 2 }
     }
 
     async function saveConfig() {
-      const apiKey = el('apiKeyInput').value.trim()
-      if (!apiKey) {
-        setConfigNote('API Key 必须填写。', 'err')
-        return
+      const id = state.editId || `account_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+      const row = {
+        id, name: el('accountNameInput').value.trim(), provider: el('providerSelect').value,
+        api_key: el('apiKeyInput').value.trim(), api_base: el('apiBaseInput').value.trim(),
+        org_id: el('orgIdInput').value.trim(),
+        refresh_interval_seconds: Number(el('refreshInput').value), timeout_seconds: Number(el('timeoutInput').value),
       }
-      el('saveConfigButton').disabled = true
-      setConfigNote('正在验证 API Key 并采集用量...')
-      try {
-        state.config = await request(endpoint('config'), {}, 'POST', {
-          api_key: apiKey,
-          api_base: el('apiBaseInput').value.trim() || 'https://api.commandcode.ai',
-          org_id: el('orgIdInput').value.trim(),
-          refresh_interval_seconds: Number(el('refreshInput').value) || 60,
-          timeout_seconds: Number(el('timeoutInput').value) || 12,
-        }, 35000)
-        closeConfig()
-        setNotice('Command Code 配置已更新。', 'ok')
-        await loadHealth(true)
-        scheduleRefresh()
-      } catch (error) {
-        setConfigNote(error.message, 'err')
-      } finally {
-        el('saveConfigButton').disabled = false
-      }
+      if (!row.name) { setConfigNote('请填写显示名称。', 'err'); return }
+      const rows = accounts().filter(a => a.id !== id && a.configured).map(cleanAccount)
+      rows.push(row)
+      const active = el('defaultAccountInput').checked || !rows.some(a => a.id === state.config.active_account_id) ? id : state.config.active_account_id
+      const shown = (state.config.display_account_ids || []).filter(item => rows.some(a => a.id === item) && item !== id && !((state.config.display_account_ids || []).length <= 1 && active !== state.config.active_account_id))
+      if (el('showAccountInput').checked) shown.push(id)
+      await persistAccounts(rows, active, shown)
     }
 
-    async function resetConfig() {
-      if (!window.confirm('清除模块内保存的 Command Code API Key，并回退到系统环境配置？')) return
-      el('resetConfigButton').disabled = true
-      setConfigNote('正在恢复环境配置...')
-      try {
-        state.config = await request(endpoint('config/reset'), {}, 'POST', {}, 20000)
-        closeConfig()
-        setNotice('已恢复环境配置。', 'ok')
-        await loadHealth(true)
-        scheduleRefresh()
-      } catch (error) {
-        setConfigNote(error.message, 'err')
-      } finally {
-        renderConfig()
+    async function deleteAccount() {
+      if (accounts().length < 2 || !state.editId) return
+      if (el('deleteAccountButton').textContent !== '确认移除此账户') {
+        el('deleteAccountButton').textContent = '确认移除此账户'
+        setConfigNote('移除保存的 API 配置，已有历史数据保留。再次点击确认。')
+        return
       }
+      const rows = accounts().filter(a => a.id !== state.editId).map(cleanAccount)
+      const active = state.config.active_account_id === state.editId ? rows[0].id : state.config.active_account_id
+      await persistAccounts(rows, active, (state.config.display_account_ids || []).filter(id => id !== state.editId))
     }
 
     window.addEventListener('message', (event) => {
@@ -658,7 +792,6 @@
         state.info = data.module || {}
         setText('subtitle', `${state.info.name || '模型用量'} · v${state.info.version || '1.0.0'} · 只读监控`)
         loadConfig()
-        loadHealth(false)
       } else if (data.type === 'ops-module-api-response') {
         const task = pending.get(data.id)
         if (!task) return
@@ -672,7 +805,14 @@
     el('refreshButton').addEventListener('click', () => loadHealth(true))
     el('configButton').addEventListener('click', openConfig)
     el('saveConfigButton').addEventListener('click', saveConfig)
-    el('resetConfigButton').addEventListener('click', resetConfig)
+    el('newAccountButton').addEventListener('click', newAccount)
+    el('deleteAccountButton').addEventListener('click', deleteAccount)
+    el('accountSelect').addEventListener('change', () => { state.editId = el('accountSelect').value; fillAccount(); setConfigNote('') })
+    el('providerSelect').addEventListener('change', () => {
+      el('apiBaseInput').value = providers[el('providerSelect').value].api_base
+      el('apiKeyInput').value = ''
+      providerHelp()
+    })
     el('configModal').addEventListener('click', (event) => {
       if (event.target.closest('[data-close]')) closeConfig()
     })
