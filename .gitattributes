@@ -4,3 +4,14 @@
 *.yaml text eol=lf
 Caddyfile text eol=lf
 frontend-vite/dist/** text eol=lf
+
+# Preserve the installed Agent checksum across Windows/Linux checkouts.
+agent/opsagent.py text eol=lf
+
+# Source files use reproducible line endings on every platform.
+*.py text eol=lf
+*.js text eol=lf
+*.vue text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.json text eol=lf

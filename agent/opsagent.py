@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""OpsCenter Agent v2.6.3 - Lightweight monitoring + service scanning agent.
+"""OpsCenter Agent v2.6.4 - Lightweight monitoring + service scanning agent.
 Run as systemd service or standalone: python3 opsagent.py [--port 19100] [--token TOKEN]
 """
 import http.server
@@ -16,7 +16,7 @@ import base64
 import hashlib
 from datetime import datetime
 
-AGENT_VERSION = "2.6.3"
+AGENT_VERSION = "2.6.4"
 VERSION = AGENT_VERSION
 TOKEN = ""
 

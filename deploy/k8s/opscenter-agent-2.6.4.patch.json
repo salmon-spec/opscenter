@@ -1,0 +1,1 @@
+{"spec":{"template":{"metadata":{"annotations":{"opscenter.io/agent-version":"2.6.4"}},"spec":{"volumes":[{"name":"agent-release","configMap":{"name":"opscenter-agent-2-6-4-20261020"}}],"containers":[{"name":"backend","volumeMounts":[{"name":"agent-release","mountPath":"/opt/opscenter/agent/opsagent.py","subPath":"opsagent.py","readOnly":true}]}]}}}}
