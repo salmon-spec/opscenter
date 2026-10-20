@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: metric-history-retention
+  namespace: opscenter
+  labels:
+    app: opscenter-maintenance
+spec:
+  schedule: "20 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 1500
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            app: metric-history-retention
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: retention
+            image: postgres:16-alpine
+            env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: opscenter-env
+                  key: DATABASE_URL
+            command: ["/bin/sh","-c"]
+            args:
+            - |
+              DBURL=$(echo "$DATABASE_URL" | sed 's/postgresql+psycopg/postgresql/')
+              BATCH=20000
+              TOTAL=0
+              START=$(date +%s)
+              echo "retention: deleting metric_history rows older than 14 days (batch=$BATCH)"
+              while true; do
+                NOW=$(date +%s)
+                if [ $((NOW-START)) -gt 1400 ]; then echo "time budget reached, total=$TOTAL"; break; fi
+                DELETED=$(psql "$DBURL" -tA -c "
+                  WITH doomed AS (
+                    SELECT id FROM metric_history
+                    WHERE timestamp < now() - interval '14 days'
+                    ORDER BY timestamp
+                    LIMIT $BATCH
+                  )
+                  DELETE FROM metric_history m USING doomed WHERE m.id = doomed.id RETURNING 1;" | grep -c "^1$" || true)
+                TOTAL=$((TOTAL+DELETED))
+                echo "$(date -u +%FT%TZ) batch=$DELETED total=$TOTAL"
+                if [ "$DELETED" -lt "$BATCH" ]; then echo "retention complete: total=$TOTAL"; break; fi
+                sleep 1
+              done
+            resources:
+              requests: {cpu: 50m, memory: 64Mi}
+              limits: {cpu: 200m, memory: 128Mi}
