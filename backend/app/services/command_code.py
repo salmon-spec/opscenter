@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import math
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -17,6 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import requests
+from sqlalchemy import func
 
 from app.config import (
     COMMAND_CODE_API_BASE,
@@ -57,7 +59,7 @@ def _number(value: Any) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed == parsed else None
+    return parsed if math.isfinite(parsed) else None
 
 
 def _non_negative(value: Any) -> float:
@@ -133,6 +135,7 @@ class CommandCodeUsageMonitor:
         self._cache_lock = threading.Lock()
         self._cache: dict | None = None
         self._cache_at = 0.0
+        self.history_scope: str | None = None
 
     def _config_snapshot(self) -> dict | None:
         with self._config_lock:
@@ -215,6 +218,7 @@ class CommandCodeUsageMonitor:
                     "User-Agent": "OpsCenter-CommandCode-Monitor/1.0",
                 },
                 timeout=effective["timeout_seconds"],
+                allow_redirects=False,
             )
         except requests.Timeout as exc:
             raise CommandCodeUsageError("Command Code 接口请求超时") from exc
@@ -229,7 +233,7 @@ class CommandCodeUsageMonitor:
             raise CommandCodeUsageError("Command Code 用量接口不存在或已变更")
         if response.status_code == 429:
             raise CommandCodeUsageError("Command Code 用量接口请求过于频繁")
-        if response.status_code >= 400:
+        if response.status_code >= 300:
             raise CommandCodeUsageError(f"Command Code 用量接口返回 HTTP {response.status_code}")
         try:
             payload = response.json()
@@ -282,27 +286,28 @@ class CommandCodeUsageMonitor:
 
         plan_id = str(subscription.get("planId") or credits.get("planId") or "").strip()
         plan = _plan_info(plan_id)
-        monthly_remaining = _non_negative(credits.get("monthlyCredits"))
-        purchased_remaining = _non_negative(credits.get("purchasedCredits"))
-        free_remaining = _non_negative(credits.get("freeCredits"))
-        remaining_total = monthly_remaining + purchased_remaining + free_remaining
-        total_spent = _non_negative(summary.get("totalCredits") or summary.get("totalCost"))
+        monthly_remaining = _number(credits.get("monthlyCredits"))
+        purchased_remaining = _number(credits.get("purchasedCredits"))
+        free_remaining = _number(credits.get("freeCredits"))
+        has_balance = all(value is not None for value in (monthly_remaining, purchased_remaining, free_remaining))
+        remaining_total = monthly_remaining + purchased_remaining + free_remaining if has_balance else None
+        total_spent = _number(summary.get("totalCredits", summary.get("totalCost")))
         monthly_cap = plan.get("monthly_credits") if subscription.get("status") == "active" else None
         total_pool = (
             max(float(monthly_cap), monthly_remaining) + purchased_remaining + free_remaining
-            if monthly_cap is not None else total_spent + remaining_total
+            if monthly_cap is not None and has_balance else None
         )
-        usage_percent = min(max(((total_pool - remaining_total) / total_pool * 100), 0.0), 100.0) if total_pool > 0 else 0.0
+        usage_percent = min(max(((total_pool - remaining_total) / total_pool * 100), 0.0), 100.0) if total_pool is not None and total_pool > 0 else None
 
         def window(name: str) -> dict:
             raw = window_limits.get(name) if isinstance(window_limits.get(name), dict) else {}
-            used = _non_negative(raw.get("used"))
-            cap = _non_negative(raw.get("cap"))
+            used = _number(raw.get("used"))
+            cap = _number(raw.get("cap"))
             return {
                 "used": used,
                 "cap": cap,
-                "remaining": max(0.0, cap - used),
-                "percent": min(max((used / cap * 100), 0.0), 100.0) if cap > 0 else 0.0,
+                "remaining": max(0.0, cap - used) if used is not None and cap is not None else None,
+                "percent": min(max((used / cap * 100), 0.0), 100.0) if used is not None and cap is not None and cap > 0 else None,
                 "reset_at": _iso_from_epoch(raw.get("resetAt")),
                 "exceeded": bool(raw.get("exceeded") or window_limits.get("exceeded")),
             }
@@ -424,6 +429,7 @@ class CommandCodeUsageMonitor:
             baseline = None
         can_diff = bool(
             baseline
+            and plan.get("current_period_start")
             and str(baseline.period_start or "") == str(plan.get("current_period_start") or "")
         )
 
@@ -447,6 +453,7 @@ class CommandCodeUsageMonitor:
         )
         return {
             "source": "local_snapshots",
+            "unavailable": not bool(plan.get("current_period_start")),
             "complete": complete,
             "since": baseline.captured_at.isoformat() + "Z" if baseline and baseline.captured_at else None,
             "observed_seconds": observed_seconds,
@@ -501,6 +508,7 @@ class CommandCodeUsageMonitor:
         }
 
     def _decorate_history(self, result: dict, scope_key: str) -> None:
+        scope_key = self.history_scope or scope_key
         try:
             self._record_snapshot(result, scope_key)
             result["history"] = self._build_history(result, scope_key)
@@ -515,7 +523,9 @@ class CommandCodeUsageMonitor:
     def snapshot_status(self, min_captured_at: datetime | None = None) -> dict | None:
         """Serve the latest sample while the upstream collector refreshes in the background."""
         with get_db() as db:
-            row = db.query(CommandCodeUsageSnapshot).order_by(CommandCodeUsageSnapshot.captured_at.desc()).first()
+            query = db.query(CommandCodeUsageSnapshot)
+            query = query.filter(CommandCodeUsageSnapshot.scope_key == self.history_scope) if self.history_scope else query.filter(func.length(CommandCodeUsageSnapshot.scope_key) == 32)
+            row = query.order_by(CommandCodeUsageSnapshot.captured_at.desc()).first()
             if not row or (min_captured_at and row.captured_at < min_captured_at):
                 return None
             sample = {name: getattr(row, name) for name in (

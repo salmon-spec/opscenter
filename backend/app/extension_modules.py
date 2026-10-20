@@ -27,6 +27,7 @@ from app.database import get_db
 from app.models import ExtensionModule
 from app.services.aliyun_oss import OssModuleError, aliyun_oss
 from app.services.command_code import CommandCodeUsageError, command_code
+from app.services.model_usage import model_usage
 
 router = APIRouter(prefix="/api/v2/modules", tags=["extension-modules"])
 
@@ -52,10 +53,10 @@ BUILTIN_MODULES = {
     },
     "command-code-usage": {
         "name": "模型用量",
-        "version": "1.0.2",
-        "description": "只读监控 Command Code / GOAT 的套餐额度、窗口限速和账期用量",
+        "version": "1.1.0",
+        "description": "管理多厂商账户，监控 Command Code、OpenCode Go 额度与 DeepSeek 余额",
         "icon": "CC",
-        "entry_url": "/v3/extension-modules/command-code-usage/index.html?v=1.0.2",
+        "entry_url": "/v3/extension-modules/command-code-usage/index.html?v=1.1.0",
         "runtime": "iframe",
         "isolation": "sandboxed-iframe",
         "capabilities": ["usage:read", "billing:read"],
@@ -259,11 +260,11 @@ def _oss_config_response(row: ExtensionModule) -> dict:
 
 
 def _apply_command_code_config(row: ExtensionModule) -> None:
-    command_code.configure(_decrypt_module_config(row))
+    model_usage.configure(_decrypt_module_config(row))
 
 
 def _command_code_config_response(row: ExtensionModule) -> dict:
-    result = command_code.config_summary()
+    result = model_usage.config_summary()
     result["updated_at"] = _iso(row.config_updated_at)
     return result
 
@@ -315,7 +316,7 @@ def _prepare_command_code_sampling(row: ExtensionModule) -> bool:
     if not row.running:
         return False
     _apply_command_code_config(row)
-    return command_code.configured()
+    return model_usage.configured()
 
 
 @router.get("")
@@ -405,7 +406,7 @@ def check_module_health(module_key: str, user: object = Depends(require_operator
             result = _record_health(row, aliyun_oss.status(force=True))
         elif module_key == "command-code-usage":
             _apply_command_code_config(row)
-            result = _record_command_code_health(row, command_code.status(force=True))
+            result = _record_command_code_health(row, model_usage.status(force=True))
         elif module_key == "electricity":
             try:
                 response = requests.get("http://module-electricity:8080/health/ready", timeout=3)
@@ -458,7 +459,7 @@ def save_oss_config(
 ):
     if module_key not in {"oss-browser", "command-code-usage"}:
         raise HTTPException(status_code=404, detail="该模块没有配置接口")
-    parsed = _parse_module_config(module_key, data)
+    parsed = None if module_key == "command-code-usage" and "accounts" in data else _parse_module_config(module_key, data)
     with get_db() as db:
         row = _get_module(db, module_key)
         if module_key == "oss-browser":
@@ -486,9 +487,13 @@ def save_oss_config(
                 },
             }
         else:
-            config = parsed.model_dump()
             try:
-                command_code.validate_config(config)
+                if parsed is None:
+                    _apply_command_code_config(row)
+                    config = model_usage.prepare_config(data, _decrypt_module_config(row))
+                else:
+                    config = parsed.model_dump()
+                    command_code.validate_config(config)
             except CommandCodeUsageError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -502,7 +507,7 @@ def save_oss_config(
         if module_key == "oss-browser":
             aliyun_oss.configure(config)
             return _oss_config_response(row)
-        command_code.configure(config)
+        model_usage.configure(config)
         return _command_code_config_response(row)
 
 
@@ -514,7 +519,7 @@ def reset_oss_config(module_key: str, user: object = Depends(require_operator)):
             service = aliyun_oss
             response = _oss_config_response
         elif module_key == "command-code-usage":
-            service = command_code
+            service = model_usage
             response = _command_code_config_response
         else:
             raise HTTPException(status_code=404, detail="该模块没有配置接口")
@@ -539,16 +544,20 @@ def oss_status(
     module_key: str,
     force: bool = Query(False),
     bucket: Optional[str] = Query(None),
+    account_id: Optional[str] = Query(None, max_length=64),
     user: object = Depends(require_operator),
 ):
     with get_db() as db:
         row = _require_running(db, module_key)
         if module_key == "command-code-usage":
             _apply_command_code_config(row)
-            result = _record_command_code_health(row, command_code.status(
-                force=force,
-                min_captured_at=row.config_updated_at if row.config_ciphertext else None,
-            ))
+            try:
+                result = model_usage.status(force=force, account_id=account_id,
+                                            min_captured_at=row.config_updated_at if row.config_ciphertext else None)
+            except CommandCodeUsageError as exc:
+                raise HTTPException(404, str(exc)) from None
+            if not account_id or account_id == model_usage.config_summary()["active_account_id"]:
+                _record_command_code_health(row, result)
         elif module_key == "oss-browser":
             _oss_guard(row)
             try:
@@ -653,7 +662,7 @@ async def command_code_usage_loop() -> None:
                 )
                 should_sample = bool(row and _prepare_command_code_sampling(row))
             if should_sample:
-                result = await asyncio.to_thread(command_code.status, force=True)
+                result = await asyncio.to_thread(model_usage.sample_all)
                 with get_db() as db:
                     row = (
                         db.query(ExtensionModule)
@@ -665,4 +674,4 @@ async def command_code_usage_loop() -> None:
                         db.commit()
         except Exception as exc:
             print(f"[modules] Command Code sampling skipped: {exc}", flush=True)
-        await asyncio.sleep(60)
+        await asyncio.sleep(15)

@@ -27,12 +27,11 @@
       v-else
       ref="frame"
       class="module-frame"
-      :src="module.entry_url"
       :sandbox="sandboxValue"
       allow=""
       referrerpolicy="no-referrer"
       :title="module.name"
-      @load="announceModule"
+      @load="announceModule({ source: frame?.contentWindow })"
     ></iframe>
   </div>
 </template>
@@ -65,6 +64,11 @@ const sandboxValue = computed(() => {
   const safe = requested.filter((item) => ['allow-scripts', 'allow-downloads', 'allow-forms'].includes(item))
   return [...new Set(safe)].join(' ')
 })
+
+// Navigate after insertion, once the frame's sandbox attributes are in place.
+watch(frame, (node) => {
+  if (node && module.value?.entry_url) node.src = module.value.entry_url
+}, { flush: 'post' })
 
 async function loadModule() {
   const revision = ++loadRevision

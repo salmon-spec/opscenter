@@ -29,6 +29,7 @@ def test_persisted_sample_avoids_upstream_when_cache_is_empty(monkeypatch):
         "five_hour_used": 1.0, "weekly_used": 2.0,
     })
     class Query:
+        def filter(self, *_): return self
         def order_by(self, *_): return self
         def first(self): return sample
     class Db:
