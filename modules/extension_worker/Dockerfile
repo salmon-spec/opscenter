@@ -1,4 +1,7 @@
-FROM opscenter/backend:5.5.9-test-retire-cert-legacy
+ARG BACKEND_IMAGE=opscenter/backend:local
+FROM ${BACKEND_IMAGE}
+
+COPY backend/app /opt/opscenter/backend/app
 
 ENV PYTHONPATH=/opt/opscenter/backend
 

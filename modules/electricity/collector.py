@@ -387,6 +387,7 @@ async def collect(store: ElectricityStore) -> dict:
     previous_rows = (store.snapshot() or {}).get("households") or []
     previous = {row.get("id"): row for row in previous_rows if isinstance(row, dict)}
     errors: list[str] = []
+    previous_year_bills: list[dict] = []
 
     async with ClientSession() as session:
         channel = WebChannel(None, session, creds["account"], creds["password_digest"],
@@ -411,6 +412,15 @@ async def collect(store: ElectricityStore) -> dict:
             bill = business(bill_response)
             month_rows = bill.get("mothEleList") or []
             row = summarize(meter, bal_rows[0], month_rows, data_info=bill.get("dataInfo"))
+            # Revisit the previous year so December's final bill is archived
+            # even when it is first published after the calendar year changes.
+            try:
+                previous_bill = business(await channel.async_call(
+                    BILL_API, bill_payload(channel, meter, year - 1)))
+                previous_year_bills = [item for item in latest_bills(previous_bill.get("mothEleList") or [])
+                                       if str(item["month"]).startswith(str(year - 1))]
+            except Exception as exc:  # historical lookup must not discard current readings
+                logging.warning("electricity prior-year history unavailable: %s", type(exc).__name__)
 
             # tiered tariff / time-of-use live in the bill or daily payloads;
             # try both, tolerate misses.
@@ -479,11 +489,11 @@ async def collect(store: ElectricityStore) -> dict:
         store.append_daily_history([{"day": item["day"], "kwh": item["kwh"],
                                      "collected_at": snapshot["updated_at"]}
                                     for item in primary["daily"][:DAILY_KEEP]])
-    if primary.get("bills"):
+    if primary.get("bills") or previous_year_bills:
         store.append_monthly_history([{"month": item["month"], "kwh": item.get("kwh"),
                                        "cost": item.get("cost"),
                                        "collected_at": snapshot["updated_at"]}
-                                      for item in primary["bills"]])
+                                      for item in (primary.get("bills") or []) + previous_year_bills])
 
     store.save_snapshot(snapshot)
     store.trim_history()

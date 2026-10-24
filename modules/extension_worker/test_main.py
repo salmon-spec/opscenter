@@ -21,7 +21,7 @@ assert client.post('/api/v2/modules/oss-browser/health').status_code == 401
 assert client.post('/api/v2/modules/oss-browser/start').status_code == 404
 """
     env = {**os.environ, "EXTENSION_MODULE_KEY": "oss-browser", "OPS_AUTH_ENABLED": "true",
-           "OPS_JWT_PUBLIC_KEY_FILE": "/tmp/test-public-key", "PYTHONPATH": str(root / "backend"),
+           "OPS_JWT_PUBLIC_KEY_FILE": "/tmp/test-public-key", "PYTHONPATH": str(root / "backend") + os.pathsep + os.environ.get("PYTHONPATH", ""),
            "EXTENSION_DATABASE_URL_FILE": str(database_url)}
     env.pop("DATABASE_URL", None)
     result = subprocess.run([sys.executable, "-c", code], cwd=root, env=env,

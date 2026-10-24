@@ -232,12 +232,32 @@ def write_file(server_id: str, path: str, payload: FileWriteRequest):
         target = _clean_path(path, remote)
         _ensure_writable(target)
         try:
+            if remote:
+                target = sftp.normalize(target)
+                _ensure_writable(target)
             attrs = sftp.stat(target) if remote else os.stat(target)
             if payload.expected_mtime is not None and abs(float(attrs.st_mtime) - payload.expected_mtime) > 0.001:
                 raise HTTPException(status_code=409, detail="文件已被其他进程修改，请重新加载")
             if remote:
-                with sftp.open(target, "wb") as handle:
-                    handle.write(raw)
+                temporary = target + f".opscenter-{uuid.uuid4().hex}.tmp"
+                try:
+                    with sftp.open(temporary, "wx") as handle:
+                        handle.write(raw)
+                        handle.flush()
+                    if sftp.stat(temporary).st_size != len(raw):
+                        raise OSError("Incomplete remote write")
+                    sftp.chmod(temporary, stat.S_IMODE(attrs.st_mode))
+                    sftp.chown(temporary, attrs.st_uid, attrs.st_gid)
+                    current = sftp.stat(target)
+                    if (current.st_mtime, current.st_size) != (attrs.st_mtime, attrs.st_size):
+                        raise HTTPException(409, "文件已被其他进程修改，请重新加载")
+                    # OpenSSH atomic replacement keeps the original intact on failure.
+                    sftp.posix_rename(temporary, target)
+                finally:
+                    try:
+                        sftp.remove(temporary)
+                    except OSError:
+                        pass
                 mtime = float(sftp.stat(target).st_mtime)
             else:
                 temporary = target + f".opscenter-{uuid.uuid4().hex}.tmp"
@@ -249,6 +269,8 @@ def write_file(server_id: str, path: str, payload: FileWriteRequest):
             raise HTTPException(status_code=404, detail="文件不存在")
         except PermissionError:
             raise HTTPException(status_code=403, detail="没有文件写入权限")
+        except OSError:
+            raise HTTPException(status_code=502, detail="保存结果未确认，请重新加载核对；完整写入后才会替换原文件")
     return {"ok": True, "path": target, "size": len(raw), "mtime": mtime}
 
 

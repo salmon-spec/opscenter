@@ -1,0 +1,20 @@
+TEMPLATES = [
+    {'id': 'cpu', 'name': 'CPU 使用率过高', 'metric': 'cpu', 'source': 'host', 'unit': '%', 'value_type': 'numeric', 'operator': '>', 'threshold': '85', 'recovery_threshold': '75', 'duration_sec': 300, 'recovery_sec': 120},
+    {'id': 'memory', 'name': '内存使用率过高', 'metric': 'memory', 'source': 'host', 'unit': '%', 'value_type': 'numeric', 'operator': '>', 'threshold': '90', 'recovery_threshold': '85', 'duration_sec': 300, 'recovery_sec': 120},
+    {'id': 'disk', 'name': '磁盘使用率过高', 'metric': 'disk', 'source': 'host', 'unit': '%', 'value_type': 'numeric', 'operator': '>', 'threshold': '85', 'recovery_threshold': '80', 'duration_sec': 300, 'recovery_sec': 120},
+    {'id': 'server_status', 'name': '主机离线', 'metric': 'server_status', 'source': 'host', 'unit': '', 'value_type': 'string', 'operator': '!=', 'threshold': 'online', 'duration_sec': 120, 'recovery_sec': 60},
+    {'id': 'agent_status', 'name': 'Agent 异常', 'metric': 'agent_status', 'source': 'host', 'unit': '', 'value_type': 'string', 'operator': '!=', 'threshold': 'running', 'duration_sec': 180, 'recovery_sec': 60},
+    {'id': 'service_status', 'name': '服务不可达', 'metric': 'service_status', 'source': 'service', 'unit': '', 'value_type': 'string', 'operator': '==', 'threshold': 'down', 'duration_sec': 120, 'recovery_sec': 120},
+    {'id': 'cert_days_left', 'name': '证书即将到期', 'metric': 'cert_days_left', 'source': 'certificate', 'unit': '天', 'value_type': 'numeric', 'operator': '<=', 'threshold': '30', 'duration_sec': 0, 'recovery_sec': 0},
+    {'id': 'cert_scan_failed', 'name': '证书检查失败', 'metric': 'cert_scan_failed', 'source': 'certificate', 'unit': '', 'value_type': 'numeric', 'operator': '==', 'threshold': '1', 'duration_sec': 0, 'recovery_sec': 0},
+    {'id': 'k3s_node_ready', 'name': 'K3s 节点未就绪', 'metric': 'k3s_node_ready', 'source': 'k3s', 'unit': '', 'value_type': 'numeric', 'operator': '==', 'threshold': '0', 'duration_sec': 120, 'recovery_sec': 60},
+    {'id': 'k3s_pod_failed', 'name': 'K3s Pod 异常', 'metric': 'k3s_pod_failed', 'source': 'k3s', 'unit': '', 'value_type': 'numeric', 'operator': '==', 'threshold': '1', 'duration_sec': 180, 'recovery_sec': 60},
+    {'id': 'k3s_pvc_pending', 'name': 'K3s PVC 未绑定', 'metric': 'k3s_pvc_pending', 'source': 'k3s', 'unit': '', 'value_type': 'numeric', 'operator': '==', 'threshold': '1', 'duration_sec': 300, 'recovery_sec': 60},
+    {'id': 'k3s_restarts', 'name': 'K3s 容器重启增加', 'metric': 'k3s_restarts', 'source': 'k3s', 'unit': '次 / 近5分钟已观测', 'value_type': 'numeric', 'operator': '>', 'threshold': '0', 'duration_sec': 0, 'recovery_sec': 300},
+    {'id': 'electricity_alert', 'name': '电费模块告警', 'metric': 'electricity_alert', 'source': 'electricity', 'unit': '', 'value_type': 'numeric', 'operator': '==', 'threshold': '1', 'duration_sec': 0, 'recovery_sec': 0},
+    {'id': 'pve_storage_usage', 'name': 'PVE 存储使用率过高', 'metric': 'pve_storage_usage', 'source': 'pve', 'unit': '%', 'value_type': 'numeric', 'operator': '>', 'threshold': '85', 'recovery_threshold': '80', 'duration_sec': 300, 'recovery_sec': 120},
+    {'id': 'vm_unexpected_stop', 'name': '虚拟机非预期停止', 'metric': 'vm_unexpected_stop', 'source': 'pve', 'unit': '', 'value_type': 'numeric', 'operator': '==', 'threshold': '1', 'duration_sec': 120, 'recovery_sec': 60},
+    {'id': 'backup_failed', 'name': '备份失败或超时', 'metric': 'backup_failed', 'source': 'pve', 'unit': '', 'value_type': 'numeric', 'operator': '==', 'threshold': '1', 'duration_sec': 0, 'recovery_sec': 0},
+    {'id': 'source_unavailable', 'name': '告警数据源异常', 'metric': 'source_unavailable', 'source': 'datasource', 'unit': '', 'value_type': 'numeric', 'operator': '==', 'threshold': '1', 'duration_sec': 300, 'recovery_sec': 60},
+]
+METRICS = {row['metric']: row for row in TEMPLATES}

@@ -23,16 +23,13 @@
                 <div class="field full"><label>服务说明</label><textarea v-model.trim="form.description" class="textarea" rows="3" placeholder="用途、使用范围、注意事项"></textarea></div>
               </div>
               <div v-if="!moduleManual" class="edit-section">
-                <div class="section-title">健康检查策略</div>
+                <div class="section-title">健康检查策略</div><p class="muted">提供探测状态与历史记录，暂不提供服务故障通知。</p>
                 <div class="form-grid">
                   <label class="check-row full"><input v-model="form.probe_enabled" type="checkbox" /> 启用后台健康检查</label>
                   <div class="field"><label>检查间隔（秒）</label><input v-model.number="form.probe_interval_seconds" class="input" type="number" min="30" max="3600" /></div>
                   <div class="field"><label>超时时间（秒）</label><input v-model.number="form.probe_timeout_seconds" class="input" type="number" min="1" max="30" step="0.5" /></div>
                   <div class="field full"><label>视为成功的 HTTP 状态码</label><input v-model.trim="form.probe_success_statuses" class="input" placeholder="200-399,401,403" /></div>
-                  <div class="field"><label>连续失败阈值</label><input v-model.number="form.probe_failure_threshold" class="input" type="number" min="1" max="10" /></div>
-                  <div class="field"><label>连续恢复阈值</label><input v-model.number="form.probe_recovery_threshold" class="input" type="number" min="1" max="5" /></div>
                   <label class="check-row full"><input v-model="form.probe_verify_tls" type="checkbox" /> 校验 HTTPS 证书</label>
-                  <label class="check-row full"><input v-model="form.probe_notifications_enabled" type="checkbox" /> 发送故障与恢复通知</label>
                 </div>
               </div>
               <div class="form-actions"><button type="button" class="btn" @click="editing = false">取消</button><button type="submit" class="btn btn-primary" :disabled="saving">{{ saving ? '保存中…' : '保存修改' }}</button></div>
@@ -84,7 +81,6 @@
                   <div><span class="summary-value">{{ detail?.probe_summary?.avg_latency_ms_24h ?? '-' }}<small v-if="detail?.probe_summary?.avg_latency_ms_24h != null">ms</small></span><span class="summary-label">平均延迟</span></div>
                 </div>
                 <div class="policy-line">{{ detail?.probe_policy?.enabled ? `每 ${detail.probe_policy.interval_seconds} 秒检测` : '后台检测已停用' }} · 超时 {{ detail?.probe_policy?.timeout_seconds ?? 4 }} 秒 · 成功码 {{ detail?.probe_policy?.success_statuses || '200-399,401,403' }}</div>
-                <div class="policy-line">连续失败 {{ detail?.probe_policy?.failure_threshold ?? 3 }} 次告警 · 连续成功 {{ detail?.probe_policy?.recovery_threshold ?? 1 }} 次恢复 · {{ detail?.probe_policy?.notifications_enabled ? '通知开启' : '通知关闭' }}</div>
                 <div v-if="detail?.active_incident" class="incident-box"><div><strong>活动事件</strong> · {{ detail.active_incident.status }} · {{ fmtTime(detail.active_incident.opened_at) }}</div><div class="probe-error">{{ detail.active_incident.last_error || '未提供错误' }}</div><button v-if="!readOnly && !moduleManual && detail.active_incident.status==='open'" class="btn btn-sm" @click="ackIncident">确认事件</button></div>
                 <div v-if="detail?.active_silence" class="silence-box">已静默至 {{ fmtTime(detail.active_silence.ends_at) }} · {{ detail.active_silence.reason }} <button v-if="!readOnly && !moduleManual" class="btn btn-sm" @click="endSilence">提前结束</button></div>
                 <button v-else-if="!readOnly && !moduleManual" class="btn btn-sm" @click="createSilence">静默 2 小时</button>
@@ -110,7 +106,7 @@ const emit = defineEmits(['close', 'updated'])
 const detail = ref(null), loading = ref(false), editing = ref(false), saving = ref(false), probing = ref(false), hosts = ref([])
 const credentialEditing = ref(false), credentialSaving = ref(false), revealedPasswords = reactive({}), revealTimers = new Map()
 const credentialForm = reactive({ id: '', label: '', username: '', password: '', notes: '', is_default: false })
-const form = reactive({ server_id: '', name: '', category: '', icon: '', entry_url: '', health_url: '', owner: '', documentation_url: '', tagsText: '', description: '', probe_enabled: true, probe_interval_seconds: 60, probe_timeout_seconds: 4, probe_success_statuses: '200-399,401,403', probe_verify_tls: true, probe_failure_threshold: 3, probe_recovery_threshold: 1, probe_notifications_enabled: true })
+const form = reactive({ server_id: '', name: '', category: '', icon: '', entry_url: '', health_url: '', owner: '', documentation_url: '', tagsText: '', description: '', probe_enabled: true, probe_interval_seconds: 60, probe_timeout_seconds: 4, probe_success_statuses: '200-399,401,403', probe_verify_tls: true })
 const plazaKey = computed(() => props.service?.key || (props.service?.id?.startsWith?.('plaza:') ? props.service.id.slice(6) : ''))
 const moduleManual = computed(() => props.service?.source === 'manual' && props.service?.id?.startsWith?.('manual:'))
 const url = computed(() => detail.value?.entry_url || detail.value?.url || props.service?.entry_url || props.service?.url || '')
@@ -128,7 +124,7 @@ function clearReveal(id){const ids=id?[id]:Object.keys(revealedPasswords);ids.fo
 function closeDrawer(){editing.value=false;credentialEditing.value=false;clearReveal();emit('close')}
 async function loadCredentialHistory(){const key=plazaKey.value;if(!key||!detail.value)return;try{const rows=await api.get(`/modules/service-catalog/api/v1/services/plaza/${encodeURIComponent(key)}/credential-access-history`,{limit:5});if(detail.value&&plazaKey.value===key)detail.value.credential_access_history=rows}catch{if(detail.value&&plazaKey.value===key)detail.value.credential_access_history=[]}}
 async function loadDetail(){const id=props.service?.id;if(!id)return;loading.value=true;clearReveal();try{detail.value=props.readOnly||moduleManual.value?props.service:plazaKey.value?await api.get(`/modules/service-catalog/api/v1/services/plaza/${encodeURIComponent(plazaKey.value)}/detail`):await api.get(`/modules/service-catalog/api/v1/legacy/services/${id}/detail`);if(plazaKey.value&&!props.readOnly&&!moduleManual.value)loadCredentialHistory()}catch(error){detail.value=null;toast(`详情加载失败：${error.message}`,'error')}finally{loading.value=false}}
-async function startEdit(){try{if(!detail.value)await loadDetail();if(!hosts.value.length)hosts.value=(await api.get('/modules/host-inventory/api/v1/hosts')).items;const d=detail.value||props.service||{},p=d.probe_policy||{};Object.assign(form,{server_id:d.server?.id||d.server_id||'',name:d.name||'',category:d.category||'',icon:d.icon||'box',entry_url:d.entry_url||d.url||'',health_url:d.health_url||d.health_path||'',owner:d.owner||'',documentation_url:d.documentation_url||'',tagsText:(d.tags||[]).join(', '),description:d.description||'',probe_enabled:p.enabled!==false,probe_interval_seconds:p.interval_seconds||60,probe_timeout_seconds:p.timeout_seconds||4,probe_success_statuses:p.success_statuses||'200-399,401,403',probe_verify_tls:p.verify_tls!==false,probe_failure_threshold:p.failure_threshold||3,probe_recovery_threshold:p.recovery_threshold||1,probe_notifications_enabled:p.notifications_enabled!==false});editing.value=true}catch(error){toast(`编辑信息加载失败：${error.message}`,'error')}}
+async function startEdit(){try{if(!detail.value)await loadDetail();if(!hosts.value.length)hosts.value=(await api.get('/modules/host-inventory/api/v1/hosts')).items;const d=detail.value||props.service||{},p=d.probe_policy||{};Object.assign(form,{server_id:d.server?.id||d.server_id||'',name:d.name||'',category:d.category||'',icon:d.icon||'box',entry_url:d.entry_url||d.url||'',health_url:d.health_url||d.health_path||'',owner:d.owner||'',documentation_url:d.documentation_url||'',tagsText:(d.tags||[]).join(', '),description:d.description||'',probe_enabled:p.enabled!==false,probe_interval_seconds:p.interval_seconds||60,probe_timeout_seconds:p.timeout_seconds||4,probe_success_statuses:p.success_statuses||'200-399,401,403',probe_verify_tls:p.verify_tls!==false});editing.value=true}catch(error){toast(`编辑信息加载失败：${error.message}`,'error')}}
 async function saveEdit() {
   if (!form.name || !form.category || !/^https?:\/\//i.test(form.entry_url)) {
     toast('请填写名称、分类和正确的 HTTP(S) 地址', 'error')
@@ -152,8 +148,6 @@ async function saveEdit() {
         description: form.description, probe_enabled: form.probe_enabled,
         probe_interval_seconds: form.probe_interval_seconds, probe_timeout_seconds: form.probe_timeout_seconds,
         probe_success_statuses: form.probe_success_statuses, probe_verify_tls: form.probe_verify_tls,
-        probe_failure_threshold: form.probe_failure_threshold, probe_recovery_threshold: form.probe_recovery_threshold,
-        probe_notifications_enabled: form.probe_notifications_enabled,
       }
       await api.put(`/modules/service-catalog/api/v1/services/plaza/${encodeURIComponent(plazaKey.value)}`, payload)
     }

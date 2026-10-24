@@ -599,7 +599,8 @@ def _event_row(item: dict) -> dict:
         "object": f"{involved.get('kind')}/{involved.get('name')}",
         "reason": item.get("reason") or "", "message": (item.get("message") or "")[:300],
         "count": int(item.get("count") or 1), "type": item.get("type") or "",
-        "first_at": _k_time(item.get("firstTimestamp")), "last_at": _k_time(item.get("lastTimestamp")),
+        "first_at": _k_time(item.get("firstTimestamp") or item.get("eventTime") or meta.get("creationTimestamp")),
+        "last_at": _k_time(item.get("series", {}).get("lastObservedTime") or item.get("lastTimestamp") or item.get("eventTime") or meta.get("creationTimestamp")),
     }
 
 

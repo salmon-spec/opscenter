@@ -1,3 +1,5 @@
 node_modules/
 dist/*
 !dist/assets/
+dist-mobile/
+.env.mobile.local

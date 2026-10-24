@@ -16,6 +16,7 @@
       </div>
     </div>
 
+    <p v-if="refreshError" role="status" class="muted">主机清单刷新失败，显示最后成功数据：{{ refreshError }}</p>
     <HostList
       :filters="filters"
       :metrics-map="metricsMap"
@@ -46,7 +47,7 @@ import HostList from '../components/host/HostList.vue'
 import HostEditorDrawer from '../components/host/HostEditorDrawer.vue'
 import HostDetailDrawer from '../components/host/HostDetailDrawer.vue'
 
-const { hosts, loading: hostLoading, refreshHosts } = useHostContext()
+const { hosts, loading: hostLoading, refreshError, refreshHosts } = useHostContext()
 const { isActive } = useTabActive('Hosts')
 const canEditHosts = ref(!!getAccessToken())
 function syncAuth() { canEditHosts.value = !!getAccessToken() }

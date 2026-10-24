@@ -373,7 +373,7 @@ def test_discover_buckets_derives_regional_endpoints(monkeypatch):
 
 def test_builtin_seed_and_lifecycle():
     items = client.get(BASE).json()["items"]
-    assert [item["key"] for item in items] == ["oss-browser", "command-code-usage", "electricity"]
+    assert [item["key"] for item in items] == ["oss-browser", "command-code-usage", "electricity", "opencode-agent", "automation"]
     module = items[0]
     assert module["source"] == "builtin"
     assert module["running"] is False

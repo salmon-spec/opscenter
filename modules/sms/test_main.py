@@ -10,9 +10,16 @@ for candidate in (HERE, PARENT):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
+import pytest
 from fastapi.testclient import TestClient  # noqa: E402
 
 import main as sms  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolated_storage(monkeypatch, tmp_path):
+    monkeypatch.setattr(sms, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(sms, "AUDIT_PATH", tmp_path / "sms_log.jsonl")
 
 
 def test_send_requires_token_when_configured(monkeypatch, tmp_path):
@@ -26,6 +33,15 @@ def test_send_requires_token_when_configured(monkeypatch, tmp_path):
     # provider missing -> 503
     assert client.post("/api/v1/send", json={"phone": "138", "message": "x"},
                        headers={"X-SMS-Token": "secret"}).status_code == 503
+
+
+def test_internal_send_never_allows_empty_or_wrong_token(monkeypatch):
+    client = TestClient(sms.app)
+    monkeypatch.delenv('SMS_TOKEN', raising=False)
+    assert client.post('/api/v1/internal/send',json={'phone':'138','message':'test'}).status_code == 503
+    monkeypatch.setenv('SMS_TOKEN','internal-test')
+    assert client.post('/api/v1/internal/send',json={'phone':'138','message':'test'}).status_code == 401
+    assert client.post('/api/v1/internal/send',json={'phone':'138','message':'test'},headers={'X-SMS-Token':'wrong'}).status_code == 401
 
 
 def test_send_validates_payload(monkeypatch, tmp_path):

@@ -176,7 +176,7 @@ const overview = ref({ summary: {}, items: [], generated_at: null })
 const probeDataStale = computed(() => overview.value.items?.length
   ? overview.value.items.some((item) => item.stale)
   : !!overview.value.stale)
-const uptimeHistoryPending = computed(() => !!overview.value.stale && !probeDataStale.value)
+const uptimeHistoryPending = computed(() => overview.value.uptime_history_pending ?? (!!overview.value.stale && !probeDataStale.value))
 const healthTimestamp = computed(() => {
   const timestamps = (overview.value.items || []).map((item) => item.status_checked_at || item.last_checked_at).filter(Boolean)
   return timestamps.length ? timestamps.sort().at(-1) : overview.value.data_timestamp || overview.value.generated_at

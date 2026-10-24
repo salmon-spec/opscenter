@@ -1,17 +1,5 @@
 <template>
   <div class="module-host">
-    <div class="host-bar">
-      <div class="host-identity">
-        <span class="host-icon">{{ module?.icon || '◇' }}</span>
-        <div><b>{{ module?.name || moduleKey }}</b><small>{{ module?.description || '扩展模块' }}</small></div>
-      </div>
-      <div class="host-meta">
-        <span class="state" :class="module?.running ? 'running' : 'stopped'"><i></i>{{ module?.running ? '导航入口已启用' : '导航入口已隐藏' }}</span>
-        <span v-if="module?.version" class="muted">v{{ module.version }}</span>
-        <router-link v-if="!fixedKey" class="btn btn-sm" to="/modules">模块管理</router-link>
-      </div>
-    </div>
-
     <div v-if="loading" class="center-state"><span class="spinner"></span>正在加载模块</div>
     <div v-else-if="loadError" class="center-state error-state">
       <b>模块加载失败</b>
@@ -28,6 +16,7 @@
       ref="frame"
       class="module-frame"
       :sandbox="sandboxValue"
+      :src="module.entry_url"
       allow=""
       referrerpolicy="no-referrer"
       :title="module.name"
@@ -64,11 +53,6 @@ const sandboxValue = computed(() => {
   const safe = requested.filter((item) => ['allow-scripts', 'allow-downloads', 'allow-forms'].includes(item))
   return [...new Set(safe)].join(' ')
 })
-
-// Navigate after insertion, once the frame's sandbox attributes are in place.
-watch(frame, (node) => {
-  if (node && module.value?.entry_url) node.src = module.value.entry_url
-}, { flush: 'post' })
 
 async function loadModule() {
   const revision = ++loadRevision
@@ -224,14 +208,15 @@ async function handleDownload(data) {
 }
 
 function announceModule(event) {
-  if (event.source !== frame.value?.contentWindow || !module.value) return
+  const target = frame.value?.contentWindow
+  if (!target || event.source !== target || !module.value) return
   const info = JSON.parse(JSON.stringify({
     key: module.value.key,
     name: module.value.name,
     version: module.value.version,
     manifest: module.value.manifest || {},
   }))
-  frame.value.contentWindow.postMessage({
+  target.postMessage({
     type: 'ops-module-info',
     nonce: frameNonce,
     module: info,
@@ -263,24 +248,8 @@ onUnmounted(() => {
 
 <style scoped>
 .module-host { height: 100%; min-height: 620px; display: flex; flex-direction: column; background: #eef2f7; }
-.host-bar { min-height: 54px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 8px 14px; background: #fff; border-bottom: 1px solid var(--border); }
-.host-identity { min-width: 0; display: flex; align-items: center; gap: 10px; }
-.host-icon { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: 8px; background: #eff6ff; color: var(--brand); font-size: 18px; }
-.host-identity b, .host-identity small { display: block; }
-.host-identity small { color: var(--muted); margin-top: 2px; max-width: 560px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.host-meta { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
-.state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; }
-.state i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.state.running { color: var(--ok); }
-.state.running i { background: var(--ok); }
-.state.stopped { color: var(--muted); }
 .module-frame { width: 100%; flex: 1; min-height: 0; border: 0; background: #f4f6fa; }
 .center-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; padding: 24px; }
 .center-state b { color: var(--text); font-size: 16px; }
 .error-state { color: var(--err); }
-@media (max-width: 720px) {
-  .host-bar { align-items: flex-start; flex-wrap: wrap; padding: 9px 10px; }
-  .host-identity small, .host-meta > .muted { display: none; }
-  .host-meta { gap: 6px; margin-left: auto; }
-}
 </style>

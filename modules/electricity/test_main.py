@@ -21,6 +21,22 @@ import pytest  # noqa: E402
 client = TestClient(main.app)
 
 
+def test_internal_alert_targets_export_owner_state_without_notifying(monkeypatch, tmp_path):
+    token = tmp_path / 'internal'
+    token.write_text('test-internal')
+    monkeypatch.setenv('OPS_MODULE_INTERNAL_TOKEN_FILE',str(token))
+    now = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(main.store, 'alert_state',lambda:{'updated_at':now,'active':{'electricity:balance-low':{'status':'firing','title':'余额不足'}}})
+    monkeypatch.setattr(main,'_current_context',lambda at:{'resource_id':'meter-test'})
+    assert client.get('/api/v1/internal/alert-targets').status_code == 401
+    response = client.get('/api/v1/internal/alert-targets',headers={'X-OpsCenter-Module-Token':'test-internal'})
+    assert response.status_code == 200
+    rows = {row['id']:row for row in response.json()['items']}
+    assert rows['meter-test:electricity:balance-low']['value'] == 1
+    assert rows['meter-test:electricity:balance-critical']['value'] == 0
+    assert all(row['notification_owner'] == 'electricity' for row in rows.values())
+
+
 def test_money_and_balance_sign_rule():
     assert collector.money("12.345") == 12.35
     assert collector.money("bad") is None
@@ -126,7 +142,7 @@ def test_overview_requires_configuration_and_returns_snapshot(monkeypatch):
 def test_module_contract_and_page():
     info = client.get("/api/v1/module").json()
     assert info["key"] == "electricity"
-    assert info["version"] == "0.7.8"
+    assert info["version"] == "0.10.0"
     assert "electricity:read" in info["capabilities"]
     assert client.get("/health/live").json()["status"] == "ok"
     page = client.get("/ui")
@@ -1289,7 +1305,7 @@ def test_stats_respect_month_limit_and_compare_newest_year(monkeypatch):
         {"month": "202609", "kwh": 180.0, "cost": 90.0},
         {"month": "202608", "kwh": 160.0, "cost": 80.0},
         {"month": "202509", "kwh": 100.0, "cost": 50.0},
-    ][:months])
+    ][:(months or None)])
     now = datetime(2026, 10, 19, tzinfo=timezone.utc)
     month = main._build_stats("month", 2, now)
     assert [row["label"] for row in month["rows"]] == ["2026-10", "2026-09"]
@@ -1450,3 +1466,187 @@ def test_pushplus_target_settings_are_masked_and_preserved_on_edit(tmp_path, mon
     assert client.post("/api/v1/notify/targets", json={
         "type": "wechat_pushplus", "target": "sender-token", "extra": {"pushplus_channel": "mail"},
     }).status_code == 400
+
+
+def test_disabled_target_is_skipped():
+    notify.import_targets([{"id": "t1", "name": "停用", "type": "wechat_serverchan",
+                            "target": "SCT", "enabled": False}], {})
+    assert notify.destinations() == []
+    notify.import_targets([], {})
+
+
+def test_editable_alert_settings_persist_and_drive_rules(tmp_path, monkeypatch):
+    monkeypatch.setenv('ELECTRICITY_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(main, 'store', storage.ElectricityStore())
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(main.store, 'configured', lambda: True)
+    main.store.save_snapshot(_snapshot(now, balance=54))
+    assert alerting.RULE_BALANCE_LOW not in _ids(alerting.evaluate_rules(main._current_context(now), now, main._cfg()))
+    response = client.post('/api/v1/alerts/settings', json={'low_balance': 100, 'max_notifications': 2})
+    assert response.status_code == 200
+    assert storage.ElectricityStore().alert_config()['max_notifications'] == 2
+    assert alerting.RULE_BALANCE_LOW in _ids(alerting.evaluate_rules(main._current_context(now), now, main._cfg()))
+    assert client.get('/api/v1/alerts/settings').json()['settings']['low_balance'] == 100
+    before = main.store.alert_config()
+    for invalid in ({'low_balance': -1}, {'critical_balance': 101}, {'max_notifications': 1.5},
+                    {'max_notifications': True}, {'repeat_interval_seconds': 0}, {'quiet_hours': 'oops'},
+                    {'notify_recovery': 'false'}, {'unknown': 4}, {'daily_spike_ratio': None},
+                    {'quiet_hours': '01:00+08:00-02:00+08:00'}):
+        assert client.post('/api/v1/alerts/settings', json=invalid).status_code == 400
+        assert main.store.alert_config() == before
+    assert client.post('/api/v1/alerts/settings', json={'quiet_hours': '23:00-07:00'}).status_code == 200
+
+
+def test_notification_limit_survives_reload_and_resets_after_recovery():
+    now = datetime.now(timezone.utc)
+    cfg = _cfg(max_notifications=2, repeat_interval_seconds=60)
+    ctx = _ctx(now, balance=15)
+    first = alerting.evaluate(ctx, {}, now, cfg)
+    assert len(first['events']) == 1
+    waiting = alerting.evaluate(ctx, first['state'], now + timedelta(seconds=30), cfg)
+    assert waiting['events'] == []
+    second = alerting.evaluate(ctx, waiting['state'], now + timedelta(minutes=1), cfg)
+    assert len(second['events']) == 1
+    restored_state = json.loads(json.dumps(second['state']))
+    capped = alerting.evaluate(ctx, restored_state, now + timedelta(minutes=2), cfg)
+    assert capped['events'] == [] and len(capped['alerts']) == 1
+    assert capped['state']['active'][alerting.RULE_BALANCE_LOW]['notify_count'] == 2
+    unlimited = alerting.evaluate(ctx, capped['state'], now + timedelta(minutes=3), {**cfg, 'max_notifications': 0})
+    assert len(unlimited['events']) == 1
+    resolved = alerting.evaluate(_ctx(now, balance=100), capped['state'], now + timedelta(minutes=4), cfg)
+    assert len(resolved['resolved']) == 1
+    again = alerting.evaluate(ctx, resolved['state'], now + timedelta(minutes=5), cfg)
+    assert len(again['events']) == 1
+    assert again['state']['active'][alerting.RULE_BALANCE_LOW]['notify_count'] == 1
+
+
+def test_recovery_notification_switch(tmp_path, monkeypatch):
+    monkeypatch.setenv('ELECTRICITY_DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(main, 'store', storage.ElectricityStore())
+    monkeypatch.setattr(main.store, 'configured', lambda: True)
+    now = datetime.now(timezone.utc)
+    cfg = _cfg()
+    firing = alerting.evaluate(_ctx(now, balance=15), {}, now, cfg)
+    main.store.save_snapshot(_snapshot(now, balance=100))
+    main.store.save_alert_config({'notify_recovery': False})
+    main.store.save_alert_state(firing['state'])
+    calls = []
+    async def deliver(events, **kwargs):
+        calls.extend(events)
+        return []
+    monkeypatch.setattr(notify, 'deliver', deliver)
+    asyncio.run(main.evaluate_alerts())
+    assert calls == [] and main.store.alert_state()['active'] == {}
+    main.store.save_alert_config({'notify_recovery': True})
+    main.store.save_alert_state(firing['state'])
+    asyncio.run(main.evaluate_alerts())
+    assert [event['action'] for event in calls] == ['resolved']
+
+
+def test_notification_card_formats_context_and_escapes_html():
+    notify.import_targets([], {})
+    event = {'action': 'test', 'context': {'balance': '42.11 元', 'remaining_days': '14.4 天', 'policy': '每轮最多 3 次，间隔至少 60 分钟'},
+             'alert': {'id': 'electricity:test', 'severity': 'critical', 'title': '通知通道测试',
+                       'summary': '<script>unsafe</script> & text', 'observed_at': '2026-10-20T08:00:00+00:00'}}
+    title = notify.render_title(event)
+    body = notify.render_text(event)
+    assert title.startswith('✅ 电费监测')
+    assert '测试消息' in body and '2026-10-20 16:00:00（北京时间）' in body
+    assert '42.11 元' in body and '每轮最多 3 次' in body
+    plan = notify.build_channel_payload({'type': 'wechat_pushplus', 'token': 'test', '_message_title': title}, body, event['alert'], 'test')
+    content = plan['json']['content']
+    assert '<script>' not in content and '&lt;script&gt;' in content and '&amp; text' in content
+    assert 'border-top:4px solid #16a34a' in content
+    assert '<br/>' in content
+    warning = {**event, 'action': 'firing'}
+    assert '严重' in notify.render_text(warning)
+    assert notify.render_title({**event, 'action': 'resolved'}).startswith('✅')
+
+
+def test_full_history_reads_before_5000_rows_and_keeps_old_periods(tmp_path, monkeypatch):
+    monkeypatch.setenv('ELECTRICITY_DAILY_HISTORY_DAYS', '0')
+    monkeypatch.setenv('ELECTRICITY_MONTHLY_HISTORY_DAYS', '0')
+    store = _store(tmp_path, monkeypatch)
+    store.append_daily_history([{'day': '2001-01-01', 'kwh': 1}])
+    store.append_daily_history([{'day': '2026-10-19', 'kwh': i} for i in range(5100)])
+    store.append_monthly_history([{'month': '200101', 'kwh': 10, 'cost': 5}])
+    store.append_monthly_history([{'month': '202609', 'kwh': i, 'cost': i / 2} for i in range(5100)])
+    assert [r['day'] for r in store.daily_history(0)] == ['2026-10-19', '2001-01-01']
+    assert store.daily_history(0)[0]['kwh'] == 5099
+    assert len(store.monthly_history(0)) == 2
+    assert store.trim_history() == {'daily': 0, 'monthly': 0}
+    assert store.monthly_history(0)[-1]['month'] == '200101'
+
+
+def test_all_months_and_years_stats_have_no_display_limit(tmp_path, monkeypatch):
+    store = _store(tmp_path, monkeypatch)
+    monkeypatch.setattr(main, 'store', store)
+    now = datetime(2026, 10, 20, tzinfo=timezone.utc)
+    monkeypatch.setattr(main, '_current_context', lambda when: {
+        'price_per_kwh': .5, 'price_source': 'configured', 'month_label': '202610',
+        'month_cost': 10., 'month_cost_estimated': True, 'daily': [], 'year': {},
+        'balance': 42., 'remaining_days': 10.})
+    store.append_monthly_history([{'month': f'{year}{month:02d}', 'kwh': 20, 'cost': 10}
+                                  for year in (2024, 2025) for month in range(1,13)])
+    data = client.get('/api/v1/stats?granularity=month&limit=0').json()
+    assert len(data['rows']) == 25
+    assert data['history_range'] == {'from': '2024-01', 'to': '2026-10'}
+    assert data['rows'][-1]['label'] == '2024-01'
+    year = client.get('/api/v1/stats?granularity=year&limit=0').json()
+    assert [r['label'] for r in year['rows']] == ['2025', '2024']
+    assert year['rows'][1]['cost'] == 120
+    assert client.get('/api/v1/stats?limit=-1').status_code == 422
+
+@pytest.mark.parametrize('history_error', [False, True])
+def test_collection_archives_previous_year_without_changing_current_snapshot(tmp_path, monkeypatch, history_error):
+    store = _store(tmp_path, monkeypatch)
+    year = datetime.now(alerting.TZ).year
+    meter = {'consNo_dst': 'x', 'consNo': 'x', 'orgNo': 'x', 'proNo': 'x'}
+    monkeypatch.setattr(store, 'configured', lambda: True)
+    monkeypatch.setattr(store, 'credentials', lambda: {'account': 'test', 'password_digest': 'test', 'target_meter': meter})
+    class Channel:
+        user_info = {'userId': 'x', 'loginAccount': 'x'}
+        token = 'test'
+        def __init__(self, *args): pass
+        async def async_login(self): return True
+        async def async_call(self, api, payload):
+            if api == collector.BALANCE_API:
+                data = {'list': [{'sumMoney': 50, 'consType': '1'}]}
+            elif api == collector.BILL_API:
+                requested = int(payload['data']['queryYear'])
+                if history_error and requested == year - 1:
+                    raise RuntimeError('history unavailable')
+                data = {'mothEleList': [{'month': f'{requested}01', 'monthEleCost': 10, 'monthEleNum': 20}]}
+            else:
+                data = {'sevenEleList': [{'day': f'{year}-01-01', 'dayElePq': 2}]}
+            return {'code': '0000', 'data': {'bizrt': data}}
+    monkeypatch.setattr(collector, 'WebChannel', Channel)
+    snapshot = asyncio.run(collector.collect(store))
+    assert snapshot['households'][0]['balance'] == 50
+    assert snapshot['households'][0]['bills'][0]['month'] == f'{year}01'
+    periods = {row['month'] for row in store.monthly_history(0)}
+    assert f'{year}01' in periods
+    assert (f'{year-1}01' in periods) is (not history_error)
+
+
+def test_bill_backfill_preserves_data_and_reports_missing_or_failed_years(tmp_path, monkeypatch):
+    import backfill_history
+    store = _store(tmp_path, monkeypatch)
+    monkeypatch.setattr(store, 'configured', lambda: True)
+    monkeypatch.setattr(store, 'credentials', lambda: {'account': 'test', 'password_digest': 'test', 'target_meter': {'consNo_dst':'x','consNo':'x','orgNo':'x','proNo':'x'}})
+    store.append_monthly_history([{'month':'202001','kwh':10,'cost':5}])
+    class Channel:
+        user_info = {'userId':'x'}
+        def __init__(self, *args): pass
+        async def async_login(self): return True
+        async def async_call(self, api, payload):
+            year = int(payload['data']['queryYear'])
+            if year == 2023: raise RuntimeError('upstream secret must not appear')
+            rows = [] if year == 2024 else [{'month': '202001' if year == 2022 else f'{year}01', 'monthEleCost': 10, 'monthEleNum': 20}]
+            return {'code':'0000','data':{'bizrt':{'mothEleList':rows}}}
+    monkeypatch.setattr(backfill_history, 'WebChannel', Channel)
+    result = asyncio.run(backfill_history.backfill(store, 2021, 2025))
+    assert result['added'] == 2 and result['oldest_month'] == '202001'
+    assert [r['status'] for r in result['results']] == ['ok','empty','failed','failed','ok']
+    assert 'upstream secret' not in json.dumps(result)
+    assert store.monthly_history(0)[-1]['cost'] == 5

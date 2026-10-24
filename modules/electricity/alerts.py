@@ -70,6 +70,8 @@ def config() -> dict:
         "stale_after_seconds": _env_int("ELECTRICITY_STALE_AFTER_SECONDS", 86400),
         "repeat_interval_seconds": _env_int("ELECTRICITY_REPEAT_INTERVAL_SECONDS", 86400),
         "pending_observations": max(1, _env_int("ELECTRICITY_PENDING_OBSERVATIONS", 1)),
+        "max_notifications": 0,
+        "notify_recovery": True,
         "quiet_hours": (os.getenv("ELECTRICITY_QUIET_HOURS") or "").strip(),
         # v0.3.0
         "step_warn_kwh": _env_float("ELECTRICITY_STEP_WARN_KWH", 100.0),
@@ -559,6 +561,9 @@ def is_silenced(state: dict, alert_id: str, now: datetime) -> bool:
 
 def should_notify(entry: dict, alert: dict, now: datetime, state: dict, cfg: dict) -> bool:
     if entry["status"] != "firing":
+        return False
+    limit = cfg.get("max_notifications", 0)
+    if limit and int(entry.get("notify_count") or 0) >= limit:
         return False
     if is_silenced(state, alert["id"], now):
         return False

@@ -1,0 +1,14 @@
+**
+!modules/
+!modules/runtime/
+!modules/runtime/*.py
+!modules/opencode_agent/
+!modules/opencode_agent/main.py
+!modules/opencode_agent/index.html
+!modules/opencode_agent/requirements.txt
+!modules/opencode_agent/Dockerfile
+
+!modules/opencode_agent/terminal.py
+
+!modules/opencode_agent/vendor/
+!modules/opencode_agent/vendor/*

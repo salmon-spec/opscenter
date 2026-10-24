@@ -144,6 +144,28 @@ input,select,textarea{font:inherit;padding:8px 10px;border:1px solid var(--borde
 code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11.5px}
 .state{margin-top:14px;font-size:12.5px;color:var(--muted);min-height:18px}
 .state.err{color:var(--err)}
+#alert-settings-form{display:block;margin:0}
+#view-alerts{padding-top:16px}
+.alert-layout{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.alert-card{min-width:0;background:#fff;border:1px solid var(--border);border-radius:12px;padding:18px}
+.alert-card h3{font-size:14px;margin:0 0 4px}
+.alert-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}
+.alert-fields label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600;min-width:0}
+.alert-fields .hint{font-weight:400;font-size:11px;line-height:1.5}
+.alert-advanced{margin-top:14px}
+.alert-advanced summary{cursor:pointer;font-weight:600;font-size:13px;color:var(--brand)}
+#alert-advanced-fields{grid-template-columns:repeat(3,minmax(0,1fr))}
+.alert-savebar{position:sticky;bottom:0;background:#fff;border:1px solid var(--border);border-radius:10px;margin:14px 0;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;z-index:10;box-shadow:0 -3px 12px #0f172a06}
+.alert-savebar .state{margin:0}
+.module-version{font-size:10px;color:var(--muted);margin-left:8px;white-space:nowrap}
+@media(max-width:900px){.alert-layout{grid-template-columns:1fr}#alert-advanced-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.alert-fields,#alert-advanced-fields{grid-template-columns:1fr}.alert-savebar{align-items:flex-start;flex-direction:column}.wrap{padding-left:12px;padding-right:12px}}
+#view-alerts p>label{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#view-alerts #alert-quiet{width:320px;max-width:100%}
+#alert-settings-fields label{display:flex;flex-direction:column;gap:6px;font-size:13px;font-weight:600}
+#view-alerts input:not([type=checkbox]){border:1px solid var(--border);border-radius:7px;padding:9px;font:inherit;width:100%}
+#alert-settings-fields .hint{font-weight:400}
+#alert-settings-active .row{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
 @media(max-width:680px){.row .meta{display:none}.hcard .value{font-size:26px}.calendar{gap:3px}.day-cell{min-height:68px;padding:4px}.day-cell .usage{font-size:12px}.day-cell .cost{font-size:9px}.weekday{gap:2px;font-size:9px}.week-icon{width:17px;height:17px}}
 </style>
 </head>
@@ -152,11 +174,12 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
   <nav class="module-tabs" id="tabs" aria-label="模块导航">
     <button class="module-tab active" data-view="main">电费监测</button>
     <button class="module-tab" data-view="notify">通知设置</button>
+    <button class="module-tab" data-view="alerts">告警阈值</button><span class="module-version">电量模块 v0.10.0</span>
   </nav>
   <div><button class="btn" id="refresh">立即刷新</button></div>
 </div></div>
 
-<div class="wrap">
+<div class="wrap" id="dashboard-wrap">
 
 <!-- ======================= Tab 1：电费监测 ======================= -->
 <div id="view-main">
@@ -182,10 +205,12 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
       </span>
       <span class="calendar-nav" id="calendar-nav">
         <button id="cal-prev" aria-label="上个月">‹</button><strong id="cal-title"></strong><button id="cal-next" aria-label="下个月">›</button>
+        <input type="month" id="calendar-jump" aria-label="选择历史月份" style="max-width:155px;border:1px solid var(--border);border-radius:7px;padding:5px;color:var(--text)">
       </span>
     </div>
     <div class="calendar" id="calendar"></div>
     <div class="blocks" id="blocks"></div>
+    <p class="hint" id="history-coverage" style="margin-top:12px"></p>
   </section>
 
   <section>
@@ -241,9 +266,10 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
 
   <div class="form-card">
     <h2>消息格式</h2>
+    <p class="hint">可用状态变量：{severity_label} 中文级别、{balance} 余额、{remaining_days} 可用天数、{policy} 提醒策略。时间统一为北京时间。</p>
     <p class="note" style="margin:4px 0 12px">可用变量：<code>{title}</code> 标题、<code>{summary}</code> 摘要、<code>{severity}</code> 级别、<code>{observed_at}</code> 时间、<code>{alert_id}</code> 编号、<code>{url}</code> 详情链接、<code>{action_label}</code> 动作、<code>{icon}</code> 图标。</p>
     <form onsubmit="return false">
-      <label>消息标题<input id="s-title-template" placeholder="{icon} {action_label}｜{title}"></label>
+      <label>消息标题<input id="s-title-template" placeholder="{icon} 电费监测｜{title}"></label>
       <label style="grid-column:1/-1">消息正文<textarea id="s-body-template" rows="5" placeholder="{title}\n{summary}\n触发时间：{observed_at}\n告警 ID：{alert_id}\n查看详情：{url}\n来源：OpsCenter 电费监测模块"></textarea></label>
       <div><button class="btn" id="template-save">保存消息格式</button></div>
     </form>
@@ -267,6 +293,27 @@ code{background:var(--brand-soft);border-radius:5px;padding:1px 5px;font-size:11
 </div>
 
 </div>
+<div id="view-alerts" class="wrap" hidden>
+  <div class="sec-head"><div><h2>告警阈值</h2><p class="hint">按实际用电情况设置提醒，保存后持续生效</p></div></div>
+  <form id="alert-settings-form">
+    <div class="alert-layout">
+      <div class="alert-card"><h3>余额与预算</h3><p class="hint">优先设置日常最关心的提醒条件</p><div class="alert-fields" id="alert-basic-fields"></div></div>
+      <div class="alert-card"><h3>通知策略</h3><p class="hint">控制持续告警的提醒频率和次数</p><div class="alert-fields" id="alert-delivery-fields"></div>
+      <p><label>免打扰时段（北京时间） <input id="alert-quiet" placeholder="23:00-07:00，留空关闭"></label></p>
+      <p class="hint">严重告警仍会通知；达到次数上限后保留告警展示。</p>
+      <p><label><input type="checkbox" id="alert-recovery"> 告警恢复时通知一次</label></p>
+      </div>
+    </div>
+    <details class="alert-card alert-advanced"><summary>更多阈值 · 用电异常、采集与电价</summary><div class="alert-fields" id="alert-advanced-fields"></div></details>
+    <div class="alert-savebar"><div><p class="state" id="alert-settings-state" role="status">修改后请保存</p><p class="hint" id="alert-schedule-hint"></p></div>
+      <div class="actions"><button class="btn" id="alert-save" type="button" disabled>保存设置</button> <button class="btn ghost" id="alert-defaults" type="button" disabled>填入默认值</button></div>
+    </div>
+  </form>
+  <section><div class="sec-head"><h2>当前告警与通知次数</h2><button class="btn ghost" id="alert-reload" type="button">刷新状态</button></div>
+    <p class="hint">次数按每条持续告警的发送轮次累计，包含首次发送与失败尝试；每轮向符合级别的已启用收件人分发。恢复后再次触发重新计数。</p>
+    <div id="alert-settings-active" style="margin-top:12px"></div>
+  </section>
+</div>
 <script>
 const API = '/modules/electricity/api/v1';
 const $ = (id) => document.getElementById(id);
@@ -277,6 +324,7 @@ let moduleReady = !framed;
 let gran = 'day';
 let calendarMonth = '';
 let latestMonth = '';
+let earliestMonth = '';
 let statsRequestId = 0;
 const UNIT = { day: '日均', month: '月均', year: '年均' };
 const ACTION = { firing: '首次告警', 're-fire': '重复提醒', resolved: '已恢复', test: '测试推送' };
@@ -294,7 +342,7 @@ function request(path, method = 'GET', body, query) {
       method,
       headers: Object.assign({}, token ? { Authorization: `Bearer ${token}` } : {}, body ? { 'Content-Type': 'application/json' } : {}),
       body: body ? JSON.stringify(body) : undefined,
-    }).then(async (r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+    }).then(async (r) => { const data = await r.json(); if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`); return data; });
   }
   const id = `electricity-${Date.now()}-${++requestId}`;
   return new Promise((resolve, reject) => {
@@ -309,10 +357,71 @@ function selectView(view) {
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
   $('view-main').hidden = view !== 'main';
   $('view-notify').hidden = view !== 'notify';
+  $('view-alerts').hidden = view !== 'alerts';
+  $('dashboard-wrap').hidden = view === 'alerts';
   if (view === 'notify') loadNotify();
+  if (view === 'alerts') loadAlertSettings();
 }
 document.querySelectorAll('#tabs button').forEach((b) => b.onclick = () => selectView(b.dataset.view));
 if (location.pathname.endsWith('/notify') || location.hash === '#notify') selectView('notify');
+if (location.hash === '#alerts') selectView('alerts');
+
+let alertDocument;
+const alertBasic = ['low_balance', 'critical_balance', 'depletion_days', 'monthly_budget'];
+const alertDelivery = ['max_notifications', 'repeat_interval_seconds', 'pending_observations'];
+const alertUnits = {stale_after_seconds: [3600, '数据过期时间（小时）'], repeat_interval_seconds: [60, '重复通知间隔（分钟）'], tou_tip_ratio: [0.01, '尖峰用电占比（%）']};
+function alertFactor(key) { return alertUnits[key]?.[0] || 1; }
+function alertField(f) {
+  const factor = alertFactor(f.key), label = alertUnits[f.key]?.[1] || f.label;
+  let help = f.help;
+  if (f.key === 'tou_tip_ratio') help = '超过此比例提醒，例如 50 表示 50%';
+  if (f.key === 'max_notifications') help = '包含首次，0 为不限；失败也计次，恢复后重新计数';
+  return `<label>${esc(label)}<input id="alert-field-${f.key}" type="number" min="${f.min/factor}" max="${f.max/factor}" step="${f.step === 1 && factor === 1 ? 1 : 'any'}" required><span class="hint">${esc(help)}</span></label>`;
+}
+function fillAlertSettings(settings) {
+  for (const f of alertDocument.fields) $('alert-field-' + f.key).value = Number((settings[f.key] / alertFactor(f.key)).toFixed(6));
+  $('alert-quiet').value = settings.quiet_hours || '';
+  $('alert-recovery').checked = settings.notify_recovery;
+}
+async function loadAlertSettings() {
+  const state = $('alert-settings-state');
+  try {
+    alertDocument = await request(`${API}/alerts/settings`);
+    $('alert-basic-fields').innerHTML = alertDocument.fields.filter(f => alertBasic.includes(f.key)).map(alertField).join('');
+    $('alert-delivery-fields').innerHTML = alertDocument.fields.filter(f => alertDelivery.includes(f.key)).sort((a,b)=>alertDelivery.indexOf(a.key)-alertDelivery.indexOf(b.key)).map(alertField).join('');
+    $('alert-advanced-fields').innerHTML = alertDocument.fields.filter(f => !alertBasic.includes(f.key) && !alertDelivery.includes(f.key)).map(alertField).join('');
+    fillAlertSettings(alertDocument.settings);
+    $('alert-save').disabled = false;
+    $('alert-defaults').disabled = false;
+    $('alert-schedule-hint').textContent = `每 ${alertDocument.evaluation_interval_minutes} 分钟及采集完成后评估一次。通知达到上限后仍保留告警展示。默认值填入后需保存。`;
+    await loadAlertStatus();
+  } catch (e) { state.textContent = `加载失败：${e.message}`; state.className = 'state err'; }
+}
+async function loadAlertStatus() {
+  try {
+    const data = await request(`${API}/alerts`);
+    const limit = alertDocument?.settings.max_notifications || 0;
+    $('alert-settings-active').innerHTML = data.items.length ? data.items.map(a => `<div class="row"><div><b>${esc(a.title)}</b><div class="hint">${esc(a.summary)}</div></div><span>${a.notify_count} / ${limit || '不限'} 次 · ${esc(a.status)}${limit && a.notify_count >= limit ? ' · 已达上限' : ''}</span></div>`).join('') : '<p class="hint">当前没有告警</p>';
+  } catch (e) { $('alert-settings-active').textContent = `状态加载失败：${e.message}`; }
+}
+$('alert-defaults').onclick = () => { fillAlertSettings(alertDocument.defaults); $('alert-settings-state').textContent = '已填入默认值，保存后生效'; };
+$('alert-reload').onclick = loadAlertStatus;
+$('alert-save').onclick = async (event) => {
+  event.preventDefault();
+  if (!$('alert-settings-form').reportValidity()) return;
+  const button = $('alert-save'), state = $('alert-settings-state');
+  button.disabled = true;
+  try {
+    const payload = Object.fromEntries(alertDocument.fields.map(f => {const value = Number($('alert-field-' + f.key).value) * alertFactor(f.key); return [f.key, f.step === 1 ? Math.round(value) : Number(value.toFixed(8))];}));
+    payload.quiet_hours = $('alert-quiet').value.trim();
+    payload.notify_recovery = $('alert-recovery').checked;
+    alertDocument = await request(`${API}/alerts/settings`, 'POST', payload);
+    fillAlertSettings(alertDocument.settings);
+    state.className = 'state'; state.textContent = '设置已保存，下一次评估生效';
+    await loadAlertStatus();
+  } catch (e) { state.className = 'state err'; state.textContent = `保存失败：${e.message}`; }
+  finally { button.disabled = false; }
+};
 
 /* ---- 电费监测 ---- */
 function renderOverview(data) {
@@ -367,6 +476,9 @@ function renderAlertLine(data) {
 
 function renderStats(data) {
   const rows = (data.rows || []).slice().sort((a, b) => String(b.label).localeCompare(String(a.label)));
+  const range = data.history_range || {};
+  $('history-coverage').textContent = rows.length ? `全部已保存记录：${range.from} 至 ${range.to}，共 ${rows.length} ${data.granularity === 'day' ? '天' : data.granularity === 'month' ? '个月' : '年'}。已采集日/月数据长期保留；更早未取得的数据不补零，估算不等于正式账单。` : '尚无已保存历史，后续采集会自动累计归档。';
+  if (data.granularity === 'day') earliestMonth = range.from?.slice(0,7) || '';
   $('stats-hint').textContent = `单价 ${num(data.price_per_kwh, 4)} 元/度（${data.price_source === 'year-average' ? '年度账单实算' : '配置值'}）。`;
   $('calendar').hidden = data.granularity !== 'day';
   $('calendar-nav').hidden = data.granularity !== 'day';
@@ -387,7 +499,7 @@ function renderStats(data) {
     return `<div class="blk${now}"><div class="d">${esc(row.label)}</div>` +
       `<div class="c">${num(row.kwh, 1)}<small>度</small></div>` +
       `<div class="k">${num(row.cost)} 元</div>` +
-      `<div class="foot">${dChip}</div></div>`;
+      `<div class="foot">${row.estimated ? '<span class="chip est">估算</span>' : ''}${now ? '<span class="chip">进行中</span>' : ''}${dChip}</div></div>`;
   }).join('') : '<p class="hint">暂无数据</p>';
 }
 
@@ -404,6 +516,10 @@ function renderCalendar(rows) {
   $('sumline').innerHTML = `<span>已公布 <b>${currentRows.length}</b> 天</span><span>用电 <b>${num(kwh, 1)}</b> 度</span>` +
     `<span>折算花费 <b>${num(cost)}</b> 元</span><span>日均 <b>${currentRows.length ? num(cost / currentRows.length) : '—'}</b> 元</span>`;
   $('cal-title').textContent = `${year} 年 ${month} 月`;
+  $('calendar-jump').value = calendarMonth;
+  $('calendar-jump').min = earliestMonth;
+  $('calendar-jump').max = latestMonth;
+  $('cal-prev').disabled = Boolean(earliestMonth && calendarMonth <= earliestMonth);
   $('cal-next').disabled = calendarMonth >= latestMonth;
   const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
   const header = weekdays.map((label, index) => `<div class="weekday${index > 4 ? ' weekend' : ''}"><span class="week-icon">${label}</span>周${label}</div>`).join('');
@@ -425,7 +541,8 @@ function renderHistory(rows) {
   $('history').innerHTML = rows.length ? rows.map((h) => {
     const failed = h.delivered === false;
     const tag = h.action === 'resolved' ? 'ok' : (h.action === 'test' ? 'test' : '');
-    return `<div class="item"><span class="t">${esc((h.at || '').replace('T', ' '))}</span>` +
+    const when = h.at ? new Date(h.at).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai', hour12:false}) : '—';
+    return `<div class="item"><span class="t">${esc(when)}</span>` +
       `<span class="tag ${tag}">${esc(ACTION[h.action] || h.action || '')}</span>` +
       `<span class="what">${esc(h.title || h.alert_id || '')}</span>` +
       `<span class="ch ${failed ? 'fail' : ''}">${esc((h.channels || []).join(', ') || '—')}${failed ? ' · 失败' : ''}</span></div>`;
@@ -438,6 +555,7 @@ document.querySelectorAll('#seg-gran button').forEach((button) => button.addEven
   loadStats();
 }));
 $('cal-prev').onclick = () => {
+  if (earliestMonth && calendarMonth <= earliestMonth) return;
   const [year, month] = calendarMonth.split('-').map(Number);
   calendarMonth = new Date(Date.UTC(year, month - 2, 1)).toISOString().slice(0, 7);
   loadStats();
@@ -453,10 +571,16 @@ async function loadStats() {
   const current = ++statsRequestId;
   try {
     const data = await request(`${API}/stats`, 'GET', undefined,
-      { granularity: gran, limit: gran === 'day' ? 730 : gran === 'month' ? 12 : 50 });
+      { granularity: gran, limit: 0 });
     if (current === statsRequestId) renderStats(data);
   } catch (e) { if (current === statsRequestId) $('stats-hint').textContent = `统计接口不可用（${e.message}）`; }
 }
+$('calendar-jump').onchange = (event) => {
+  const value = event.target.value;
+  if (!value || (earliestMonth && value < earliestMonth) || value > latestMonth) return;
+  calendarMonth = value;
+  loadStats();
+};
 
 function setState(text, error) {
   $('state').textContent = text;
@@ -528,8 +652,8 @@ async function loadNotify() {
     $('s-user').value = data.settings?.username || '';
     $('s-pass').value = data.settings?.password || '';
     $('s-from').value = data.settings?.mail_from || '';
-    $('s-title-template').value = data.settings?.title_template || '';
-    $('s-body-template').value = data.settings?.body_template || '';
+    $('s-title-template').value = data.settings?.title_template || data.message_defaults?.title_template || '';
+    $('s-body-template').value = data.settings?.body_template || data.message_defaults?.body_template || '';
     $('s-sms').value = data.settings?.sms_webhook || '';
     $('s-sign').value = data.settings?.sms_sign || '';
     $('s-tpl').value = data.settings?.sms_template || '';
@@ -683,6 +807,7 @@ window.addEventListener('message', (event) => {
     moduleReady = true;
     load();
     loadNotify();
+    if (!$('view-alerts').hidden) loadAlertSettings();
   } else if (data.type === 'ops-module-api-response') {
     const task = pending.get(data.id);
     if (!task) return;

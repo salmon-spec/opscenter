@@ -13,6 +13,29 @@ def test_module_version_matches_release():
     assert TestClient(app).get("/api/v1/version").json()["version"] == "0.7.4"
 
 
+def test_internal_alert_targets_use_latest_probes_and_include_hidden(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    now = datetime.now(timezone.utc)
+    calls = []
+    def snapshot(include_hidden=False):
+        calls.append(include_hidden)
+        return [{'key':'fresh','name':'Fresh','status':'up'}, {'key':'stale','name':'Stale'}, {'key':'disabled','probe_enabled':False}], now
+    monkeypatch.setattr(main, 'services_snapshot', snapshot)
+    monkeypatch.setattr(main, 'CatalogStore', lambda:SimpleNamespace(latest_probes=lambda keys:{
+        'fresh':{'status':'down','checked_at':now},'stale':{'status':'up','checked_at':now-timedelta(hours=1)}}))
+    key = tmp_path / 'internal-token'
+    key.write_text('internal-test')
+    monkeypatch.setenv('OPS_MODULE_INTERNAL_TOKEN_FILE', str(key))
+    client = TestClient(app)
+    assert client.get('/api/v1/internal/alert-targets').status_code == 401
+    response = client.get('/api/v1/internal/alert-targets',headers={'X-OpsCenter-Module-Token':'internal-test'})
+    assert response.status_code == 200
+    rows = {row['id']:row for row in response.json()['items']}
+    assert rows['fresh']['value'] == 'down' and rows['stale']['value'] is None
+    assert rows['stale']['data_status'] == 'unknown'
+    assert 'disabled' not in rows and calls == [True]
+
+
 class FakeStore:
     def __init__(self, snapshots=None):
         self.snapshots = snapshots or {}
@@ -208,7 +231,8 @@ def test_health_overview_prefers_module_owned_probe(monkeypatch):
     assert overview["items"][0]["checks"] == 1
     assert overview["items"][0]["stale"] is False
     assert overview["items"][0]["uptime_percent"] == 98.25
-    assert overview["stale"] is True
+    assert overview["stale"] is False
+    assert overview["uptime_history_pending"] is True
 
 
 def test_health_overview_validates_range():

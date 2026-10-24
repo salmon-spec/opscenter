@@ -1,0 +1,219 @@
+# Runner is reachable only over this Pod's loopback; Service exposes the JWT gateway.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: module-opencode-data
+  namespace: opscenter
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-opencode-agent
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-opencode-agent
+  template:
+    metadata:
+      labels:
+        app: module-opencode-agent
+      annotations:
+        opscenter.io/opencode-release: "0.2.0-20261023"
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: k8s-worker-02
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: prepare-data
+          image: opscenter/module-opencode-agent:0.2.0-20261023
+          imagePullPolicy: Never
+          command:
+            - python3
+            - -c
+            - "import os; [(os.makedirs('/state/'+p,exist_ok=True),os.chmod('/state/'+p,0o770)) for p in ('gateway','runner','workspace')]; os.makedirs('/state/runner/config',mode=0o770,exist_ok=True)"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /state
+      containers:
+        - name: gateway
+          image: opscenter/module-opencode-agent:0.2.0-20261023
+          imagePullPolicy: Never
+          env:
+            - name: OPENCODE_RUNNER_URL
+              value: http://127.0.0.1:4096
+            - name: OPENCODE_RUNNER_PASSWORD_FILE
+              value: /run/secrets/runner_password
+            - name: OPENCODE_WORKSPACE
+              value: /workspace
+            - name: OPENCODE_GATEWAY_DATA
+              value: /data
+            - name: OPENCODE_NATIVE_CONFIG_FILE
+              value: /runner-config/opencode/opencode.jsonc
+            - name: OPS_JWT_PUBLIC_KEY_FILE
+              value: /run/secrets/jwt-public.pem
+            - name: OPS_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: opscenter-env
+                  key: OPS_ADMIN_USER
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+              subPath: gateway
+            - name: data
+              mountPath: /workspace
+              subPath: workspace
+            - name: data
+              mountPath: /runner-config
+              subPath: runner/config
+            - name: runner-password
+              mountPath: /run/secrets/runner_password
+              subPath: password
+              readOnly: true
+            - name: jwt-public
+              mountPath: /run/secrets/jwt-public.pem
+              subPath: jwt-public.pem
+              readOnly: true
+        - name: runner
+          image: opscenter/opencode-runner:0.2.0-20261023
+          imagePullPolicy: Never
+          env:
+            - name: GIT_CONFIG_GLOBAL
+              value: /runner-data/config/opscenter.gitconfig
+            - name: OPENCODE_DISABLE_PROJECT_CONFIG
+              value: "false"
+          command:
+            - sh
+            - -c
+            - 'set -eu; umask 0007; OPENCODE_SERVER_PASSWORD=$(cat /run/secrets/runner_password); test -n "$OPENCODE_SERVER_PASSWORD"; export OPENCODE_SERVER_PASSWORD; mkdir -p /runner-data/config/opencode; find /runner-data/config /workspace -xdev -user 1000 -type d -exec chmod g+rwx {} +; exec opencode-runner serve --hostname 127.0.0.1 --port 4096'
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 1536Mi
+          volumeMounts:
+            - name: data
+              mountPath: /runner-data
+              subPath: runner
+            - name: data
+              mountPath: /workspace
+              subPath: workspace
+            - name: runner-password
+              mountPath: /run/secrets/runner_password
+              subPath: password
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: module-opencode-data
+        - name: runner-password
+          secret:
+            secretName: opscenter-opencode-runner
+            defaultMode: 288
+        - name: jwt-public
+          secret:
+            secretName: opscenter-jwt-keypair
+            defaultMode: 288
+            items:
+              - key: jwt-public.pem
+                path: jwt-public.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-opencode-agent
+  namespace: opscenter
+spec:
+  selector:
+    app: module-opencode-agent
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: module-opencode-ingress
+  namespace: opscenter
+spec:
+  podSelector:
+    matchLabels:
+      app: module-opencode-agent
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: web
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 8080

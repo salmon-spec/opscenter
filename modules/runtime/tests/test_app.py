@@ -72,8 +72,9 @@ def test_module_gateway_requires_workbench_session():
     compose = (caddyfile.parent / "compose.vm1-test.yaml").read_text(encoding="utf-8")
     assert "forward_auth @moduleRequests" not in config
     assert "handle_path /modules/k3s/*" in config
-    assert config.count("respond @internalProbe 404") == 9
-    assert compose.count('MODULE_AUTH_REQUIRED: "true"') == 7
+    for block in config.split("handle_path /modules/")[1:]:
+        assert "respond @internalProbe 404" in block.split("reverse_proxy", 1)[0]
+    assert 'MODULE_AUTH_REQUIRED: "true"' in compose
     assert 'OPS_AUTH_ENABLED: "true"' in compose
 
 

@@ -21,7 +21,7 @@ from app.ssh_manager import get_ssh_client, ssh_exec
 
 router = APIRouter(prefix="/api/v2", tags=["firewall"])
 _PORT_RE = re.compile(r"^(\d{1,5})(?:[-:](\d{1,5}))?$")
-_UFW_RULE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+(ALLOW|DENY|REJECT)\s+(?:IN|OUT)?\s*(.*)$", re.I)
+_UFW_RULE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+(ALLOW|DENY|REJECT)\s+(IN|OUT)?\s*(.*)$", re.I)
 
 
 class FirewallRuleRequest(BaseModel):
@@ -34,8 +34,11 @@ class FirewallRuleRequest(BaseModel):
 class FirewallDeleteRequest(BaseModel):
     rule_id: str
     port: str
-    protocol: Literal["tcp", "udp"] = "tcp"
+    protocol: Literal["tcp", "udp", "any"] = "tcp"
     confirm_ssh_disruption: bool = False
+    source: Optional[str] = None
+    action: Optional[Literal["allow", "deny", "reject"]] = None
+    direction: Optional[Literal["in", "out"]] = None
 
 
 class FirewallStateRequest(BaseModel):
@@ -123,7 +126,7 @@ def _parse_ufw(output: str) -> list[dict]:
             continue
         target = match.group(2)
         port, _, protocol = target.partition("/")
-        rules.append({"id": match.group(1), "port": port, "protocol": protocol or "any", "action": match.group(3).lower(), "source": match.group(4).strip() or "any"})
+        rules.append({"id": match.group(1), "port": port, "protocol": protocol or "any", "action": match.group(3).lower(), "source": match.group(5).strip() or "any", "direction": (match.group(4) or "IN").lower()})
     return rules
 
 
@@ -173,14 +176,29 @@ def delete_firewall_rule(server_id: str, payload: FirewallDeleteRequest):
     if not backend:
         raise HTTPException(status_code=400, detail="主机未安装 UFW 或 firewalld")
     port, start, end = _port(payload.port)
+    rule = None
+    if backend == "ufw":
+        if not payload.rule_id.isdigit():
+            raise HTTPException(status_code=400, detail="非法 UFW 规则编号")
+        rules = _parse_ufw(_execute(server, ["sudo", "ufw", "status", "numbered"]))
+        rule = next((item for item in rules if item["id"] == payload.rule_id), None)
+        if (not rule or _port(rule["port"])[0] != port or rule["protocol"] != payload.protocol
+                or (payload.source is not None and rule["source"] != payload.source)
+                or (payload.direction is not None and rule["direction"] != payload.direction)
+                or (payload.action is not None and rule["action"] != payload.action)):
+            raise HTTPException(status_code=409, detail="防火墙规则已变化，请刷新后重试")
     ssh_port = int(server.ssh_port or 22)
     if start <= ssh_port <= end and not payload.confirm_ssh_disruption:
         raise HTTPException(status_code=409, detail=f"该规则包含当前 SSH 端口 {ssh_port}，需要额外确认")
     if backend == "ufw":
-        if not payload.rule_id.isdigit():
-            raise HTTPException(status_code=400, detail="非法 UFW 规则编号")
-        _execute(server, ["sudo", "ufw", "--force", "delete", payload.rule_id])
+        # Delete the verified rule itself so a concurrent renumber cannot select SSH.
+        source = _source(rule["source"])
+        _execute(server, ["sudo", "ufw", "--force", "delete", rule["action"], rule["direction"],
+                          "from", source, "to", "any", "port", port.replace("-", ":"),
+                          *(["proto", payload.protocol] if payload.protocol != "any" else [])])
     else:
+        if payload.protocol == "any":
+            raise HTTPException(400, "firewalld 删除规则需要 TCP 或 UDP 协议")
         _execute(server, ["sudo", "firewall-cmd", "--permanent", f"--remove-port={port}/{payload.protocol}"])
         _execute(server, ["sudo", "firewall-cmd", "--reload"])
     return {"ok": True, "backend": backend, "deleted": payload.rule_id}

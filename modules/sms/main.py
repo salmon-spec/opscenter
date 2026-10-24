@@ -22,7 +22,7 @@ import json
 import logging
 import os
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from aiohttp import ClientSession
@@ -76,17 +76,29 @@ def _history(limit: int = 50) -> list[dict]:
 
 def summary_provider():
     provider = bool((os.getenv("SMS_PROVIDER_URL") or "").strip())
-    rows = _history(200)
-    today = datetime.now(timezone.utc).strftime("%Y%m%d")
-    sent_today = sum(1 for row in rows
-                     if str(row.get("at", "")).startswith(today) and row.get("ok"))
-    failed_today = sum(1 for row in rows
-                       if str(row.get("at", "")).startswith(today) and not row.get("ok"))
+    today = datetime.now(timezone(timedelta(hours=8))).date()
+    sent_today, failed_today, audit_rows = 0, 0, 0
+    try:
+        with AUDIT_PATH.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                    stamp = datetime.fromisoformat(row["at"].replace("Z", "+00:00"))
+                    if stamp.tzinfo is None:
+                        continue
+                    audit_rows += 1
+                    if stamp.astimezone(timezone(timedelta(hours=8))).date() == today:
+                        sent_today += bool(row.get("ok"))
+                        failed_today += not bool(row.get("ok"))
+                except (ValueError, KeyError, TypeError):
+                    continue
+    except OSError:
+        pass
     status = "ok" if provider else "unavailable"
     return {"status": status, "collected_at": datetime.now(timezone.utc),
             "stale_after_seconds": 86400,
             "data": {"provider_configured": provider, "sent_today": sent_today,
-                     "failed_today": failed_today, "audit_rows": len(rows)},
+                     "failed_today": failed_today, "audit_rows": audit_rows},
             "error": None if provider else "SMS_PROVIDER_URL 未配置"}
 
 
@@ -152,6 +164,13 @@ async def send(payload: dict = Body(default={}), x_sms_token: str = Header(defau
         logging.warning("sms send failed phone=%s status=%s", phone_masked, status)
         raise HTTPException(502, f"短信网关投递失败（status={status}）：{detail[:120]}")
     return {"ok": True, "phone": phone_masked, "provider_status": status}
+
+
+@app.post('/api/v1/internal/send')
+async def internal_send(payload: dict = Body(default={}), x_sms_token: str = Header(default='')):
+    if not (os.getenv('SMS_TOKEN') or '').strip():
+        raise HTTPException(503, '短信模块间令牌尚未配置')
+    return await send(payload, x_sms_token)
 
 
 @app.get("/api/v1/history")

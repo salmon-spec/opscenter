@@ -15,6 +15,7 @@ from fastapi import Header, HTTPException, Query
 
 from runtime.app import create_module_app
 from runtime.database import database_ready
+from pathlib import Path
 
 
 LOKI_URL = os.getenv("LOGS_LOKI_URL", "").rstrip("/")
@@ -132,6 +133,19 @@ def _host(host_id: UUID, authorization: str | None):
     return host
 
 
+def _coverage():
+    token_file = os.getenv("HOST_INVENTORY_INTERNAL_TOKEN_FILE", "")
+    if not token_file:
+        return None
+    token = Path(token_file).read_text(encoding="utf-8").strip()
+    result = _request(f"{HOST_INVENTORY_URL}/api/v1/internal/log-coverage",
+                      headers={"X-OpsCenter-Module-Token": token})
+    if result.get("status") != "ok" or not isinstance(result.get("items"), list):
+        raise ValueError("Invalid log coverage")
+    fresh = _vector(_loki("/loki/api/v1/query", {"query": 'sum by (server_id) (count_over_time({server_id=~".+"}[10m]))'}), "server_id")
+    return [{**host, "ingestion_fresh": fresh.get(str(host["id"]), 0) > 0} for host in result["items"]]
+
+
 def _summary():
     ready = False
     if LOKI_URL:
@@ -140,12 +154,37 @@ def _summary():
                 ready = response.status < 400
         except (HTTPError, TimeoutError, URLError, OSError):
             pass
-    return {"status": "ok" if ready else "degraded", "collected_at": datetime.now(timezone.utc),
-            "stale_after_seconds": 120, "data": {"loki_configured": bool(LOKI_URL), "loki_ready": ready}}
+    data = {"loki_configured": bool(LOKI_URL), "loki_ready": ready}
+    error = None
+    try:
+        hosts = _coverage()
+        if hosts is None:
+            error = "日志采集覆盖检查尚未配置"
+        else:
+            running = sum(host.get("log_agent_status") == "running" for host in hosts)
+            fresh = sum(bool(host.get("ingestion_fresh")) for host in hosts)
+            data.update(hosts_total=len(hosts), collectors_running=running, collectors_missing=len(hosts)-running,
+                        collectors_fresh=fresh, collectors_stale=len(hosts)-fresh)
+    except (OSError, HTTPException, ValueError):
+        error = "日志采集覆盖状态暂不可用"
+    return {"status": "ok" if ready and not error and not data.get("collectors_missing") and not data.get("collectors_stale") else "degraded",
+            "collected_at": datetime.now(timezone.utc), "stale_after_seconds": 120, "data": data, "error": error}
+
+
+def _findings():
+    hosts = _coverage()
+    if hosts is None:
+        raise ValueError("Log coverage is not configured")
+    items = [{"id": f"logs:{host['id']}:collector", "resource_id": str(host["id"]), "severity": "warning",
+              "title": f"{host['name']} 日志采集异常",
+              "summary": "当前主机没有运行中的日志采集器" if host.get("log_agent_status") != "running" else "采集器运行中，但最近10分钟没有日志送达",
+              "observed_at": datetime.now(timezone.utc)} for host in (hosts or [])
+             if host.get("log_agent_status") != "running" or not host.get("ingestion_fresh")]
+    return {"status": "degraded" if items else "ok", "collected_at": datetime.now(timezone.utc), "items": items}
 
 
 app = create_module_app(key="logs", version="0.2.2", summary_provider=_summary,
-                        findings_provider=lambda: {"status": "ok", "collected_at": datetime.now(timezone.utc), "items": []},
+                        findings_provider=_findings,
                         capabilities=["summary:read", "findings:read", "logs:read", "health:read"],
                         readiness_provider=database_ready)
 

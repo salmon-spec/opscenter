@@ -107,6 +107,37 @@ def test_version_parser_and_systemd_escaping():
     assert escaped == 'node%%1 \\"db\\" next'
 
 
+def test_push_url_only_falls_back_to_registered_loki_host(monkeypatch):
+    with SessionLocal() as db:
+        db.add(Server(name="loki", host="10.66.66.15", lan_ip="192.168.1.158", agent_type="remote"))
+        db.commit()
+    calls = []
+    def probe(client, command, timeout=5):
+        calls.append(command)
+        return "", "", 0 if "192.168.1.158" in command else 28
+    monkeypatch.setattr(alloy_manager, "ssh_exec", probe)
+    assert alloy_manager._reachable_push_url(None, "http://10.66.66.15:31000/loki/api/v1/push") == "http://192.168.1.158:31000/loki/api/v1/push"
+    assert len(calls) == 2
+    with pytest.raises(ValueError, match="无法连接"):
+        alloy_manager._reachable_push_url(None, "http://unregistered:31000/loki/api/v1/push")
+
+
+def test_dockerless_config_preserves_journal_and_writer(monkeypatch):
+    from types import SimpleNamespace
+    from pathlib import Path
+    monkeypatch.setattr(alloy_manager, "_CONFIG_SOURCE", Path(__file__).resolve().parents[2] / "deploy/observability/alloy.example.alloy")
+    uploads = []
+    monkeypatch.setattr(alloy_manager, "_reachable_push_url", lambda *args: "http://loki/loki/api/v1/push")
+    monkeypatch.setattr(alloy_manager, "_push_url", lambda: "http://loki/loki/api/v1/push")
+    monkeypatch.setattr(alloy_manager, "get_ssh_client", lambda _: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(alloy_manager, "ssh_exec", lambda _, cmd, **kw: ("version 1.18.0" if "--version" in cmd else "active", "", 1 if cmd.startswith("test -S") else 0))
+    monkeypatch.setattr(alloy_manager, "_upload", lambda _, content, *args: (uploads.append(content) or True, ""))
+    result = alloy_manager.deploy_alloy(SimpleNamespace(agent_type="remote", ssh_user="root", id="test", name="test"))
+    assert result["success"]
+    assert 'loki.source.journal "system"' in uploads[0] and 'loki.write "opscenter"' in uploads[0]
+    assert 'discovery.docker' not in uploads[0] and 'loki.source.docker' not in uploads[0]
+
+
 def test_overview_is_fast_by_default_and_reports_coverage(monkeypatch):
     running = _server(log_status="running")
     _server(credentials=False, log_status="unknown")

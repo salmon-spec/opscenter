@@ -20,6 +20,14 @@
             <label>标签（逗号分隔）<input v-model.trim="form.tagsText" maxlength="300" placeholder="生产, 数据库, 华东" /></label>
           </section>
 
+          <section v-if="!isLocalEdit" class="form-section">
+            <h3>管理通道</h3>
+            <label>SSH 用户<input v-model.trim="form.ssh_user" placeholder="编辑时留空保留现有用户" autocomplete="off" /></label>
+            <label>认证方式<select v-model="form.auth_type"><option value="password">密码</option><option value="key">私钥</option></select></label>
+            <label v-if="form.auth_type === 'password'">SSH 密码<input v-model="form.ssh_password" type="password" autocomplete="new-password" placeholder="留空保留已有凭据" /></label>
+            <label v-else>SSH 私钥<textarea v-model="form.ssh_key" autocomplete="off" placeholder="留空保留已有凭据"></textarea></label>
+            <p>保存后可继续安装或检查 Agent；未配置凭据时，远程管理通道仍待接入。</p>
+          </section>
           <section class="form-section">
             <h3>监控地址与 K3s 映射</h3>
             <div class="form-grid">
@@ -55,6 +63,7 @@
 <script setup>
 import { computed, reactive, ref, watch } from 'vue'
 import { api, toast } from '../../api'
+import { newRegistrationId } from '../../utils/uuid'
 
 const props = defineProps({
   visible: Boolean,
@@ -63,6 +72,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'saved'])
 
 const saving = ref(false)
+let registrationId = ''
 
 const form = reactive({
   id: '', name: '', host: '', ssh_port: 22, ssh_user: 'root', remark: '', tagsText: '',
@@ -81,7 +91,7 @@ function fillForm(host) {
     name: host?.name || '',
     host: host?.host || '',
     ssh_port: host?.ssh_port || 22,
-    ssh_user: host?.ssh_user || 'root',
+    ssh_user: host?.ssh_user || '',
     remark: host?.remark || '',
     tagsText: (host?.tags || []).join(', '),
     auth_type: 'password',
@@ -101,7 +111,7 @@ function fillForm(host) {
 }
 
 watch(() => [props.visible, props.host?.id], ([visible]) => {
-  if (visible) fillForm(props.host)
+  if (visible) { registrationId = props.host?.id || newRegistrationId(); fillForm(props.host) }
 })
 
 async function save() {
@@ -109,6 +119,10 @@ async function save() {
   try {
     if (form.id) {
       await api.put(`/modules/host-inventory/api/v1/hosts/${form.id}`, {
+        registration_id: registrationId,
+        ssh_user: form.ssh_user || undefined,
+        ssh_password: form.auth_type === 'password' ? form.ssh_password || undefined : undefined,
+        ssh_key: form.auth_type === 'key' ? form.ssh_key || undefined : undefined,
         name: form.name, host: form.host, ssh_port: form.ssh_port,
         tags: form.tagsText.split(',').map((tag) => tag.trim()).filter(Boolean),
         remark: form.remark, lan_ip: form.lan_ip, wireguard_ip: form.wireguard_ip,
@@ -120,6 +134,10 @@ async function save() {
       toast('主机信息已更新', 'ok')
     } else {
       await api.post('/modules/host-inventory/api/v1/hosts', {
+        registration_id: registrationId,
+        ssh_user: form.ssh_user || undefined,
+        ssh_password: form.auth_type === 'password' ? form.ssh_password || undefined : undefined,
+        ssh_key: form.auth_type === 'key' ? form.ssh_key || undefined : undefined,
         name: form.name, host: form.host, ssh_port: form.ssh_port,
         tags: form.tagsText.split(',').map((tag) => tag.trim()).filter(Boolean),
         remark: form.remark, lan_ip: form.lan_ip, wireguard_ip: form.wireguard_ip,
@@ -128,7 +146,7 @@ async function save() {
         kubernetes_node_name: form.kubernetes_node_name, node_role: form.node_role,
         runtime_type: form.runtime_type, cluster_id: form.cluster_id,
       })
-      toast('主机已添加；Agent 状态待首次采集', 'ok')
+      toast('主机管理资料已登记；请继续安装或检查 Agent', 'ok')
     }
     emit('saved')
   } catch (error) {

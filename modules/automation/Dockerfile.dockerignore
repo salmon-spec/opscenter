@@ -1,0 +1,12 @@
+*
+!automation/
+!automation/requirements.txt
+!automation/__init__.py
+!automation/main.py
+!automation/engine.py
+!automation/store.py
+!automation/static/
+!automation/static/**
+!runtime/
+!runtime/__init__.py
+!runtime/auth.py

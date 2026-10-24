@@ -20,8 +20,11 @@ class MemoryStore:
     def save(self, payload, collected_at):
         self.value = (payload, collected_at)
 
-    def mutate(self, payload, actor, action, target):
-        self.value = (payload, datetime.now(timezone.utc))
+    def mutate(self, fn, actor, action, target):
+        payload = self.value[0] if self.value else {"events": [], "rules": [], "silences": []}
+        if fn(payload) is not False:
+            self.value = (payload, datetime.now(timezone.utc))
+        return payload
 
     def migrate(self):
         pass
@@ -42,6 +45,7 @@ def store(monkeypatch):
     monkeypatch.setattr(main, "AlertsStore", lambda: value)
     monkeypatch.setattr(main, "_last_refresh_error", "")
     monkeypatch.setattr(main, "_storage_ready", False)
+    monkeypatch.setenv('ALERTS_SYNC_ENABLED', 'true')
     return value
 
 
@@ -140,16 +144,16 @@ def test_source_error_is_sanitized(monkeypatch):
     assert "secret" not in error.value.detail
 
 
-def test_source_failure_keeps_persisted_snapshot_and_marks_degraded(monkeypatch, store):
+def test_owned_snapshot_does_not_refresh_from_legacy_source(monkeypatch, store):
     now = datetime.now(timezone.utc)
     store.save({"events": [{"id": "event-1", "status": "firing", "created_at": now.isoformat()}],
                 "rules": [], "silences": []}, now)
     monkeypatch.setattr(main, "_refresh_seconds", 0)
     monkeypatch.setattr(main, "get", lambda *args, **kwargs: (_ for _ in ()).throw(HTTPException(502, "secret")))
     result = TestClient(app).get("/api/v1/summary").json()
-    assert result["status"] == "degraded"
+    assert result["status"] == "ok"
     assert result["data"]["firing"] == 1
-    assert "secret" not in result["error"]
+    assert result["error"] is None
 
 
 def test_alert_writes_are_module_owned_and_audited(store, monkeypatch):
@@ -195,7 +199,8 @@ def test_alert_evaluator_applies_duration_and_recovers(store, monkeypatch):
     ))
 
     assert main.evaluate_once() is True
-    assert store.value[0]["events"][0]["status"] == "pending"
+    # A zero duration fires on the first valid sample, without an extra polling cycle.
+    assert store.value[0]["events"][0]["status"] == "firing"
     assert main.evaluate_once() is True
     assert store.value[0]["events"][0]["status"] == "firing"
 

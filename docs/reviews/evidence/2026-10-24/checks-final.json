@@ -1,0 +1,193 @@
+{
+  "checks": [
+    {
+      "name": "backend-agent",
+      "exit_code": 0,
+      "seconds": 116.2,
+      "tail": [
+        "    return self._jws.encode(",
+        "",
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "455 passed, 1400 warnings in 102.94s (0:01:42)"
+      ],
+      "log": "backend-final.log"
+    },
+    {
+      "name": "alerts",
+      "exit_code": 0,
+      "seconds": 2.0,
+      "tail": [
+        "          ",
+        "    @app.on_event('shutdown')",
+        "",
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "43 passed, 10 warnings in 1.13s"
+      ]
+    },
+    {
+      "name": "service_catalog",
+      "exit_code": 0,
+      "seconds": 1.3,
+      "tail": [
+        "          ",
+        "    return self.router.on_event(event_type)  # ty: ignore[deprecated]",
+        "",
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "38 passed, 2 warnings in 0.55s"
+      ]
+    },
+    {
+      "name": "host_inventory",
+      "exit_code": 0,
+      "seconds": 1.1,
+      "tail": [
+        "    return self.router.on_event(event_type)  # ty: ignore[deprecated]",
+        "",
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "20 passed, 2 warnings in 0.50s"
+      ],
+      "log": "host_inventory-final.log"
+    },
+    {
+      "name": "host_monitor",
+      "exit_code": 0,
+      "seconds": 1.2,
+      "tail": [
+        "          ",
+        "    @app.on_event(\"shutdown\")",
+        "",
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "16 passed, 4 warnings in 0.47s"
+      ]
+    },
+    {
+      "name": "k3s",
+      "exit_code": 0,
+      "seconds": 1.2,
+      "tail": [
+        "          ",
+        "    @app.on_event(\"shutdown\")",
+        "",
+        "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+        "6 passed, 4 warnings in 0.41s"
+      ]
+    },
+    {
+      "name": "logs",
+      "exit_code": 0,
+      "seconds": 1.2,
+      "tail": [
+        "..........                                                               [100%]",
+        "10 passed in 0.46s"
+      ],
+      "log": "logs-final.log"
+    },
+    {
+      "name": "electricity",
+      "exit_code": 0,
+      "seconds": 5.8,
+      "tail": [
+        "........................................................................ [ 67%]",
+        "...................................                                      [100%]",
+        "107 passed in 4.88s"
+      ]
+    },
+    {
+      "name": "sms",
+      "exit_code": 0,
+      "seconds": 1.6,
+      "tail": [
+        "......                                                                   [100%]",
+        "6 passed in 0.59s"
+      ]
+    },
+    {
+      "name": "runtime",
+      "exit_code": 0,
+      "seconds": 1.2,
+      "tail": [
+        "........                                                                 [100%]",
+        "8 passed in 0.42s"
+      ]
+    },
+    {
+      "name": "extension_worker",
+      "exit_code": 0,
+      "seconds": 1.8,
+      "tail": [
+        ".                                                                        [100%]",
+        "1 passed in 1.05s"
+      ]
+    },
+    {
+      "name": "automation",
+      "exit_code": 0,
+      "seconds": 2.0,
+      "tail": [
+        ".........................                                                [100%]",
+        "25 passed in 1.20s"
+      ]
+    },
+    {
+      "name": "opencode_agent",
+      "exit_code": 0,
+      "seconds": 3.0,
+      "tail": [
+        "....................s........................                            [100%]",
+        "44 passed, 1 skipped in 2.16s"
+      ]
+    },
+    {
+      "name": "frontend-node",
+      "exit_code": 0,
+      "seconds": 0.4,
+      "tail": [
+        "ℹ fail 0",
+        "ℹ cancelled 0",
+        "ℹ skipped 0",
+        "ℹ todo 0",
+        "ℹ duration_ms 246.8222"
+      ]
+    },
+    {
+      "name": "opencode-node",
+      "exit_code": 0,
+      "seconds": 0.1,
+      "tail": [
+        "5 UI async behavior checks passed"
+      ]
+    },
+    {
+      "name": "frontend-build",
+      "exit_code": 0,
+      "seconds": 6.5,
+      "tail": [
+        "(!) Some chunks are larger than 500 kB after minification. Consider:",
+        "- Using dynamic import() to code-split the application",
+        "- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks",
+        "- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.",
+        "✓ built in 5.77s"
+      ]
+    }
+  ],
+  "passed_by_group": {
+    "backend-agent": 455,
+    "alerts": 43,
+    "service_catalog": 38,
+    "host_inventory": 20,
+    "host_monitor": 16,
+    "k3s": 6,
+    "logs": 10,
+    "electricity": 107,
+    "sms": 6,
+    "runtime": 8,
+    "extension_worker": 1,
+    "automation": 25,
+    "opencode_agent": 44,
+    "frontend-node": 21,
+    "opencode-node": 5
+  },
+  "passed_total": 805,
+  "posix_shell_validated_on_linux": true,
+  "postgres_integration": true
+}

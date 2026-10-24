@@ -27,6 +27,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -51,6 +52,10 @@ SEVERITY_ORDER = {"info": 0, "warning": 1, "critical": 2}
 ICONS = {"info": "ℹ️", "warning": "⚠️", "critical": "🚨"}
 COLORS = {"info": "blue", "warning": "orange", "critical": "red"}
 ACTION_TITLES = {"firing": "电费告警", "re-fire": "电费告警（仍未恢复）", "resolved": "电费告警已恢复"}
+DEFAULT_TITLE = "{icon} 电费监测｜{title}"
+DEFAULT_BODY = ("{title}\n通知状态：{action_label} · {severity_label}\n\n{summary}\n\n"
+                "当前余额：{balance}\n预计可用：{remaining_days}\n"
+                "提醒策略：{policy}\n\n时间：{observed_at}\n查看详情：{url}\n来源：OpsCenter 电费监测")
 
 # channel key -> {failures, open_until, last_error, last_ok_at}
 _breaker: dict[str, dict] = {}
@@ -279,7 +284,12 @@ def _template_values(event: dict) -> dict:
             observed_text = when.astimezone(TZ).strftime("%Y-%m-%d %H:%M:%S（北京时间）")
         except (TypeError, ValueError):
             pass
-    return {"icon": ICONS.get(severity, "⚠️"), "action_label": ACTION_TITLES.get(action, "电费告警"),
+    context = event.get("context") or {}
+    return {"icon": "✅" if action in {"test", "resolved"} else ICONS.get(severity, "⚠️"),
+            "action_label": "通道测试" if action == "test" else ACTION_TITLES.get(action, "电费告警"),
+            "severity_label": "测试消息" if action == "test" else {"critical": "严重", "warning": "预警", "info": "提示"}.get(severity, severity),
+            "balance": context.get("balance", ""), "remaining_days": context.get("remaining_days", ""),
+            "policy": context.get("policy", ""),
             "title": alert.get("title", ""), "summary": alert.get("summary", ""),
             "severity": severity, "action": action, "observed_at": observed_text,
             "alert_id": alert.get("id", "-"), "url": alert_url()}
@@ -287,13 +297,13 @@ def _template_values(event: dict) -> dict:
 
 def render_title(event: dict) -> str:
     values = _template_values(event)
-    template = str(_settings.get("title_template") or "{icon} {action_label}｜{title}")
+    template = str(_settings.get("title_template") or DEFAULT_TITLE)
     return _template_value(template, values)[:200]
 
 
 def render_text(event: dict, extra_lines: list[str] | None = None) -> str:
     values = _template_values(event)
-    default = "{title}\n{summary}\n触发时间：{observed_at}\n告警 ID：{alert_id}\n查看详情：{url}\n来源：OpsCenter 电费监测模块"
+    default = DEFAULT_BODY
     body = _template_value(str(_settings.get("body_template") or default), values).strip()
     body = "\n".join(line for line in body.splitlines() if not line.endswith("："))
     lines = [body] if body else []
@@ -384,7 +394,11 @@ def build_channel_payload(channel: dict, text: str, alert: dict, action: str) ->
     if kind == "wechat_pushplus":
         token = channel.get("token") or channel.get("webhook", "")
         template = channel.get("pushplus_template") or "html"
-        content = text.replace("\n", "<br/>") if template == "html" else text
+        content = text
+        if template == "html":
+            color = "#16a34a" if action in {"test", "resolved"} else {"critical": "#dc2626", "warning": "#d97706"}.get(alert.get("severity"), "#2563eb")
+            paragraphs = "".join('<p style="margin:0 0 16px;line-height:1.8">' + html.escape(part).replace("\n", "<br/>") + '</p>' for part in text.split("\n\n") if part.strip())
+            content = f'<div style="font-family:system-ui,sans-serif;color:#1f2937;border-top:4px solid {color};padding:20px;background:#f8fafc;border-radius:10px"><h3 style="margin:0 0 18px;color:{color}">{html.escape(title)}</h3>{paragraphs}</div>'
         payload = {"token": token, "title": title, "content": content, "template": template}
         for key in ("pushplus_channel", "pushplus_option", "pushplus_to", "pushplus_topic"):
             value = channel.get(key)
@@ -605,12 +619,13 @@ async def deliver(events: list[dict], extra_lines: list[str] | None = None,
     return results
 
 
-async def send_test(target_id: str | None = None, session: ClientSession | None = None) -> list[dict]:
+async def send_test(target_id: str | None = None, session: ClientSession | None = None,
+                    context: dict | None = None) -> list[dict]:
     """Send one synthetic critical message (optionally to a single recipient)."""
     sample = {
         "id": "electricity:test", "rule": "test", "resource_id": "electricity",
-        "severity": "critical", "title": "测试通知（手动触发）",
-        "summary": "这是一条来自运维工作台电费监测模块的测试通知，收到即表示通道配置可用。",
+        "severity": "critical", "title": "通知通道测试",
+        "summary": "这是一条手动测试消息，用于检查新版消息格式与推送通道，不代表发生真实告警。",
         "observed_at": datetime.now(timezone.utc),
     }
     if target_id:
@@ -618,8 +633,8 @@ async def send_test(target_id: str | None = None, session: ClientSession | None 
                        and item.get("enabled", True)), None)
         if target is None:
             return []
-        return await deliver([{"action": "firing", "alert": sample}],
+        return await deliver([{"action": "test", "alert": sample, "context": context or {}}],
                              extra_lines=["触发方式：通知设置页「测试」"], session=session,
                              channels_override=[target_to_channel(target)])
-    return await deliver([{"action": "firing", "alert": sample}],
+    return await deliver([{"action": "test", "alert": sample, "context": context or {}}],
                          extra_lines=["触发方式：POST /api/v1/alerts/test"], session=session)

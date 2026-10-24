@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 from fastapi import Depends, Header, HTTPException
+from pydantic import BaseModel, Field
 
 from agent import AgentSampler, normalize
 from collector import _query_range
@@ -93,32 +94,49 @@ def internal_latest_metrics():
     return {"collected_at": datetime.now(timezone.utc), "items": hosts}
 
 
+class SampleBatch(BaseModel):
+    samples: list[dict] = Field(max_length=16)
+    active_host_ids: list[UUID]
+
+
 @app.post("/api/v1/internal/samples")
-def ingest_samples(samples: list[dict], x_opscenter_monitor_token: str = Header(default="")):
+def ingest_samples(samples: list[dict] | SampleBatch, x_opscenter_monitor_token: str = Header(default="")):
     token_file = os.getenv("HOST_MONITOR_INGEST_TOKEN_FILE", "")
     expected = Path(token_file).read_text(encoding="utf-8").strip() if token_file and Path(token_file).is_file() else ""
     if not expected or not hmac.compare_digest(x_opscenter_monitor_token, expected):
         raise HTTPException(401, "Unauthorized")
-    if not 1 <= len(samples) <= 16:
+    active_ids = None
+    if isinstance(samples, SampleBatch):
+        active_ids = {str(value) for value in samples.active_host_ids}
+        samples = samples.samples
+        store.reconcile_hosts(sorted(active_ids))
+    if not (0 if active_ids is not None else 1) <= len(samples) <= 16:
         raise HTTPException(400, "Invalid sample count")
     at = datetime.now(timezone.utc).replace(tzinfo=None)
     prepared = []
-    for sample in samples:
+    rejected = []
+    for index, sample in enumerate(samples):
         try:
             host_id = str(UUID(str(sample["id"])))
+            if active_ids is not None and host_id not in active_ids:
+                raise ValueError
             name, host = str(sample["name"])[:100], str(sample["host"])[:253]
             port = int(sample.get("agent_port") or 19100)
             values = sample["values"]
             if not name or not host or not 1 <= port <= 65535 or not isinstance(values, dict):
                 raise ValueError
             summary, metrics = normalize(values, host_id, at)
-            prepared.append((host_id, summary, metrics, at, name, host, port))
-        except (KeyError, TypeError, ValueError) as error:
-            raise HTTPException(400, "Invalid sample") from error
+            sampled_at = datetime.fromtimestamp(summary["timestamp"], timezone.utc).replace(tzinfo=None)
+            prepared.append((host_id, summary, metrics, sampled_at, name, host, port))
+        except (KeyError, TypeError, ValueError, OverflowError, OSError):
+            rejected.append(index)
     for item in prepared:
         if item[0] != sampler.host_id:
             store.save_sample(*item)
-    return {"accepted": len(prepared) - sum(item[0] == sampler.host_id for item in prepared)}
+    if rejected and not prepared:
+        raise HTTPException(400, "Invalid sample")
+    result = {"accepted": len(prepared) - sum(item[0] == sampler.host_id for item in prepared)}
+    return {**result, "rejected": rejected} if rejected else result
 
 
 def _query_window(start: str, end: str, resolution: str, metrics: str):
@@ -131,6 +149,8 @@ def _query_window(start: str, end: str, resolution: str, metrics: str):
     if selected == "auto":
         selected = "raw" if end_at-start_at <= timedelta(hours=24) else (
             "5m" if end_at-start_at <= timedelta(days=90) else "1h")
+    if selected == "raw" and end_at - start_at > timedelta(days=7):
+        raise HTTPException(400, "原始指标查询最多7天，请选择自动或聚合分辨率")
     return query["metrics"].split(","), start_at.replace(tzinfo=None), end_at.replace(tzinfo=None), selected
 
 

@@ -3,8 +3,11 @@ import os
 import secrets
 from pathlib import Path
 import uuid
+import json
+from urllib.request import Request as URLRequest, build_opener, ProxyHandler
+from urllib.error import HTTPError, URLError
 
-from fastapi import Depends, Header, HTTPException, Response
+from fastapi import Depends, Header, HTTPException, Response, Request
 from pydantic import BaseModel, Field
 
 from collector import findings_provider, hosts_provider, summary_provider
@@ -25,6 +28,10 @@ auth.register(app)
 
 
 class HostCreate(BaseModel):
+    registration_id: uuid.UUID | None = None
+    ssh_user: str | None = Field(None, min_length=1, max_length=50)
+    ssh_password: str | None = Field(None, max_length=1000)
+    ssh_key: str | None = Field(None, max_length=16000)
     name: str = Field(min_length=1, max_length=50)
     host: str = Field(min_length=1, max_length=253)
     ssh_port: int = Field(default=22, ge=1, le=65535)
@@ -41,6 +48,7 @@ class HostCreate(BaseModel):
 
 
 class AgentTelemetry(BaseModel):
+    registration: dict | None = None
     id: uuid.UUID
     status: str = Field(default="unknown", pattern=r"^(online|offline|unknown)$")
     docker_available: bool = False
@@ -104,23 +112,44 @@ def receive_agent_telemetry(
     return Response(status_code=204)
 
 
+@app.get("/api/v1/internal/active-hosts")
+def active_hosts(token: str = Header(default="", alias="X-OpsCenter-Module-Token")):
+    _require_ingest_token(token)
+    result = hosts_provider()
+    if result.get("status") == "unavailable":
+        raise HTTPException(503, "资产清单暂不可用")
+    return {"status": "ok", "ids": [str(host["id"]) for host in result.get("items", [])]}
+
+
+@app.get("/api/v1/internal/log-coverage", dependencies=[Depends(require_internal_service)])
+def log_coverage():
+    result = hosts_provider()
+    if result.get("status") == "unavailable":
+        raise HTTPException(503, "资产清单暂不可用")
+    return {"status": "ok", "items": [{key: host.get(key) for key in ("id", "name", "log_agent_status")}
+                                     for host in result.get("items", [])]}
+
+
 @app.post("/api/v1/hosts", status_code=201)
-def create_host(payload: HostCreate, user=Depends(app.state.require_editor)):
-    data = payload.model_dump()
+def create_host(payload: HostCreate, request: Request, user=Depends(app.state.require_editor)):
+    data = payload.model_dump(exclude={"registration_id", "ssh_user", "ssh_password", "ssh_key"})
     if any(ord(char) < 32 for value in (data["name"], data["host"]) for char in value):
         raise HTTPException(400, "主机名称或地址包含无效字符")
     data["tags"] = [tag.strip()[:80] for tag in data["tags"] if tag.strip()]
-    data["id"] = str(uuid.uuid4())
+    data["id"] = str(payload.registration_id or uuid.uuid4())
+    register_management_host(data["id"], payload, request)
     HostInventoryStore().create_host(data, user["username"])
     return {"id": data["id"], "name": data["name"], "host": data["host"]}
 
 
 @app.put("/api/v1/hosts/{host_id}")
-def update_host(host_id: uuid.UUID, payload: HostCreate, user=Depends(app.state.require_editor)):
-    data = payload.model_dump()
+def update_host(host_id: uuid.UUID, payload: HostCreate, request: Request, user=Depends(app.state.require_editor)):
+    data = payload.model_dump(exclude={"registration_id", "ssh_user", "ssh_password", "ssh_key"})
     if any(ord(char) < 32 for value in (data["name"], data["host"]) for char in value):
         raise HTTPException(400, "主机名称或地址包含无效字符")
     data["tags"] = [tag.strip()[:80] for tag in data["tags"] if tag.strip()]
+    # The core owns connection settings; a failed core write never reports success.
+    register_management_host(str(host_id), payload, request)
     if not HostInventoryStore().update_host(str(host_id), data, user["username"]):
         raise HTTPException(404, "主机不存在")
     return {"id": str(host_id), "name": data["name"], "host": data["host"]}
@@ -131,3 +160,35 @@ def archive_host(host_id: uuid.UUID, user=Depends(app.state.require_editor)):
     if not HostInventoryStore().archive_host(str(host_id), user["username"]):
         raise HTTPException(404, "主机不存在")
     return {"ok": True}
+
+
+def register_management_host(host_id: str, payload: HostCreate, request: Request):
+    base = os.getenv("HOST_INVENTORY_SOURCE_URL", "http://backend:9091/api/v2/servers").rstrip("/")
+    headers = {"Authorization": request.headers.get("authorization", ""), "Content-Type": "application/json"}
+    opener = build_opener(ProxyHandler({}))
+
+    def call(method, url, data=None):
+        body = json.dumps(data).encode() if data is not None else None
+        try:
+            with opener.open(URLRequest(url, data=body, headers=headers, method=method), timeout=8) as response:
+                return json.load(response)
+        except HTTPError as error:
+            if error.code in {400, 401, 403, 404, 409, 422}:
+                raise HTTPException(error.code, "主机管理资料未保存，请检查登录状态、地址和重复记录") from None
+            raise HTTPException(502, "主机管理服务暂不可用，资料未完成保存") from None
+        except (URLError, OSError, ValueError):
+            raise HTTPException(502, "主机管理服务暂不可用，资料未完成保存") from None
+
+    values = payload.model_dump(exclude={"registration_id"}, exclude_none=True)
+    if not values.get("cluster_id"):
+        values["cluster_id"] = None
+    values = {key: value for key, value in values.items() if key not in {"ssh_password", "ssh_key"} or value}
+    try:
+        current = call("GET", base + "/" + host_id)
+    except HTTPException as error:
+        if error.status_code != 404:
+            raise
+        return call("POST", base, {**values, "id": host_id})
+    if current.get("is_local") or current.get("agent_type") == "local":
+        values = {key: value for key, value in values.items() if key not in {"host", "ssh_port", "ssh_user", "ssh_password", "ssh_key"}}
+    return call("PUT", base + "/" + host_id, values)

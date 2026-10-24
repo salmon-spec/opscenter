@@ -1,269 +1,119 @@
 <template>
-  <div class="view">
-    <div class="view-head">
-      <div>
-        <h1 class="view-title">告警中心</h1>
-      <p class="view-sub">告警事件 · 规则 · 静默维护 · 证书检查</p>
-      </div>
-      <button class="btn" @click="reload">刷新</button>
-    </div>
-
-    <div class="alerts-tabs">
-      <button v-for="t in tabs" :key="t.id" class="g-tab" :class="{ active: tab === t.id }" @click="tab = t.id">{{ t.label }}</button>
-    </div>
-
-    <!-- 事件 -->
-    <div v-if="tab === 'events'">
-      <div class="filter-row">
-        <select v-model.number="eventDays" class="select" aria-label="告警时间范围" @change="loadEvents">
-          <option :value="365">近一年</option>
-          <option :value="30">近 30 天</option>
-        </select>
-        <button
-          v-for="f in statusFilters" :key="f.id"
-          class="btn btn-sm" :class="eventStatus === f.id ? 'btn-primary' : ''"
-          @click="eventStatus = f.id; loadEvents()"
-        >{{ f.label }}</button>
-      </div>
-      <div v-if="eventsLoading" class="loading"><span class="spinner"></span>加载中…</div>
-      <EmptyState v-else-if="!events.length" icon="🔔" text="暂无告警事件" />
-      <table v-else class="table card">
-        <thead>
-          <tr><th>规则</th><th>主机</th><th>状态</th><th>触发时间</th><th>恢复时间</th><th>操作</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="e in events" :key="e.id">
-            <td>{{ e.rule_name || '-' }}</td>
-            <td>{{ e.server_name || '-' }}</td>
-            <td><span class="tag" :class="e.status === 'recovered' ? 'tag-green' : e.status === 'acked' ? 'tag-amber' : 'tag-red'">{{ e.status }}</span></td>
-            <td class="muted">{{ fmtTime(e.fired_at) }}</td>
-            <td class="muted">{{ fmtTime(e.recovered_at) }}</td>
-            <td>
-              <button v-if="['pending','firing'].includes(e.status)" class="btn btn-sm" @click="ackEvent(e)">确认</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- 规则 -->
-    <div v-if="tab === 'rules'">
-      <button class="btn btn-primary" @click="openRule()">添加规则</button>
-      <div v-if="rulesLoading" class="loading"><span class="spinner"></span>加载中…</div>
-      <EmptyState v-else-if="!rules.length" icon="⚙️" text="暂无告警规则" />
-      <table v-else class="table card">
-        <thead>
-          <tr><th>规则名</th><th>指标</th><th>条件</th><th>阈值</th><th>主机</th><th>状态</th><th>操作</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in rules" :key="r.id">
-            <td>{{ r.name }}</td>
-            <td class="mono">{{ r.metric }}</td>
-            <td class="mono">{{ r.operator }}</td>
-            <td class="mono">{{ r.threshold }}</td>
-            <td>{{ r.server_name || '全部' }}</td>
-            <td><span class="tag" :class="r.enabled ? 'tag-green' : 'tag-slate'">{{ r.enabled ? '启用' : '停用' }}</span></td>
-            <td><button class="btn btn-sm" @click="openRule(r)">编辑</button><button class="btn btn-sm" @click="toggleRule(r)">{{ r.enabled ? '停用' : '启用' }}</button><button class="btn btn-sm btn-danger" @click="deleteRule(r)">删除</button></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <!-- 静默 -->
-    <div v-if="tab === 'silences'">
-      <button class="btn btn-primary" @click="silenceVisible = true">添加静默</button>
-      <div v-if="silencesLoading" class="loading"><span class="spinner"></span>加载中…</div>
-      <EmptyState v-else-if="!silences.length" icon="🌙" text="暂无静默记录" />
-      <table v-else class="table card" style="margin-top:14px">
-        <thead>
-          <tr><th>规则</th><th>主机</th><th>开始</th><th>结束</th><th>原因</th><th>状态</th><th>操作</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="s in silences" :key="s.id">
-            <td>{{ s.rule_name || '全部' }}</td>
-            <td>{{ s.server_name || '全部' }}</td>
-            <td class="muted">{{ fmtTime(s.starts_at) }}</td>
-            <td class="muted">{{ fmtTime(s.ends_at) }}</td>
-            <td>{{ s.reason || '-' }}</td>
-            <td><span class="tag" :class="s.active ? 'tag-green' : 'tag-slate'">{{ s.active ? '生效中' : '已过期' }}</span></td>
-            <td><button v-if="s.active" class="btn btn-sm" @click="endSilence(s)">提前结束</button></td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div v-if="tab === 'certificates'">
-      <div class="filter-row">
-        <button class="btn btn-primary" @click="certificateVisible = true">添加证书目标</button>
-        <button class="btn" :disabled="busy" @click="scanCertificates">立即扫描</button>
-      </div>
-      <div v-if="certificatesLoading" class="loading"><span class="spinner"></span>加载中…</div>
-      <EmptyState v-else-if="!certificates.length" icon="🔒" text="暂无证书检查目标" />
-      <table v-else class="table card">
-        <thead><tr><th>域名</th><th>端口</th><th>主机</th><th>到期时间</th><th>剩余天数</th><th>最近检查</th><th>操作</th></tr></thead>
-        <tbody><tr v-for="c in certificates" :key="c.id">
-          <td class="mono">{{ c.domain }}</td><td>{{ c.port }}</td><td>{{ c.server_name || c.server_id || '-' }}</td>
-          <td class="muted">{{ fmtTime(c.not_after) }}</td>
-          <td><span v-if="c.days_left !== null" class="tag" :class="c.days_left <= 30 ? 'tag-red' : 'tag-green'">{{ c.days_left }} 天</span><span v-else class="muted">{{ c.last_error || '待检查' }}</span></td>
-          <td class="muted">{{ fmtTime(c.updated_at) }}</td>
-          <td><button class="btn btn-sm btn-danger" @click="deleteCertificate(c)">删除</button></td>
-        </tr></tbody>
-      </table>
-    </div>
-    <Modal :visible="ruleVisible" :title="ruleForm.id ? '编辑告警规则' : '添加告警规则'" width="520px" @close="ruleVisible = false">
-      <div class="alert-form">
-        <label>名称<input v-model.trim="ruleForm.name" class="input" /></label>
-        <label>指标<input v-model.trim="ruleForm.metric" class="input" placeholder="cpu / memory / disk" /></label>
-        <label>值类型<select v-model="ruleForm.value_type" class="select"><option value="numeric">数值</option><option value="string">文本状态</option></select></label>
-        <label>条件<select v-model="ruleForm.operator" class="select"><option value=">">大于</option><option value="<">小于</option><option value=">=">大于等于</option><option value="<=">小于等于</option></select></label>
-        <label>阈值<input v-model.trim="ruleForm.threshold" class="input" /></label>
-        <label>持续秒数<input v-model.number="ruleForm.duration_sec" class="input" type="number" min="0" /></label>
-      </div>
-      <div class="modal-actions"><button class="btn" @click="ruleVisible = false">取消</button><button class="btn btn-primary" :disabled="busy || !ruleForm.name || !ruleForm.metric || !ruleForm.threshold" @click="saveRule">保存</button></div>
-    </Modal>
-    <Modal :visible="silenceVisible" title="添加静默" width="480px" @close="silenceVisible = false">
-      <div class="alert-form"><label>规则<select v-model="silenceRuleId" class="select"><option value="">全部规则</option><option v-for="r in rules" :key="r.id" :value="r.id">{{ r.name }}</option></select></label><label>持续小时<input v-model.number="silenceHours" class="input" type="number" min="1" max="168" /></label><label>原因<input v-model.trim="silenceReason" class="input" /></label></div>
-      <div class="modal-actions"><button class="btn" @click="silenceVisible = false">取消</button><button class="btn btn-primary" :disabled="busy || !silenceReason" @click="createSilence">创建</button></div>
-    </Modal>
-    <Modal :visible="certificateVisible" title="添加证书检查" width="480px" @close="certificateVisible = false">
-      <div class="alert-form"><label>公网域名<input v-model.trim="certificateForm.domain" class="input" placeholder="example.com" /></label><label>端口<input v-model.number="certificateForm.port" class="input" type="number" min="1" max="65535" /></label><label>关联主机 ID（可选）<input v-model.trim="certificateForm.server_id" class="input" /></label></div>
-      <div class="modal-actions"><button class="btn" @click="certificateVisible = false">取消</button><button class="btn btn-primary" :disabled="busy || !certificateForm.domain" @click="saveCertificate">添加</button></div>
-    </Modal>
+  <div class="view alert-center">
+    <header class="page-head"><div><h1>告警中心</h1><p class="muted">查看故障、通知与处理记录</p></div><div class="head-actions"><span class="updated">{{ summary?.last_evaluated_at ? `最近评估 ${fmtTime(summary.last_evaluated_at)}` : '等待首次评估' }}</span><button class="btn" :disabled="refreshing" @click="refresh">{{ refreshing ? '刷新中…' : '刷新' }}</button></div></header>
+    <div class="summary-strip"><button v-for="item in statItems" :key="item.key" @click="selectStat(item.key)"><span>{{ item.label }}</span><strong :class="summary?.[item.key] && item.key === 'critical' ? 'critical-number' : ''">{{ summary?.[item.key] ?? '—' }}</strong></button></div>
+    <nav class="center-tabs" aria-label="告警中心导航"><button v-for="item in tabs" :key="item.id" :class="{ selected: tab === item.id }" @click="tab = item.id">{{ item.label }}</button></nav>
+    <div v-if="errors[tab] || errors.overview" class="error-banner" role="alert">{{ errors[tab] || errors.overview }}<button class="link-button" @click="refresh">重试</button></div>
+    <section v-if="tab === 'events'" class="content-panel">
+      <form class="toolbar" @submit.prevent="page = 1; loadTab()"><input v-model.trim="search" class="input search" aria-label="搜索规则或对象" placeholder="搜索规则或对象" /><select class="select" aria-label="故障状态" v-model="eventStatus" @change="resetPage"><option value="active">当前告警</option><option value="firing">触发中</option><option value="pending">观察中</option><option value="recovered">已恢复</option><option value="cancelled">已结束</option><option value="">全部状态</option></select><select class="select" aria-label="告警来源" v-model="source" @change="resetPage"><option value="">全部来源</option><option v-for="(label,id) in sources" :key="id" :value="id">{{ label }}</option></select><select class="select" aria-label="告警级别" v-model="severity" @change="resetPage"><option value="">全部级别</option><option v-for="(label,id) in levels" :key="id" :value="id">{{ label }}</option></select><button class="btn" type="submit">查询</button></form>
+      <div class="list-meta"><div class="inline"><span>{{ total }} 条记录</span><button v-if="todayOnly || handlingFilter" class="filter-chip" @click="todayOnly = false; handlingFilter = ''; resetPage()">{{ todayOnly ? '今日新发' : '未确认' }} ×</button><select class="range-select" aria-label="历史时间范围" v-model.number="days" @change="resetPage"><option :value="7">近 7 天</option><option :value="30">近 30 天</option><option :value="365">近一年</option></select></div><button v-if="canEdit" class="btn btn-sm" :disabled="!selectedIds.length || busy" @click="batchAck">批量确认{{ selectedIds.length ? `（${selectedIds.length}）` : '' }}</button></div>
+      <div v-if="loading && !events.length" class="empty">正在读取告警…</div><div v-else-if="!events.length && !errors.events" class="empty"><strong>暂无符合条件的告警</strong><span>可调整筛选条件，或在告警规则中添加监控项。</span></div>
+      <div v-else class="table-scroll"><table class="table event-table"><thead><tr><th v-if="canEdit" class="selection"><input type="checkbox" aria-label="选择本页可确认告警" :checked="allSelected" :disabled="!selectable.length" @change="selectPage" /></th><th>告警 / 对象</th><th>级别</th><th>故障状态</th><th>当前值</th><th>持续时间</th><th>触发时间</th><th>处理</th></tr></thead><tbody><tr v-for="event in events" :key="event.id"><td v-if="canEdit" class="selection"><input type="checkbox" :aria-label="`选择 ${event.rule_name}`" :value="event.id" v-model="selectedIds" :disabled="event.condition_status !== 'firing' || event.handling_status !== 'unacked'" /></td><td class="event-name"><button class="row-link" @click="openDetail(event.id)">{{ event.rule_name || '未命名规则' }}</button><div class="secondary">{{ sources[event.source] || '主机' }} · {{ event.resource_name || event.server_name || '—' }}</div></td><td><span class="severity" :class="event.severity">{{ levels[event.severity] || '警告' }}</span></td><td><span class="state-dot" :class="event.condition_status" />{{ states[event.condition_status] || event.status }}<small v-if="event.data_status === 'unknown'">数据待更新</small><small v-else-if="event.recovery_started_at && event.condition_status === 'firing'">恢复观察中</small><small v-else-if="event.suppressed_reason">通知已抑制</small></td><td class="value">{{ formatValue(event) }}</td><td>{{ eventDuration(event) }}</td><td class="time">{{ fmtTime(event.fired_at || event.first_breached_at || event.created_at) }}</td><td><button v-if="canEdit && event.condition_status === 'firing' && event.handling_status === 'unacked'" class="link-button" :disabled="busy" @click="ack(event)">确认</button><span v-else class="muted">{{ handling[event.handling_status] || '未确认' }}</span></td></tr></tbody></table></div>
+      <div class="pagination"><span>每页 25 条</span><div><button class="btn btn-sm" :disabled="page <= 1 || loading" @click="page--; loadTab()">上一页</button><span>{{ page }} / {{ Math.max(1, Math.ceil(total / 25)) }}</span><button class="btn btn-sm" :disabled="page * 25 >= total || loading" @click="page++; loadTab()">下一页</button></div></div>
+    </section>
+    <section v-else-if="tab === 'rules'" class="content-panel"><div class="toolbar"><span class="muted">{{ rules.length }} 条规则 · {{ rules.filter(r => r.enabled).length }} 条启用</span><span class="spacer"/><button v-if="canEdit" class="btn btn-primary" :disabled="!templates.length" @click="editRule(null)">添加规则</button></div><div v-if="!rules.length" class="empty">{{ loading ? '正在读取规则…' : '暂无告警规则，可从模板开始配置。' }}</div><div v-else class="table-scroll"><table class="table"><thead><tr><th>规则名称</th><th>对象</th><th>触发条件</th><th>持续 / 恢复</th><th>状态</th><th v-if="canEdit">操作</th></tr></thead><tbody><tr v-for="rule in rules" :key="rule.id"><td>{{ rule.name }}<div class="secondary">{{ metricLabel(rule.metric) }} · {{ levels[rule.severity] || '警告' }}</div></td><td>{{ targetLabel(rule.resource_id || rule.server_id) }}</td><td class="mono">{{ rule.operator }} {{ rule.threshold }}</td><td>{{ duration(rule.duration_sec) }} / {{ duration(rule.recovery_sec || 0) }}</td><td><span class="state-dot" :class="rule.enabled ? 'recovered' : ''"/>{{ rule.enabled ? '启用' : '停用' }}</td><td v-if="canEdit" class="row-actions"><button class="link-button" @click="editRule(rule)">编辑</button><button class="link-button" :disabled="busy" @click="toggleRule(rule)">{{ rule.enabled ? '停用' : '启用' }}</button><button class="link-button muted-action" :disabled="busy" @click="archiveRule(rule)">归档</button></td></tr></tbody></table></div></section>
+    <section v-else-if="tab === 'policies'" class="content-panel"><div class="toolbar"><span class="muted">按来源和级别匹配通知渠道</span><span class="spacer"/><button v-if="isAdmin" class="btn btn-primary" @click="editPolicy(null)">添加策略</button></div><div v-if="!policies.length" class="empty">{{ loading ? '正在读取通知策略…' : '暂无通知策略，告警仍保留在事件列表。' }}</div><div v-else class="table-scroll"><table class="table"><thead><tr><th>策略名称</th><th>渠道</th><th>匹配范围</th><th>提醒策略</th><th>状态</th><th v-if="isAdmin">操作</th></tr></thead><tbody><tr v-for="policy in policies" :key="policy.id"><td>{{ policy.name }}<div v-if="policy.target_hint" class="secondary">{{ policy.target_hint }}</div></td><td>{{ channels[policy.channel] }}</td><td>{{ policy.sources?.length ? policy.sources.map(s => sources[s]).join('、') : '全部来源' }}<div class="secondary">{{ policy.severities?.length ? policy.severities.map(s => levels[s]).join('、') : '全部级别' }}</div></td><td>{{ policy.repeat_sec ? `每 ${duration(policy.repeat_sec)}` : '仅首次' }}<div class="secondary">{{ policy.max_notifications ? `最多 ${policy.max_notifications} 次` : '不限次数' }}{{ policy.notify_recovery ? ' · 恢复通知' : '' }}</div></td><td>{{ policy.enabled ? '启用' : '停用' }}<div class="secondary">{{ policy.dry_run ? '仅预览' : '正常投递' }}</div></td><td v-if="isAdmin" class="row-actions"><button class="link-button" @click="editPolicy(policy)">编辑</button><button class="link-button muted-action" :disabled="busy" @click="archivePolicy(policy)">归档</button></td></tr></tbody></table></div></section>
+    <section v-else-if="tab === 'deliveries'" class="content-panel"><div class="toolbar"><select class="select" aria-label="通知投递状态" v-model="deliveryStatus" @change="deliveryPage = 1; loadTab()"><option value="">全部状态</option><option value="attention">需要处理</option><option v-for="(label,id) in deliveryStates" :key="id" :value="id">{{ label }}</option></select><span class="muted">{{ deliveryTotal }} 条记录</span><span class="spacer"/><span class="muted">以终端实际接收为准。</span></div><div v-if="!deliveries.length" class="empty">{{ loading ? '正在读取通知记录…' : '暂无通知记录' }}</div><div v-else class="table-scroll"><table class="table"><thead><tr><th>通知策略</th><th>类型</th><th>投递状态</th><th>尝试次数</th><th>创建时间</th><th>操作</th></tr></thead><tbody><tr v-for="job in deliveries" :key="job.id"><td>{{ job.policy_name }}<div class="secondary">{{ channels[job.channel] }}</div></td><td>{{ job.kind === 'recovered' ? '恢复通知' : '故障通知' }}</td><td><span :class="['failed','uncertain'].includes(job.status) ? 'error-text' : ''">{{ job.status === 'accepted' && job.channel === 'inapp' ? '已记录' : deliveryStates[job.status] }}</span><div v-if="job.error" class="secondary delivery-error">{{ job.error }}</div></td><td>{{ job.attempts }}</td><td class="time">{{ fmtTime(job.created_at) }}</td><td class="row-actions"><button class="link-button" @click="openDetail(job.event_id)">查看事件</button><button v-if="isAdmin && ['failed','uncertain'].includes(job.status)" class="link-button" :disabled="busy" @click="retryJob(job)">重试</button></td></tr></tbody></table></div><div class="pagination"><span>每页 25 条</span><div><button class="btn btn-sm" :disabled="deliveryPage <= 1 || loading" @click="deliveryPage--; loadTab()">上一页</button><span>{{ deliveryPage }} / {{ Math.max(1, Math.ceil(deliveryTotal / 25)) }}</span><button class="btn btn-sm" :disabled="deliveryPage * 25 >= deliveryTotal || loading" @click="deliveryPage++; loadTab()">下一页</button></div></div></section>
+    <section v-else-if="tab === 'silences'" class="content-panel"><div class="toolbar"><span class="muted">维护期间继续记录故障与恢复，暂停通知。</span><span class="spacer"/><button v-if="canEdit" class="btn btn-primary" @click="openSilence()">添加静默</button></div><div v-if="!silences.length" class="empty">{{ loading ? '正在读取静默记录…' : '暂无静默记录' }}</div><div v-else class="table-scroll"><table class="table"><thead><tr><th>作用范围</th><th>时间范围</th><th>原因</th><th>状态</th><th v-if="canEdit">操作</th></tr></thead><tbody><tr v-for="silence in silences" :key="silence.id"><td>{{ rules.find(r => r.id === silence.rule_id)?.name || silence.rule_name || '全部规则' }}<div class="secondary">{{ targetLabel(silence.resource_id || silence.server_id) }}</div></td><td class="time">{{ fmtTime(silence.starts_at) }}<div class="secondary">至 {{ fmtTime(silence.ends_at) }}</div><div v-if="silence.weekdays?.length" class="secondary">{{ silence.weekdays.map(d => week[d]).join('、') }} · {{ timeString(silence.daily_start) }}–{{ timeString(silence.daily_end) }}</div></td><td>{{ silence.reason || '—' }}</td><td>{{ silence.ended_at ? '已结束' : silence.active ? '有效期内' : new Date(silence.starts_at) > new Date() ? '未开始' : '已过期' }}</td><td v-if="canEdit"><button v-if="!silence.ended_at && new Date(silence.ends_at) > new Date()" class="link-button" :disabled="busy" @click="endSilence(silence)">提前结束</button></td></tr></tbody></table></div></section>
+    <section v-else-if="tab === 'certificates'" class="content-panel"><div class="toolbar"><span class="muted">公网证书检查 · 到期提醒需配置告警规则</span><span class="spacer"/><button v-if="canEdit" class="btn" :disabled="busy" @click="scanCertificates">立即检查</button><button v-if="canEdit" class="btn btn-primary" @click="certificateVisible = true">添加目标</button></div><div v-if="!certificates.length" class="empty">{{ loading ? '正在读取证书目标…' : '暂无证书检查目标' }}</div><div v-else class="table-scroll"><table class="table"><thead><tr><th>域名</th><th>剩余天数</th><th>到期时间</th><th>最近检查</th><th v-if="canEdit">操作</th></tr></thead><tbody><tr v-for="certificate in certificates" :key="certificate.id"><td>{{ certificate.domain }}<div class="secondary">端口 {{ certificate.port }}</div></td><td><span :class="certificate.days_left != null && certificate.days_left <= 30 ? 'error-text' : ''">{{ certificate.days_left != null ? `${certificate.days_left} 天` : '—' }}</span><div v-if="certificate.last_error" class="secondary delivery-error">{{ certificate.last_error }}</div></td><td class="time">{{ fmtTime(certificate.not_after) }}</td><td class="time">{{ fmtTime(certificate.updated_at) }}</td><td v-if="canEdit"><button class="link-button muted-action" :disabled="busy" @click="deleteCertificate(certificate)">删除</button></td></tr></tbody></table></div></section>
+    <section v-else-if="tab === 'analysis'" class="content-panel"><div class="toolbar"><span>告警分析</span><span class="spacer"/><select class="select" aria-label="分析时间范围" v-model.number="analysisDays" @change="loadTab()"><option :value="7">近 7 天</option><option :value="30">近 30 天</option><option :value="365">近一年</option></select></div><div v-if="!analysis" class="empty">{{ loading ? '正在读取统计…' : '统计暂不可用' }}</div><template v-else><div class="analysis-metrics"><div><span>触发次数</span><strong>{{ analysis.total }}</strong></div><div><span>平均确认用时</span><strong>{{ duration(analysis.mean_ack_sec) }}</strong><small>{{ analysis.ack_samples }} 条有效记录</small></div><div><span>平均恢复用时</span><strong>{{ duration(analysis.mean_recovery_sec) }}</strong><small>{{ analysis.recovery_samples }} 条有效记录</small></div><div><span>通知失败率</span><strong>{{ analysis.delivery_failure_rate == null ? '—' : `${analysis.delivery_failure_rate}%` }}</strong><small>仅统计实际投递结果</small></div></div><div class="analysis-grid"><div><h3>按来源</h3><div v-for="(count,id) in analysis.by_source" :key="id" class="analysis-row"><span>{{ sources[id] || id }}</span><strong>{{ count }}</strong></div><p v-if="!analysis.total" class="muted">暂无触发记录。</p></div><div><h3>高频告警规则</h3><div v-for="[name,count] in analysis.top_rules" :key="name" class="analysis-row"><span>{{ name }}</span><strong>{{ count }}</strong></div></div></div></template></section>
+    <p v-if="summary?.delivery_enabled === false" class="delivery-paused muted">通知投递已暂停，告警事件继续记录。</p><details class="source-health"><summary>数据源状态<span v-if="sourceIssues.length"> · {{ sourceIssues.length }} 项待检查</span></summary><div><span v-for="(value,id) in summary?.sources" :key="id">{{ sources[id] || (id === 'metrics' ? '主机指标' : id) }}<b :class="value.status === 'ok' ? 'healthy' : ''">{{ { ok: '正常', degraded: '数据待更新', unavailable: '不可用', unconfigured: '未接入' }[value.status] }}</b></span></div></details>
+    <AlertRuleModal :visible="ruleVisible" :rule="editingRule" :templates="templates" :targets="targets" :policies="policies" @close="ruleVisible = false" @saved="refresh" />
+    <AlertPolicyModal :visible="policyVisible" :policy="editingPolicy" @close="policyVisible = false" @saved="refresh" />
+    <AlertEventDrawer :visible="!!detailId" :event-id="detailId" :can-edit="canEdit" @close="closeDetail" @changed="refresh" @silence="openSilence" />
+    <Modal :visible="silenceVisible" title="添加静默" width="560px" @close="silenceVisible = false"><form class="silence-form" @submit.prevent="saveSilence"><label>规则<select class="select" v-model="silenceForm.rule_id"><option value="">全部规则</option><option v-for="rule in rules" :key="rule.id" :value="rule.id">{{ rule.name }}</option></select></label><label>对象<select class="select" v-model="silenceForm.resource_id"><option value="">全部对象</option><option v-for="target in targets" :key="`${target.source}:${target.id}`" :value="target.id">{{ sources[target.source] }} · {{ target.name }}</option></select></label><label>开始时间<input class="input" type="datetime-local" v-model="silenceForm.start" required /></label><label>持续时间（分钟）<input class="input" type="number" min="15" max="10080" v-model.number="silenceForm.minutes" required /></label><label>原因<input class="input" v-model.trim="silenceForm.reason" required maxlength="500" /></label><details><summary>周期维护</summary><div class="weekday"><label v-for="(label,index) in week" :key="index"><input type="checkbox" :value="index" v-model="silenceForm.weekdays" />{{ label }}</label></div><template v-if="silenceForm.weekdays.length"><label>有效期结束<input class="input" type="datetime-local" v-model="silenceForm.until" required /></label><div class="daily"><label>每日开始<input class="input" type="time" v-model="silenceForm.dailyStart" required /></label><label>每日结束<input class="input" type="time" v-model="silenceForm.dailyEnd" required /></label></div></template></details><p class="muted">周期时段采用北京时间。</p><div class="form-actions"><button class="btn" type="button" @click="silenceVisible = false">取消</button><button class="btn btn-primary" :disabled="busy">创建静默</button></div></form></Modal>
+    <Modal :visible="certificateVisible" title="添加证书目标" width="460px" @close="certificateVisible = false"><form class="silence-form" @submit.prevent="saveCertificate"><label>公网域名<input class="input" v-model.trim="certificateForm.domain" required placeholder="example.com" /></label><label>端口<input class="input" type="number" min="1" max="65535" v-model.number="certificateForm.port" required /></label><label>关联主机<select class="select" v-model="certificateForm.server_id"><option value="">不关联</option><option v-for="target in targets.filter(t => t.source === 'host')" :key="target.id" :value="target.id">{{ target.name }}</option></select></label><div class="form-actions"><button class="btn" type="button" @click="certificateVisible = false">取消</button><button class="btn btn-primary" :disabled="busy">添加目标</button></div></form></Modal>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api, fmtTime, toast } from '../api'
-import EmptyState from '../components/EmptyState.vue'
 import Modal from '../components/Modal.vue'
-
-const tabs = [
-  { id: 'events', label: '告警事件' },
-  { id: 'rules', label: '告警规则' },
-      { id: 'silences', label: '静默维护' },
-  { id: 'certificates', label: '证书检查' },
-]
-const statusFilters = [
-  { id: '', label: '全部' },
-  { id: 'pending', label: '待确认' },
-  { id: 'firing', label: '触发中' },
-  { id: 'acked', label: '已确认' },
-  { id: 'recovered', label: '已恢复' },
-]
-
-const tab = ref('events')
-const eventStatus = ref('')
-const eventDays = ref(365)
-const events = ref([])
-const rules = ref([])
-const silences = ref([])
-const certificates = ref([])
-const eventsLoading = ref(false)
-const rulesLoading = ref(false)
-const silencesLoading = ref(false)
-const certificatesLoading = ref(false)
-const busy = ref(false)
-const ruleVisible = ref(false)
-const ruleForm = ref({})
-const silenceVisible = ref(false)
-const silenceRuleId = ref('')
-const silenceHours = ref(2)
-const silenceReason = ref('')
-const certificateVisible = ref(false)
-const certificateForm = ref({ domain: '', port: 443, server_id: '' })
-
-function openRule(rule = null) {
-  ruleForm.value = rule ? { ...rule } : { name: '', metric: '', value_type: 'numeric', operator: '>', threshold: '', duration_sec: 60, cooldown_sec: 300, enabled: true }
-  ruleVisible.value = true
+import AlertRuleModal from '../components/alerts/AlertRuleModal.vue'
+import AlertPolicyModal from '../components/alerts/AlertPolicyModal.vue'
+import AlertEventDrawer from '../components/alerts/AlertEventDrawer.vue'
+import { sources, levels, states, handling, deliveryStates, channels, duration, eventDuration, formatValue } from '../components/alerts/format'
+const base = '/modules/alerts/api/v1', route = useRoute(), router = useRouter()
+const tabs = [{id:'events',label:'告警事件'},{id:'rules',label:'告警规则'},{id:'policies',label:'通知策略'},{id:'deliveries',label:'通知记录'},{id:'silences',label:'静默维护'},{id:'certificates',label:'证书检查'},{id:'analysis',label:'告警分析'}]
+const statItems = [{key:'active',label:'当前故障'},{key:'unacked',label:'未确认'},{key:'critical',label:'严重告警'},{key:'today',label:'今日新发'},{key:'delivery_failed',label:'通知待处理'}]
+const tab = ref('events'), summary = ref(null), errors = ref({}), refreshing = ref(false), loading = ref(false), busy = ref(false), role = ref('viewer')
+const events = ref([]), rules = ref([]), policies = ref([]), deliveries = ref([]), silences = ref([]), certificates = ref([]), templates = ref([]), targets = ref([]), analysis = ref(null)
+const page = ref(1), total = ref(0), search = ref(''), eventStatus = ref('active'), source = ref(''), severity = ref(''), handlingFilter = ref(''), todayOnly = ref(false), days = ref(30), selectedIds = ref([]), deliveryStatus = ref(''), deliveryPage = ref(1), deliveryTotal = ref(0), analysisDays = ref(30)
+const ruleVisible = ref(false), policyVisible = ref(false), silenceVisible = ref(false), certificateVisible = ref(false), editingRule = ref(null), editingPolicy = ref(null), detailId = ref('')
+const silenceForm = ref({weekdays:[]}), certificateForm = ref({domain:'',port:443,server_id:''}), week = ['周一','周二','周三','周四','周五','周六','周日']
+const canEdit = computed(() => ['admin','editor'].includes(role.value)), isAdmin = computed(() => role.value === 'admin')
+const selectable = computed(() => events.value.filter(e => e.condition_status === 'firing' && e.handling_status === 'unacked').map(e => e.id))
+const allSelected = computed(() => !!selectable.value.length && selectable.value.every(id => selectedIds.value.includes(id)))
+const sourceIssues = computed(() => Object.values(summary.value?.sources || {}).filter(value => ['unavailable','degraded'].includes(value.status)))
+let requestId = 0, timer
+function labelError(error) { return typeof error.message === 'string' ? error.message : '请求失败，请检查输入或稍后重试' }
+async function loadCommon() {
+  const results = await Promise.allSettled([api.get(`${base}/overview`),api.get(`${base}/templates`),api.get(`${base}/targets`),api.get(`${base}/rules`),api.get(`${base}/policies`),api.get(`${base}/auth/me`)])
+  const slots = [summary,templates,targets,rules,policies,role]
+  results.forEach((result,index) => { if(result.status === 'fulfilled') slots[index].value = index === 5 ? result.value.role : result.value })
+  errors.value.overview = results[0].status === 'rejected' ? `概览更新失败：${labelError(results[0].reason)}` : ''
 }
-
-async function write(action, refresh) {
-  busy.value = true
-  try { await action(); await refresh(); toast('操作完成', 'ok'); return true }
-  catch (error) { toast(error.message, 'err'); return false }
-  finally { busy.value = false }
-}
-
-async function ackEvent(event) { await write(() => api.post(`/modules/alerts/api/v1/events/${event.id}/ack`), loadEvents) }
-async function saveRule() {
-  const { id, ...payload } = ruleForm.value
-  if (await write(() => id ? api.put(`/modules/alerts/api/v1/rules/${id}`, payload) : api.post('/modules/alerts/api/v1/rules', payload), loadRules)) ruleVisible.value = false
-}
-async function toggleRule(rule) { await write(() => api.put(`/modules/alerts/api/v1/rules/${rule.id}`, { ...rule, enabled: !rule.enabled }), loadRules) }
-async function deleteRule(rule) {
-  if (!confirm(`删除规则「${rule.name}」及其事件历史？`)) return
-  await write(() => api.del(`/modules/alerts/api/v1/rules/${rule.id}`), loadRules)
-}
-async function createSilence() {
-  if (!Number.isFinite(silenceHours.value) || silenceHours.value < 1 || silenceHours.value > 168) return
-  const now = new Date()
-  if (await write(() => api.post('/modules/alerts/api/v1/silences', { rule_id: silenceRuleId.value || null, server_id: null, starts_at: now.toISOString(), ends_at: new Date(now.getTime() + silenceHours.value * 3600000).toISOString(), reason: silenceReason.value }), loadSilences)) silenceVisible.value = false
-}
-async function endSilence(silence) { await write(() => api.del(`/modules/alerts/api/v1/silences/${silence.id}`), loadSilences) }
-async function saveCertificate() {
-  const payload = { ...certificateForm.value, server_id: certificateForm.value.server_id || null }
-  if (await write(() => api.post('/modules/alerts/api/v1/certificates', payload), loadCertificates)) {
-    certificateVisible.value = false
-    certificateForm.value = { domain: '', port: 443, server_id: '' }
-  }
-}
-async function deleteCertificate(certificate) {
-  if (confirm(`删除证书检查「${certificate.domain}」？`)) await write(() => api.del(`/modules/alerts/api/v1/certificates/${certificate.id}`), loadCertificates)
-}
-async function scanCertificates() { await write(() => api.post('/modules/alerts/api/v1/certificates/scan'), loadCertificates) }
-
-async function loadEvents() {
-  eventsLoading.value = true
+async function loadTab() {
+  const id = ++requestId, current = tab.value; loading.value = true
   try {
-    events.value = await api.get('/modules/alerts/api/v1/events', { status: eventStatus.value || undefined, days: eventDays.value })
-  } finally {
-    eventsLoading.value = false
-  }
+    if(current === 'events') { const result = await api.get(`${base}/events/search`,{q:search.value,status:eventStatus.value,source:source.value,severity:severity.value,handling:handlingFilter.value,today:todayOnly.value || undefined,days:days.value,page:page.value,page_size:25}); if(id !== requestId) return; events.value = result.items; total.value = result.total; selectedIds.value = [] }
+    else if(current === 'deliveries') { const result = await api.get(`${base}/deliveries`,{status:deliveryStatus.value,page:deliveryPage.value}); if(id !== requestId) return; deliveries.value = result.items; deliveryTotal.value = result.total }
+    else if(current === 'analysis') { const result = await api.get(`${base}/analysis`,{days:analysisDays.value}); if(id !== requestId) return; analysis.value = result }
+    else { const target = {rules,policies,silences,certificates}[current]; const result = await api.get(`${base}/${current}`); if(id !== requestId) return; target.value = result }
+    if(id === requestId) errors.value[current] = ''
+  } catch(error) { if(id === requestId) errors.value[current] = labelError(error) }
+  finally { if(id === requestId) loading.value = false }
 }
-
-async function loadRules() {
-  rulesLoading.value = true
-  try {
-    rules.value = await api.get('/modules/alerts/api/v1/rules')
-  } finally {
-    rulesLoading.value = false
-  }
-}
-
-async function loadSilences() {
-  silencesLoading.value = true
-  try {
-    silences.value = await api.get('/modules/alerts/api/v1/silences')
-  } finally {
-    silencesLoading.value = false
-  }
-}
-
-async function loadCertificates() {
-  certificatesLoading.value = true
-  try { certificates.value = await api.get('/modules/alerts/api/v1/certificates') }
-  finally { certificatesLoading.value = false }
-}
-
-function reload() {
-  loadEvents()
-  loadRules()
-  loadSilences()
-  loadCertificates()
-}
-
-onMounted(reload)
+async function refresh() { if(refreshing.value) return; refreshing.value = true; try { await Promise.all([loadCommon(),loadTab()]) } finally { refreshing.value = false } }
+function resetPage() { page.value = 1; loadTab() }
+function selectStat(key) { if(key === 'delivery_failed') { deliveryStatus.value = 'attention'; deliveryPage.value = 1; if(tab.value === 'deliveries') loadTab(); else tab.value = 'deliveries'; return } eventStatus.value = key === 'today' ? '' : 'firing'; severity.value = key === 'critical' ? 'critical' : ''; handlingFilter.value = key === 'unacked' ? 'unacked' : ''; todayOnly.value = key === 'today'; source.value = ''; search.value = ''; page.value = 1; if(tab.value === 'events') loadTab(); else tab.value = 'events' }
+function selectPage(e) { selectedIds.value = e.target.checked ? [...selectable.value] : [] }
+function metricLabel(metric) { return templates.value.find(t => t.metric === metric)?.name || metric }
+function targetLabel(id) { return id ? targets.value.find(t => t.id === id)?.name || id : '全部对象' }
+function editRule(rule) { editingRule.value = rule; ruleVisible.value = true }
+function editPolicy(policy) { editingPolicy.value = policy; policyVisible.value = true }
+async function write(action) { busy.value = true; try { await action(); await refresh(); return true } catch(error) { toast(labelError(error),'err'); return false } finally { busy.value = false } }
+async function ack(event) { await write(() => api.post(`${base}/events/${event.id}/ack`)) }
+async function batchAck() { await write(() => api.post(`${base}/events/ack-batch`,{ids:selectedIds.value})) }
+async function toggleRule(rule) { await write(() => api.put(`${base}/rules/${rule.id}`,{...rule,enabled:!rule.enabled})) }
+async function archiveRule(rule) { if(confirm(`归档规则「${rule.name}」？历史记录将保留。`)) await write(() => api.del(`${base}/rules/${rule.id}`)) }
+async function archivePolicy(policy) { if(confirm(`归档通知策略「${policy.name}」？`)) await write(() => api.del(`${base}/policies/${policy.id}`)) }
+async function retryJob(job) { if(confirm('重试可能导致重复接收。请先核对平台记录，确认继续重试？')) await write(() => api.post(`${base}/deliveries/${job.id}/retry`)) }
+function openDetail(id) { detailId.value = id }
+function closeDetail() { detailId.value = ''; if(route.query.event) { const query = {...route.query}; delete query.event; router.replace({query}) } }
+const localTime = value => new Date(value - new Date(value).getTimezoneOffset()*60000).toISOString().slice(0,16)
+const timeString = value => `${String(Math.floor((value || 0)/60)).padStart(2,'0')}:${String((value || 0)%60).padStart(2,'0')}`
+const timeMinutes = value => { const [h,m] = value.split(':').map(Number); return h*60+m }
+function openSilence(event = null) { silenceForm.value = {rule_id:event?.rule_id || '',resource_id:event?.resource_id || '',start:localTime(Date.now()),minutes:60,reason:'',weekdays:[],until:localTime(Date.now()+7*86400000),dailyStart:'02:00',dailyEnd:'04:00'}; silenceVisible.value = true }
+async function saveSilence() { const f = silenceForm.value; const start = new Date(f.start); const end = f.weekdays.length ? new Date(f.until) : new Date(start.getTime()+f.minutes*60000); if(!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) {toast('请设置有效的静默时间','err'); return} if(await write(() => api.post(`${base}/silences`,{rule_id:f.rule_id || null,resource_id:f.resource_id || null,starts_at:start.toISOString(),ends_at:end.toISOString(),reason:f.reason,weekdays:f.weekdays,daily_start:timeMinutes(f.dailyStart),daily_end:timeMinutes(f.dailyEnd)}))) silenceVisible.value = false }
+async function endSilence(value) { await write(() => api.del(`${base}/silences/${value.id}`)) }
+async function saveCertificate() { if(await write(() => api.post(`${base}/certificates`,{...certificateForm.value,server_id:certificateForm.value.server_id || null}))) {certificateVisible.value = false; certificateForm.value = {domain:'',port:443,server_id:''}} }
+async function deleteCertificate(value) { if(confirm(`删除证书检查「${value.domain}」？`)) await write(() => api.del(`${base}/certificates/${value.id}`)) }
+async function scanCertificates() { await write(() => api.post(`${base}/certificates/scan`)) }
+watch(tab, () => loadTab())
+watch(() => route.query.event, value => { if(typeof value === 'string' && value.length <= 200) detailId.value = value },{immediate:true})
+function startTimer() { clearInterval(timer); timer = setInterval(() => { if(!document.hidden && !busy.value && !refreshing.value && !ruleVisible.value && !policyVisible.value && !silenceVisible.value && !selectedIds.value.length) refresh() },30000) }
+onMounted(() => { refresh(); startTimer() })
+onActivated(startTimer)
+onDeactivated(() => clearInterval(timer))
+onBeforeUnmount(() => {clearInterval(timer); requestId++})
 </script>
 
 <style scoped>
-.alerts-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
-.g-tab {
-  padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border);
-  background: #fff; font-size: 13px; color: var(--muted); cursor: pointer;
+.alert-center{max-width:1600px;margin:0 auto}.page-head{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:24px}.page-head h1{margin:0;font-size:23px;font-weight:600;letter-spacing:.3px}.page-head p{margin:7px 0 0;font-size:13px}.head-actions{display:flex;align-items:center;gap:16px}.updated{font-size:12px;color:var(--muted)}.summary-strip{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--border);border-radius:8px;background:#fff;margin-bottom:24px;overflow:hidden}.summary-strip button{appearance:none;border:0;background:none;text-align:left;padding:18px 24px;cursor:pointer;position:relative;color:var(--text)}.summary-strip button+button:before{content:'';position:absolute;left:0;top:20px;bottom:20px;border-left:1px solid var(--border)}.summary-strip button:hover{background:#f8fafc}.summary-strip span{display:block;font-size:12px;color:var(--muted);margin-bottom:10px}.summary-strip strong{font-size:28px;line-height:1.2;font-weight:550;font-variant-numeric:tabular-nums}.critical-number{color:#b91c1c}.center-tabs{display:flex;gap:25px;border-bottom:1px solid var(--border);margin-bottom:18px;overflow:auto}.center-tabs button{flex-shrink:0;background:none;border:0;border-bottom:2px solid transparent;padding:0 1px 13px;cursor:pointer;font-size:14px;color:var(--muted)}.center-tabs button.selected{color:var(--brand);border-bottom-color:var(--brand);font-weight:500}.content-panel{background:#fff;border:1px solid var(--border);border-radius:8px;overflow:hidden}.toolbar{display:flex;align-items:center;gap:10px;padding:18px 20px;flex-wrap:wrap}.toolbar .select{width:auto;min-width:110px}.toolbar .input{width:230px}.toolbar .muted{font-size:12px}.toolbar .spacer{flex:1}.list-meta{display:flex;align-items:center;justify-content:space-between;padding:0 20px 14px;color:var(--muted);font-size:12px;gap:12px}.inline{display:flex;align-items:center;gap:14px;flex-wrap:wrap}.range-select{color:var(--muted);font:inherit;border:0;background:transparent;cursor:pointer}.filter-chip{border:1px solid var(--border);border-radius:4px;font-size:12px;background:#f8fafc;padding:3px 7px;cursor:pointer;color:var(--text)}.table-scroll{overflow:auto}.table{width:100%;border-collapse:collapse;white-space:nowrap;font-size:13px}.table thead th{background:#f8fafc;border-top:1px solid var(--border);border-bottom:1px solid var(--border);color:var(--muted);font-weight:400;padding:12px 18px;text-align:left}.table td{padding:16px 18px;vertical-align:middle;border-bottom:1px solid #f0f2f5}.table tr:last-child td{border-bottom:0}.table tbody tr:hover{background:#fcfdff}.selection{width:36px;padding-right:0!important}.event-name{min-width:220px;max-width:360px}.row-link,.link-button{border:0;background:none;cursor:pointer;color:var(--brand);padding:0;font:inherit;text-align:left}.row-link{color:var(--text);font-weight:500;white-space:normal;line-height:1.6}.row-link:hover,.link-button:hover{text-decoration:underline}.link-button:disabled{color:var(--muted);cursor:default}.secondary,.table small{display:block;font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5}.severity{font-size:12px;padding:3px 7px;border-radius:4px;background:#f8fafc;color:#475569}.severity.critical{background:#fef2f2;color:#b91c1c}.severity.warning{background:#fffbeb;color:#92400e}.state-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#94a3b8;margin-right:7px;vertical-align:2px}.state-dot.firing{background:#dc2626}.state-dot.pending{background:#d97706}.state-dot.recovered{background:#16a34a}.value{font-variant-numeric:tabular-nums}.time{font-size:12px;color:#64748b}.row-actions .link-button+.link-button{margin-left:14px}.muted-action{color:var(--muted)}.empty{padding:70px 20px;text-align:center;display:flex;flex-direction:column;gap:11px;color:var(--muted);font-size:13px}.empty strong{font-weight:500;color:#475569;font-size:14px}.pagination{display:flex;justify-content:space-between;align-items:center;border-top:1px solid var(--border);padding:14px 20px;font-size:12px;color:var(--muted)}.pagination>div{display:flex;gap:14px;align-items:center}.error-banner{display:flex;gap:14px;align-items:center;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;margin-bottom:16px;padding:12px 16px;font-size:13px;color:#9a3412}.error-text{color:#b91c1c}.delivery-error{white-space:normal;max-width:290px}.delivery-paused{font-size:12px;margin:18px 0 0}.source-health{margin-top:14px;font-size:12px;color:var(--muted)}.source-health summary{cursor:pointer;padding:6px 0}.source-health>div{display:flex;gap:20px;flex-wrap:wrap;padding:12px 0}.source-health b{font-weight:400;margin-left:8px;color:#64748b}.source-health b.healthy{color:#15803d}.analysis-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;padding:20px 24px 30px;border-bottom:1px solid var(--border)}.analysis-metrics span,.analysis-metrics small{display:block;color:var(--muted);font-size:12px}.analysis-metrics strong{display:block;font-size:23px;font-weight:500;margin:12px 0 6px}.analysis-grid{display:grid;grid-template-columns:1fr 1fr;gap:40px;padding:24px}.analysis-grid h3{font-size:14px;font-weight:500;margin:0 0 20px}.analysis-row{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px solid #f1f5f9;font-size:13px}.analysis-row strong{font-weight:500}.silence-form{display:grid;gap:16px}.silence-form label{display:grid;gap:7px;font-size:13px}.silence-form .muted{font-size:12px;margin:0}.form-actions{display:flex;justify-content:flex-end;gap:8px;padding-top:16px;border-top:1px solid var(--border)}.weekday{display:flex;gap:12px;flex-wrap:wrap;padding:16px 0}.weekday label{display:flex;gap:5px;align-items:center}.daily{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.silence-form details summary{cursor:pointer;font-size:13px}@media(max-width:1050px){.updated{display:none}.toolbar .input{width:190px}.center-tabs{gap:20px}.summary-strip button{padding:16px}.analysis-metrics{grid-template-columns:1fr 1fr}}@media(max-width:620px){.page-head{margin-bottom:18px}.page-head h1{font-size:21px}.summary-strip{grid-template-columns:repeat(3,1fr)}.summary-strip button{padding:14px}.summary-strip strong{font-size:24px}.summary-strip button:nth-child(4),.summary-strip button:nth-child(5){border-top:1px solid var(--border)}.toolbar{padding:14px;gap:8px}.toolbar .input.search{width:100%}.toolbar .select{flex:1;min-width:90px}.list-meta{padding:0 14px 12px}.analysis-grid{grid-template-columns:1fr;gap:25px}.pagination{padding:12px}.center-tabs{gap:20px}.table td{padding:14px}.table th{padding:12px 14px}.head-actions{gap:8px}}
+
+@media(max-width:620px){
+  .event-table,.event-table tbody{display:block;width:100%}
+  .event-table thead{display:none}
+  .event-table tr{display:grid;grid-template-columns:1fr 1fr;gap:12px;position:relative;padding:18px;border-bottom:1px solid var(--border)}
+  .event-table td{display:block;padding:0!important;border:0;white-space:normal;min-width:0}
+  .event-table td.event-name{grid-column:1/-1;padding-right:30px!important;max-width:none}
+  .event-table td.selection{position:absolute;right:18px;top:18px;width:auto}
+  .event-table td.value:before{content:'当前值 ';color:var(--muted);font-size:12px}
+  .event-table td:nth-last-child(3):before{content:'持续 ';color:var(--muted);font-size:12px}
+  .event-table td.time{grid-column:1/-1}
+  .event-table td:last-child{grid-column:1/-1;text-align:right}
 }
-.g-tab.active { background: var(--brand); border-color: var(--brand); color: #fff; }
-.filter-row { display: flex; gap: 8px; margin-bottom: 12px; }
-.alert-form { display: grid; gap: 10px; margin-top: 12px; }
-.alert-form label { display: grid; gap: 5px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 </style>

@@ -14,6 +14,20 @@ def test_module_version_matches_release():
     assert TestClient(app).get("/api/v1/version").json()["version"] == "0.2.7"
 
 
+def test_internal_asset_ids_and_log_coverage_are_token_scoped(monkeypatch, tmp_path):
+    token = tmp_path / 'token'; token.write_text('internal-test')
+    monkeypatch.setenv('OPS_MODULE_INTERNAL_TOKEN_FILE', str(token))
+    monkeypatch.setenv('HOST_INVENTORY_INGEST_TOKEN_FILE', str(token))
+    monkeypatch.setattr('main.hosts_provider', lambda: {'status':'ok','items':[
+        {'id':'active-id','name':'active','log_agent_status':'unknown','ssh_key':'must-not-leak'}]})
+    client = TestClient(app)
+    for suffix in ['active-hosts','log-coverage']:
+        assert client.get('/api/v1/internal/'+suffix).status_code == 401
+        result = client.get('/api/v1/internal/'+suffix,headers={'X-OpsCenter-Module-Token':'internal-test'})
+        assert result.status_code == 200 and 'must-not-leak' not in result.text
+    assert result.json()['items'][0] == {'id':'active-id','name':'active','log_agent_status':'unknown'}
+
+
 def test_internal_hosts_require_token_and_redact_secret_fields(monkeypatch, tmp_path):
     token = tmp_path / "token"
     token.write_text("inventory-test", encoding="utf-8")
@@ -251,7 +265,9 @@ def test_host_create_rejects_read_only_module_user(monkeypatch):
     monkeypatch.delitem(app.dependency_overrides, app.state.current_user)
 
 
-def test_host_create_validates_and_writes_only_to_module_store(monkeypatch):
+def test_host_create_registers_management_then_writes_module_store(monkeypatch):
+    registered = []
+    monkeypatch.setattr("main.register_management_host", lambda *args: registered.append(args))
     saved = []
     class Store:
         def create_host(self, payload, actor):
@@ -262,11 +278,13 @@ def test_host_create_validates_and_writes_only_to_module_store(monkeypatch):
     response = client.post("/api/v1/hosts", json={"name": " node ", "host": "10.0.0.2", "tags": [" k3s ", ""]})
     assert response.status_code == 201
     assert response.json()["id"] == saved[0][0]["id"]
+    assert registered[0][0] == saved[0][0]["id"]
     assert saved[0][0]["tags"] == ["k3s"] and saved[0][1] == "alice"
     monkeypatch.delitem(app.dependency_overrides, app.state.require_editor)
 
 
 def test_host_update_and_archive_use_module_store(monkeypatch):
+    monkeypatch.setattr("main.register_management_host", lambda *args: None)
     calls = []
     class Store:
         def update_host(self, host_id, values, actor):

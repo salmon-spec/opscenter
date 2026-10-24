@@ -1,0 +1,8 @@
+*
+!requirements.txt
+!__init__.py
+!main.py
+!engine.py
+!store.py
+!static/
+!static/**

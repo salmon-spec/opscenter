@@ -1,0 +1,57 @@
+{
+  "release": "audit-fixes-20261024-r3",
+  "frontend_version": "5.5.20",
+  "backend_version": "5.5.20",
+  "git_head": "faa7596ad3d58b5ca67501cef23121abbee0cfc6",
+  "source_is_working_tree": true,
+  "files": {
+    "backend": {
+      "backend/app/extension_modules.py": "0003fd77036c9b2a5e719205ebbb276515d533394439b9329b3a9d4c4d50d36e",
+      "backend/app/models.py": "8b5024160836ef27add32da4e70ec8624887ad4b88c9fb7cb089e089051b6cf0",
+      "backend/app/credential_crypto.py": "622e90bdca92aefb482ae66d0cb6070a19a43aca18a3705b28f382a5391f3f9b",
+      "backend/app/agent_manager.py": "53f56f3667df2c90e4f9a5311ac317b25f5cca545d6ad94cef99c83a4f6084d1",
+      "backend/app/version.py": "f0f21187a6b5911f0b0b909c65c2b858d56455f9cbd9a2d67b7fad528c303e75",
+      "backend/app/services/command_code.py": "7443cf11f5786825c1e34720c232f897e54f006a25fd8882b7834f21f6f6c6ae",
+      "backend/app/services/model_usage.py": "0770112a70574611e4152f238837174c08d1005b472cbdbd74eda6a33f29c5e1",
+      "backend/app/main.py": "2bfe2916b42f0c3da2782b08e5c3d0088dd92aec5fe7a606db581fbeef7d03d7",
+      "backend/app/file_control.py": "70a9dd7f8149f390649806437298f7697713a32d73be2340ab5becf150e5dad2",
+      "backend/app/firewall_control.py": "27d86064ec2b4ad8a33618a0688c7d93dbd42ee86ed93d9a9b274d1e2b647218",
+      "backend/app/databases.py": "65a03c1260892354e66c0dc77e24845ec2b238887178e6238dd1ddcd06b0b34d",
+      "backend/app/host_inventory_bridge.py": "94f562e131fac94073e915e4d1ffd818856b4078cf0d4854b142a7abe6fff3e0",
+      "backend/app/k8s_monitor.py": "bd8f6411402e6ef760b0d8388d00ab85498427210c055c2cc17ad01a2cd40c9e",
+      "backend/app/alloy_manager.py": "01675ddccb07c896ef7653860709f14102bf97fec3fc6f84cbd3da34ab00913c"
+    },
+    "module-oss-browser": {
+      "backend/app/extension_modules.py": "0003fd77036c9b2a5e719205ebbb276515d533394439b9329b3a9d4c4d50d36e",
+      "backend/app/models.py": "8b5024160836ef27add32da4e70ec8624887ad4b88c9fb7cb089e089051b6cf0",
+      "backend/app/credential_crypto.py": "622e90bdca92aefb482ae66d0cb6070a19a43aca18a3705b28f382a5391f3f9b",
+      "backend/app/agent_manager.py": "53f56f3667df2c90e4f9a5311ac317b25f5cca545d6ad94cef99c83a4f6084d1",
+      "backend/app/version.py": "f0f21187a6b5911f0b0b909c65c2b858d56455f9cbd9a2d67b7fad528c303e75",
+      "backend/app/services/command_code.py": "7443cf11f5786825c1e34720c232f897e54f006a25fd8882b7834f21f6f6c6ae",
+      "backend/app/services/model_usage.py": "0770112a70574611e4152f238837174c08d1005b472cbdbd74eda6a33f29c5e1"
+    },
+    "module-command-code-usage": {
+      "backend/app/extension_modules.py": "0003fd77036c9b2a5e719205ebbb276515d533394439b9329b3a9d4c4d50d36e",
+      "backend/app/models.py": "8b5024160836ef27add32da4e70ec8624887ad4b88c9fb7cb089e089051b6cf0",
+      "backend/app/credential_crypto.py": "622e90bdca92aefb482ae66d0cb6070a19a43aca18a3705b28f382a5391f3f9b",
+      "backend/app/agent_manager.py": "53f56f3667df2c90e4f9a5311ac317b25f5cca545d6ad94cef99c83a4f6084d1",
+      "backend/app/version.py": "f0f21187a6b5911f0b0b909c65c2b858d56455f9cbd9a2d67b7fad528c303e75",
+      "backend/app/services/command_code.py": "7443cf11f5786825c1e34720c232f897e54f006a25fd8882b7834f21f6f6c6ae",
+      "backend/app/services/model_usage.py": "0770112a70574611e4152f238837174c08d1005b472cbdbd74eda6a33f29c5e1"
+    },
+    "module-host-inventory": {
+      "modules/host_inventory/main.py": "97fbf5323416093189f152217966c4866f43640057bf8f298cfd1eb139367eff"
+    },
+    "module-host-monitor": {
+      "modules/host_monitor/main.py": "4026ae0309af8619bafd2d640eb6561d8abe2b94d5b5f7edf5bab71af5586aa4",
+      "modules/host_monitor/storage.py": "46cc0c5d2c8e9790ac4b30ed749eb6c813c0b3c3ab58dbc07fb11d8bec214d9e"
+    },
+    "module-k3s": {
+      "modules/k3s/collector.py": "5756a0a197dde1b36e5a5dbd0a61aec910f05d1bbba52b9d361cd867a1a4ff91"
+    },
+    "module-logs": {
+      "modules/logs/main.py": "2dd8426d1a23e79e20fab893a6a4a55491cc4b057955a3878fb55e3b093e3b75"
+    }
+  },
+  "web_sha256": "b9bd69399e96decb939ef8c7bbbf3405f725e3ce4614aaa8d3dec4e6c266c621"
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -49,6 +50,7 @@ class AgentSampler:
             if time.monotonic() >= next_rollup:
                 try:
                     self.store.build_rollups()
+                    self.store.prune_history()
                     next_rollup = time.monotonic() + 300
                 except Exception:
                     self.last_error = True
@@ -73,11 +75,39 @@ class AgentSampler:
         values = {FIELD_ALIASES.get(key, key): value for key, value in payload.items()}
         at = datetime.now(timezone.utc).replace(tzinfo=None)
         summary, metrics = normalize(values, self.host_id, at)
-        self.store.save_sample(self.host_id, summary, metrics, at)
+        sampled_at = datetime.fromtimestamp(summary["timestamp"], timezone.utc).replace(tzinfo=None)
+        self.store.save_sample(self.host_id, summary, metrics, sampled_at)
         return summary
 
 
 def normalize(data: dict, host_id: str, at: datetime):
+    data = {FIELD_ALIASES.get(key, key): value for key, value in data.items()}
+    sample_time = at.replace(tzinfo=timezone.utc).timestamp()
+    def number(value):
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise ValueError("Invalid Agent metric")
+        try:
+            parsed = float(value)
+        except (TypeError, OverflowError) as error:
+            raise ValueError("Invalid Agent metric") from error
+        if not math.isfinite(parsed):
+            raise ValueError("Non-finite Agent metric")
+        return parsed
+
+    for field in ("cpu_percent", "memory_percent", "disk_percent"):
+        value = number(data.get(field))
+        if value is not None and not 0 <= value <= 100:
+            raise ValueError("Invalid Agent percentage")
+    if not any(data.get(field) is not None for field in ("cpu_percent", "memory_percent", "disk_percent")):
+        raise ValueError("Agent sample has no resource metrics")
+    if data.get("timestamp") is not None:
+        source_time = number(data["timestamp"])
+        age = at.replace(tzinfo=timezone.utc).timestamp() - source_time
+        if not -30 <= age <= 120:
+            raise ValueError("Agent sample timestamp is expired or in the future")
+        sample_time = source_time
     interfaces = data.get("network_interfaces") or []
     if not isinstance(interfaces, list):
         interfaces = []
@@ -89,34 +119,40 @@ def normalize(data: dict, host_id: str, at: datetime):
     if not uplinks:
         uplinks = [item for item in interfaces if str(item.get("interface") or item.get("name") or "").startswith(
             ("eth", "ens", "enp", "eno", "wlan", "wlp", "bond"))]
-    rx = sum(float(item.get("rx_rate_mbps") or 0) * 125_000 for item in uplinks)
-    tx = sum(float(item.get("tx_rate_mbps") or 0) * 125_000 for item in uplinks)
+    def rate(field):
+        values = [number(item.get(field)) for item in uplinks]
+        return sum(values) * 125_000 if values and all(value is not None for value in values) else None
+    rx, tx = rate("rx_rate_mbps"), rate("tx_rate_mbps")
     network_summary = data.get("network_summary")
     if isinstance(network_summary, dict):
-        rx = float(network_summary.get("rx_bytes_per_sec") or rx)
-        tx = float(network_summary.get("tx_bytes_per_sec") or tx)
+        rx = number(network_summary["rx_bytes_per_sec"]) if network_summary.get("rx_bytes_per_sec") is not None else rx
+        tx = number(network_summary["tx_bytes_per_sec"]) if network_summary.get("tx_bytes_per_sec") is not None else tx
         network_summary = {key: network_summary[key] for key in (
             "interfaces", "rx_bytes_per_sec", "tx_bytes_per_sec", "rx_bytes", "tx_bytes",
             "daily_rx_bytes", "daily_tx_bytes") if key in network_summary}
     else:
         network_summary = {"rx_bytes_per_sec": rx, "tx_bytes_per_sec": tx}
-    rx = float(data.get("net_rx_rate") or rx)
-    tx = float(data.get("net_tx_rate") or tx)
+    rx = number(data["net_rx_rate"]) if data.get("net_rx_rate") is not None else rx
+    tx = number(data["net_tx_rate"]) if data.get("net_tx_rate") is not None else tx
     metric_fields = {
         "cpu": "cpu_percent", "memory": "memory_percent", "disk": "disk_percent",
         "swap": "swap_percent", "load1": "load1", "load5": "load5", "load15": "load15",
     }
-    metrics = {name: float(data.get(field) or 0) for name, field in metric_fields.items()}
-    metrics.update(net_rx=rx, net_tx=tx)
+    metrics = {name: number(data[field]) for name, field in metric_fields.items() if data.get(field) is not None}
+    metrics.update({key: value for key, value in (("net_rx", rx), ("net_tx", tx)) if value is not None})
     for name, field in (("net_rx_raw", "net_rx_bytes"), ("net_tx_raw", "net_tx_bytes"),
                         ("disk_read_raw", "disk_read_bytes"), ("disk_write_raw", "disk_write_bytes")):
-        metrics[name] = float(data.get(field) or 0)
+        if data.get(field) is not None:
+            metrics[name] = number(data[field])
     for name in ("disk_read", "disk_write"):
-        metrics[name] = float(data.get(f"{name}_rate") or 0)
+        if data.get(f"{name}_rate") is not None:
+            metrics[name] = number(data[f"{name}_rate"])
     disks = data.get("disks")
+    if any(not math.isfinite(value) for value in metrics.values()):
+        raise ValueError("Non-finite Agent metric")
     disk_devices = data.get("disk_devices")
     summary = {
-        "server_id": host_id, "source": "agent", "timestamp": at.replace(tzinfo=timezone.utc).timestamp(),
+        "server_id": host_id, "source": "agent", "timestamp": sample_time,
         "agent_version": str(data.get("agent_version") or ""),
         "hostname": str(data.get("hostname") or ""), "platform": str(data.get("platform") or ""),
         "kernel": str(data.get("kernel") or ""),
@@ -131,6 +167,7 @@ def normalize(data: dict, host_id: str, at: datetime):
         "disks": [item for item in disks[:64] if isinstance(item, dict)] if isinstance(disks, list) else [],
         "disk_devices": [item for item in disk_devices[:64] if isinstance(item, dict)] if isinstance(disk_devices, list) else [],
         "network_summary": network_summary, "network_interfaces": interfaces,
+        "partial": any(data.get(field) is None for field in ("cpu_percent", "memory_percent", "disk_percent")),
         "cached": False, "stale": False, "cache_age_seconds": 0,
     }
     return summary, metrics

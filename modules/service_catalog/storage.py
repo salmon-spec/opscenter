@@ -351,6 +351,20 @@ class CatalogStore:
         return [{**row, "id": str(row["id"]), "checked_at": row["checked_at"].isoformat(),
                  "error_code": ""} for row in reversed(rows)]
 
+    def latest_probes(self, keys: list[str]):
+        if not keys:
+            return {}
+        with self.connect() as db:
+            rows = db.execute('''
+                SELECT wanted.key AS service_key, latest.status, latest.checked_at
+                FROM unnest(%s::text[]) AS wanted(key)
+                LEFT JOIN LATERAL (
+                    SELECT status, checked_at FROM service_probe_results
+                    WHERE service_key=wanted.key ORDER BY checked_at DESC LIMIT 1
+                ) latest ON true
+            ''', (keys,)).fetchall()
+        return {row['service_key']: row for row in rows}
+
     def probe_summaries(self, hours: int = 24):
         with self.connect() as db:
             rows = db.execute("""
@@ -358,8 +372,10 @@ class CatalogStore:
                     round(100.0 * count(*) FILTER (WHERE status='up') / count(*), 2) AS uptime_percent,
                     round(avg(latency_ms), 1) AS avg_latency_ms,
                     (array_agg(status ORDER BY checked_at DESC))[1] AS status,
-                    max(checked_at) AS checked_at, min(checked_at) AS first_checked_at
-                FROM service_probe_results
+                    max(checked_at) AS checked_at,
+                    (SELECT min(origin.checked_at) FROM service_probe_results origin
+                     WHERE origin.service_key=recent.service_key) AS first_checked_at
+                FROM service_probe_results recent
                 WHERE checked_at >= now() - (%s * interval '1 hour')
                 GROUP BY service_key
             """, (hours,)).fetchall()

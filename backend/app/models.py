@@ -2,6 +2,7 @@ from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, Foreign
 from sqlalchemy.dialects.postgresql import JSONB as PostgreSQLJSONB
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
+from app.credential_crypto import SSHCredential
 import uuid, enum
 
 Base = declarative_base()
@@ -32,7 +33,7 @@ class Server(Base):
     host = Column(String(100), nullable=False)
     ssh_port = Column(Integer, default=22)
     ssh_user = Column(String(50), default="ops")
-    ssh_key = Column(Text, nullable=True)
+    ssh_key = Column(SSHCredential(), nullable=True)
     tags = Column(JSONB, default=list)
     status = Column(String(20), default=ServerStatus.unknown.value)
     docker_available = Column(Boolean, default=False)

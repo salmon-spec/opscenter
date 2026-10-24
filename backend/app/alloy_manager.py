@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import secrets
+import shlex
 from urllib.parse import urlparse
 import uuid
 
@@ -17,6 +18,7 @@ from app.config import ALLOY_VERSION, LOKI_PUBLIC_URL, LOKI_TIMEOUT_SECONDS, LOK
 from app.database import get_db
 from app.models import Server
 from app.ssh_manager import get_ssh_client, ssh_exec
+from app.agent_manager import resolve_management_hosts
 
 
 router = APIRouter(prefix="/api/v2", tags=["log-agents"], dependencies=[Depends(require_operator)])
@@ -41,6 +43,30 @@ def _push_url() -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ValueError("请先配置有效的 LOKI_PUBLIC_URL")
     return f"{LOKI_PUBLIC_URL}/loki/api/v1/push"
+
+
+def _reachable_push_url(client, push_url: str) -> str:
+    parsed = urlparse(push_url)
+    candidates = [parsed]
+    with get_db() as db:
+        for row in db.query(Server).all():
+            if parsed.hostname in {row.host, row.lan_ip, row.wireguard_ip}:
+                for host in resolve_management_hosts(row):
+                    authority = f"[{host}]" if ":" in host else host
+                    if parsed.port:
+                        authority += f":{parsed.port}"
+                    if "@" in parsed.netloc:
+                        authority = parsed.netloc.rsplit("@", 1)[0] + "@" + authority
+                    candidate = parsed._replace(netloc=authority)
+                    if candidate not in candidates:
+                        candidates.append(candidate)
+                break
+    for candidate in candidates:
+        ready = candidate._replace(path="/ready", query="", fragment="").geturl()
+        _, _, code = ssh_exec(client, "curl -fsS -o /dev/null --connect-timeout 2 --max-time 3 " + shlex.quote(ready), timeout=5)
+        if code == 0:
+            return candidate.geturl()
+    raise ValueError("目标主机无法连接日志入口及其已登记的管理地址")
 
 
 def _probe_ingestion(server_id: str, now: datetime) -> dict:
@@ -123,6 +149,7 @@ def deploy_alloy(server: Server) -> dict:
         return {"success": False, "message": "SSH 连接失败"}
     sudo = "" if server.ssh_user == "root" else "sudo -n "
     try:
+        push_url = _reachable_push_url(client, push_url)
         installed_out, _, _ = ssh_exec(client, "alloy --version 2>/dev/null || true")
         if _version(installed_out) != ALLOY_VERSION:
             arch_out, _, _ = ssh_exec(client, "dpkg --print-architecture 2>/dev/null || true")
@@ -139,7 +166,12 @@ def deploy_alloy(server: Server) -> dict:
             _, error, code = ssh_exec(client, command, timeout=180)
             if code != 0:
                 return {"success": False, "message": f"Alloy 安装失败：{error[-500:]}"}
-        ok, message = _upload(client, _CONFIG_SOURCE.read_text(encoding="utf-8"), "/etc/alloy/config.alloy", "0644", sudo)
+        config = _CONFIG_SOURCE.read_text(encoding="utf-8")
+        _, _, docker = ssh_exec(client, "test -S /var/run/docker.sock")
+        if docker != 0:
+            start, end = config.index('discovery.docker "local"'), config.index('loki.write "opscenter"')
+            config = config[:start] + config[end:]
+        ok, message = _upload(client, config, "/etc/alloy/config.alloy", "0644", sudo)
         if not ok:
             return {"success": False, "message": f"Alloy 配置写入失败：{message[-500:]}"}
         dropin = "\n".join([

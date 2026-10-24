@@ -1,0 +1,7 @@
+{
+  "xterm": "5.5.0",
+  "addon-fit": "0.10.0",
+  "marked": "18.1.1",
+  "DOMPurify": "3.4.17",
+  "source": "npm packages verified against registry sha512; xterm reused from installed workspace dependency"
+}

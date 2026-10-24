@@ -206,8 +206,9 @@ def _auto_resolution(start: datetime, end: datetime) -> str:
 def _thin(values: list, limit: int = 2500) -> list:
     if len(values) <= limit:
         return values
-    step = max(1, len(values) // limit)
-    return values[::step][:limit]
+    if limit < 2:
+        return values[-max(0, limit):] if limit > 0 else []
+    return [values[index * (len(values) - 1) // (limit - 1)] for index in range(limit)]
 
 
 def _metric_query_args(metrics: str, start: str | None, end: str | None, resolution: str):
@@ -219,6 +220,8 @@ def _metric_query_args(metrics: str, start: str | None, end: str | None, resolut
     if not names or len(names) > 8 or any(item not in ALLOWED_METRICS for item in names):
         raise HTTPException(400, "监控指标无效或数量超过8个")
     selected_resolution = _auto_resolution(start_dt, end_dt) if resolution == "auto" else resolution
+    if selected_resolution == "raw" and end_dt - start_dt > timedelta(days=7):
+        raise HTTPException(400, "原始指标查询最多7天，请选择自动或聚合分辨率")
     return names, start_dt, end_dt, selected_resolution
 
 

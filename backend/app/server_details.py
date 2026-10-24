@@ -24,6 +24,7 @@
 """
 
 from __future__ import annotations
+from app.redaction import redact_text
 
 import calendar
 import re
@@ -57,11 +58,7 @@ _K8S_CLIENT_FNS = ("list_nodes", "list_k8s_nodes")
 
 def _sanitize(value, limit: int = 200) -> str | None:
     """错误脱敏：不携带密码/Token 等凭据片段。"""
-    text = str(value or "")
-    for marker in ("Bearer ", "Authorization", "token=", "__password__", "ssh_key", "agent_token"):
-        text = text.replace(marker, "***")
-    text = text.strip()
-    return text[:limit] if text else None
+    return redact_text(value, limit).strip() or None
 
 
 def _version_parts(value: str | None) -> tuple[int, ...]:

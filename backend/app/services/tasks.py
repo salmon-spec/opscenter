@@ -19,12 +19,12 @@ import time
 from typing import Any
 
 from app.services.redis_store import redis_store
+from app.redaction import redact_text as _sanitize
 
 TASK_TTL = 86400
 _TASK_KEY = "opscenter:task:{}"
 _SERVER_KEY = "opscenter:agent_task:{}"
 _MAX_TASKS = 1024
-_SANITIZE_MARKERS = ("__password__", "Bearer ", "Authorization", "ssh_key", "agent_token")
 _STATUS_PHASE = {
     "queued": "排队中",
     "running": "执行中",
@@ -33,14 +33,6 @@ _STATUS_PHASE = {
     "success": "成功",
     "failed": "失败",
 }
-
-
-def _sanitize(value: Any, limit: int = 500) -> str:
-    text = str(value or "")
-    for marker in _SANITIZE_MARKERS:
-        if marker in text:
-            text = text.replace(marker, "***")
-    return text[:limit]
 
 
 class TaskRegistry:

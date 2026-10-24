@@ -1,0 +1,7 @@
+{
+  "release": "audit-fixes-20261024-r2",
+  "frontend_version": "5.5.20",
+  "backend_version": "5.5.20",
+  "git_head": "faa7596ad3d58b5ca67501cef23121abbee0cfc6",
+  "source_is_working_tree": true
+}

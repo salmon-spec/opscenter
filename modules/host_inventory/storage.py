@@ -147,6 +147,7 @@ class HostInventoryStore:
                     'unknown','remote',%(remark)s,%(lan_ip)s,%(wireguard_ip)s,
                     %(preferred_management_channel)s,%(management_address_override)s,
                     %(cluster_id)s,%(kubernetes_node_name)s,%(node_role)s,%(runtime_type)s,TRUE)
+                ON CONFLICT (id) DO NOTHING
             """, {**host, "tags": json.dumps(host["tags"], ensure_ascii=False)})
             db.execute("""
                 INSERT INTO module_audit (actor,action,target,details)
@@ -191,6 +192,18 @@ class HostInventoryStore:
 
     def update_agent_telemetry(self, data: dict) -> bool:
         with self.connect() as db:
+            registration = data.get("registration")
+            if registration and registration.get("name") and registration.get("host"):
+                import json
+                keys = ("name", "host", "ssh_port", "tags", "remark", "lan_ip", "wireguard_ip",
+                        "preferred_management_channel", "management_address_override",
+                        "kubernetes_node_name", "node_role", "runtime_type", "cluster_id")
+                values = [registration.get(key) or (22 if key == "ssh_port" else [] if key == "tags" else "") for key in keys]
+                values[3] = json.dumps(values[3], ensure_ascii=False)
+                db.execute("INSERT INTO hosts (id,name,host) VALUES (%s,%s,%s) ON CONFLICT (id) DO NOTHING",
+                           (data["id"], registration["name"], registration["host"]))
+                assignments = ",".join(key + ("=%s::jsonb" if key == "tags" else "=%s") for key in keys)
+                db.execute("UPDATE hosts SET " + assignments + " WHERE id=%s AND archived_at IS NULL", (*values, data["id"]))
             row = db.execute("""
                 UPDATE hosts SET status=%s, docker_available=%s, is_local=%s,
                     agent_status=%s, agent_type=%s, last_seen=%s, agent_version=%s,

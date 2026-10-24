@@ -18,6 +18,8 @@ function readHostCache() {
 const hosts = ref(readHostCache())
 const selectedHostId = ref(localStorage.getItem('ops-global-host') || '')
 const loading = ref(false)
+const refreshError = ref('')
+const lastSuccessAt = ref(0)
 let loaded = false
 let refreshController = null
 let refreshPromise = null
@@ -34,8 +36,13 @@ async function refreshHosts(force = false) {
   const promise = (async () => {
     try {
       const snapshot = await api.get('/modules/host-inventory/api/v1/hosts', undefined, { signal: controller.signal, timeoutMs: 8000 })
+      if (snapshot.status === 'unavailable' || !Array.isArray(snapshot.items)) {
+        throw new Error(snapshot.error || '主机清单暂不可用')
+      }
       const list = snapshot.items
-      hosts.value = Array.isArray(list) ? list : []
+      hosts.value = list
+      refreshError.value = ''
+      lastSuccessAt.value = Date.now()
       const selected = hosts.value.find((host) => host.id === selectedHostId.value)
         || hosts.value.find((host) => host.status === 'online')
         || hosts.value[0]
@@ -45,6 +52,7 @@ async function refreshHosts(force = false) {
       loaded = true
       return hosts.value
     } catch (error) {
+      if (error.name !== 'AbortError') refreshError.value = error.message
       if (error.name !== 'AbortError' && !hosts.value.length) throw error
       return hosts.value
     } finally {
@@ -65,5 +73,5 @@ function selectHost(id) {
 }
 
 export function useHostContext() {
-  return { hosts, selectedHostId, currentHost, loading, refreshHosts, selectHost }
+  return { hosts, selectedHostId, currentHost, loading, refreshError, lastSuccessAt, refreshHosts, selectHost }
 }

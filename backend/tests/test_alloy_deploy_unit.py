@@ -5,6 +5,9 @@ from app.models import Server
 
 
 def test_deploy_reuses_matching_alloy_without_downloading(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(alloy_manager, "_CONFIG_SOURCE", Path(__file__).resolve().parents[2] / "deploy/observability/alloy.example.alloy")
+    monkeypatch.setattr(alloy_manager, "_reachable_push_url", lambda _, url: url)
     commands = []
 
     class FakeClient:

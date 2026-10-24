@@ -42,8 +42,12 @@ chmod 700 "$root"
 if docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=512m \
   -e DATABASE_URL=sqlite:////tmp/opscenter-ci.db \
   -v "$work:/opt/opscenter:ro" \
-  -w /opt/opscenter/backend "opscenter/backend:$tag" \
-  sh -c 'pip install -q pytest && python -m pytest -q tests/test_smoke.py tests/test_extension_modules.py::test_builtin_seed_and_lifecycle' >"$test_log" 2>&1; then
+  -w /opt/opscenter "opscenter/backend:$tag" \
+  sh -ec 'pip install -q pytest pytest-asyncio aiohttp==3.13.3 apprise==2.0.1 websocket-client==1.8.0
+    python -m pytest -q backend/tests agent/test_processes.py
+    for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms runtime extension_worker automation opencode_agent; do
+      PYTHONPATH="/opt/opscenter/modules/$module:/opt/opscenter/modules:/opt/opscenter/backend" python -m pytest -q "modules/$module"
+    done' >"$test_log" 2>&1; then
   grep -E '[0-9]+ passed' "$test_log" | tail -1
 else
   echo "backend tests failed; root-only log: $test_log" >&2
@@ -53,11 +57,29 @@ fi
 (
   cd "$work/frontend-vite"
   pnpm install --frozen-lockfile --prefer-offline
+  node --test tests/*.test.mjs
+  node ../modules/opencode_agent/test_ui.cjs
   pnpm build
+  node -e 'const fs=require("node:fs");const p=JSON.parse(fs.readFileSync("package.json"));fs.writeFileSync("dist/release.json",JSON.stringify({version:p.version,git_commit:process.argv[1]},null,2))' "$sha"
 )
 docker build -q -t "opscenter/frontend:$tag" -f "$work/deploy/docker/frontend.Dockerfile" "$work"
 
+images=("opscenter/backend:$tag" "opscenter/frontend:$tag")
+for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms; do
+  image="opscenter/module-${module//_/-}:$tag"
+  docker build -q -t "$image" -f "$work/modules/$module/Dockerfile" "$work"
+  images+=("$image")
+done
+
+docker build -q -t "opscenter/module-automation:$tag" -f "$work/modules/automation/Dockerfile" "$work/modules"
+docker build -q -t "opscenter/module-opencode-agent:$tag" -f "$work/modules/opencode_agent/Dockerfile" "$work"
+docker build -q -t "opscenter/opencode-runner:$tag" -f "$work/deploy/docker/opencode-runner.Dockerfile" "$work"
+images+=("opscenter/module-automation:$tag" "opscenter/module-opencode-agent:$tag" "opscenter/opencode-runner:$tag")
+docker build -q --build-arg "BACKEND_IMAGE=opscenter/backend:$tag" \
+  -t "opscenter/extension-worker:$tag" -f "$work/modules/extension_worker/Dockerfile" "$work"
+images+=("opscenter/extension-worker:$tag")
+
 archive="$root/opscenter-images-$tag.tar"
-docker save "opscenter/backend:$tag" "opscenter/frontend:$tag" -o "$archive"
+docker save "${images[@]}" -o "$archive"
 sha256sum "$archive" > "$archive.sha256"
 echo "CI_OK sha=$sha tag=$tag archive=$archive"

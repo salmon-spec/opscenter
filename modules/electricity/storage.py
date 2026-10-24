@@ -82,6 +82,24 @@ def read_jsonl(path: Path, limit: int = 200) -> list[dict]:
     return records
 
 
+def read_history(path: Path, key: str, limit: int) -> list[dict]:
+    """Read all archived keys; repeated collections update the same period."""
+    latest = {}
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get(key):
+                    latest[str(row[key])] = row
+    except FileNotFoundError:
+        return []
+    rows = [latest[value] for value in sorted(latest, reverse=True)]
+    return rows[:limit] if limit else rows
+
+
 def rotate(path: Path, max_bytes: int, keep: int = 3) -> bool:
     """Rotate ``path`` into ``.1 ... .keep`` when it exceeds ``max_bytes``."""
     try:
@@ -155,6 +173,7 @@ class ElectricityStore:
         self.dir = Path(os.getenv("ELECTRICITY_DATA_DIR", "/data"))
         self.snapshot_path = self.dir / "snapshot.json"
         self.alerts_path = self.dir / "alerts.json"
+        self.alert_config_path = self.dir / "alert_config.json"
         self.history_path = self.dir / "alert_history.jsonl"
         self.daily_history_path = self.dir / "daily_history.jsonl"
         self.monthly_history_path = self.dir / "monthly_history.jsonl"
@@ -201,6 +220,12 @@ class ElectricityStore:
     def save_alert_state(self, value: dict) -> None:
         save_json(self.alerts_path, value)
 
+    def alert_config(self) -> dict:
+        return read_json(self.alert_config_path, {}) or {}
+
+    def save_alert_config(self, value: dict) -> None:
+        save_json(self.alert_config_path, value)
+
     # ---------- alert history (rotated) ----------
     def append_alert_history(self, records: list[dict]) -> None:
         self.rotate_alerts()
@@ -220,35 +245,25 @@ class ElectricityStore:
 
     def daily_history(self, days: int = 120) -> list[dict]:
         """Newest first, one row per published day (later collection wins)."""
-        seen: dict[str, dict] = {}
-        for row in read_jsonl(self.daily_history_path, 5000):  # already newest-first
-            day = str(row.get("day") or "")
-            if day and day not in seen:
-                seen[day] = row
-        ordered = sorted(seen.values(), key=lambda row: str(row.get("day")), reverse=True)
-        return ordered[:days]
+        return read_history(self.daily_history_path, "day", days)
 
     def append_monthly_history(self, rows: list[dict]) -> None:
         append_jsonl(self.monthly_history_path, rows)
 
     def monthly_history(self, months: int = 24) -> list[dict]:
-        seen: dict[str, dict] = {}
-        for row in read_jsonl(self.monthly_history_path, 5000):
-            month = str(row.get("month") or "")
-            if month and month not in seen:
-                seen[month] = row
-        ordered = sorted(seen.values(), key=lambda row: str(row.get("month")), reverse=True)
-        return ordered[:months]
+        return read_history(self.monthly_history_path, "month", months)
 
     def trim_history(self) -> dict:
         """Drop history rows older than the configured retention windows."""
         removed = {"daily": 0, "monthly": 0}
-        daily_days = int(os.getenv("ELECTRICITY_DAILY_HISTORY_DAYS", "730") or 730)
-        cutoff = (datetime.now(TZ) - timedelta(days=daily_days)).date().isoformat()
-        removed["daily"] = self._trim_by_key(self.daily_history_path, "day", cutoff)
-        monthly_days = int(os.getenv("ELECTRICITY_MONTHLY_HISTORY_DAYS", str(365 * 10)) or 3650)
-        month_cutoff = (datetime.now(TZ) - timedelta(days=monthly_days)).strftime("%Y%m")
-        removed["monthly"] = self._trim_by_key(self.monthly_history_path, "month", month_cutoff)
+        daily_days = int(os.getenv("ELECTRICITY_DAILY_HISTORY_DAYS", "0") or 0)
+        if daily_days > 0:
+            cutoff = (datetime.now(TZ) - timedelta(days=daily_days)).date().isoformat()
+            removed["daily"] = self._trim_by_key(self.daily_history_path, "day", cutoff)
+        monthly_days = int(os.getenv("ELECTRICITY_MONTHLY_HISTORY_DAYS", "0") or 0)
+        if monthly_days > 0:
+            month_cutoff = (datetime.now(TZ) - timedelta(days=monthly_days)).strftime("%Y%m")
+            removed["monthly"] = self._trim_by_key(self.monthly_history_path, "month", month_cutoff)
         return removed
 
     @staticmethod

@@ -15,9 +15,41 @@ def test_summary_reports_loki_readiness(monkeypatch):
 
     monkeypatch.setattr(main, "LOKI_URL", "http://loki:3100")
     monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: Ready())
+    monkeypatch.setattr(main, "_coverage", lambda: [])
     summary = client.get("/api/v1/summary").json()
     assert summary["status"] == "ok"
-    assert summary["data"] == {"loki_configured": True, "loki_ready": True}
+    assert summary["data"] == {"loki_configured": True, "loki_ready": True, "hosts_total": 0, "collectors_running": 0, "collectors_missing": 0, "collectors_fresh": 0, "collectors_stale": 0}
+
+
+def test_running_collector_without_recent_ingestion_is_degraded(monkeypatch):
+    monkeypatch.setattr(main, "_coverage", lambda: [{"id": "one", "name": "one", "log_agent_status": "running", "ingestion_fresh": False}])
+    summary = main._summary()
+    assert summary["status"] == "degraded" and summary["data"]["collectors_stale"] == 1
+    assert "10分钟" in main._findings()["items"][0]["summary"]
+
+
+def test_coverage_combines_active_assets_with_actual_loki_counts(monkeypatch, tmp_path):
+    token = tmp_path / "token"
+    token.write_text("test-only")
+    monkeypatch.setenv("HOST_INVENTORY_INTERNAL_TOKEN_FILE", str(token))
+    monkeypatch.setattr(main, "_request", lambda *args, **kwargs: {"status": "ok", "items": [{"id": "one"}, {"id": "two"}]})
+    monkeypatch.setattr(main, "_loki", lambda *args: {"data": {"result": [{"metric": {"server_id": "one"}, "value": [0, "3"]}]}})
+    assert main._coverage() == [{"id": "one", "ingestion_fresh": True}, {"id": "two", "ingestion_fresh": False}]
+
+
+def test_missing_collectors_appear_in_summary_and_findings(monkeypatch):
+    class Ready:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+    monkeypatch.setattr(main, "LOKI_URL", "http://loki:3100")
+    monkeypatch.setattr(main, "urlopen", lambda *args, **kwargs: Ready())
+    monkeypatch.setattr(main, "_coverage", lambda: [{"id": "one", "name": "one", "log_agent_status": "running", "ingestion_fresh": True},
+                                                 {"id": "two", "name": "two", "log_agent_status": "unknown"}])
+    summary = client.get("/api/v1/summary").json()
+    findings = client.get("/api/v1/findings").json()
+    assert summary["status"] == "degraded" and summary["data"]["collectors_missing"] == 1
+    assert [item["resource_id"] for item in findings["items"]] == ["two"]
 
 
 def test_status_is_read_directly_from_loki(monkeypatch):

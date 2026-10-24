@@ -13,10 +13,10 @@ from urllib.request import Request, urlopen
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request as FastAPIRequest, Response as FastAPIResponse
-from pydantic import AnyHttpUrl, BaseModel, Field, field_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
 from runtime.auth import ModuleAuth
-from runtime.app import create_module_app
+from runtime.app import create_module_app, require_internal_service
 from storage import CatalogStore
 
 def get(path: str, query: dict | None = None):
@@ -165,10 +165,17 @@ def run_probe_cycle():
     if not due:
         return 0
     with ThreadPoolExecutor(max_workers=min(4, len(due))) as pool:
-        results = list(pool.map(probe_service, due))
-    for service, result in zip(due, results):
-        store.save_probe_result(service["key"], result)
-    return len(results)
+        futures = [(service, pool.submit(probe_service, service)) for service in due]
+        saved = 0
+        for service, future in futures:
+            try:
+                result = future.result()
+            except Exception:
+                print("service catalog target probe failed", flush=True)
+                continue
+            store.save_probe_result(service["key"], result)
+            saved += 1
+    return saved
 
 
 def require_service_key(service_key: str):
@@ -189,6 +196,7 @@ def module_health_overview(hours: int):
     availability = []
     timestamps = []
     for service in services if isinstance(services, list) else []:
+        service = {**service, **service_freshness(service), "uptime_window_complete": False}
         probe = local_health.get(service.get("key"), {})
         if probe:
             checked_at = probe["checked_at"]
@@ -205,6 +213,7 @@ def module_health_overview(hours: int):
                 "status_age_seconds": round(max(0, (datetime.now(timezone.utc) - checked_at).total_seconds()), 1),
                 "stale": (datetime.now(timezone.utc) - checked_at).total_seconds() > float(service.get("staleness_seconds") or 180),
                 "checks": probe["checks"],
+                "uptime_window_complete": window_complete,
                 "uptime_percent": float(probe["uptime_percent"]) if window_complete else service.get("uptime_percent"),
                 "avg_latency_ms": float(probe["avg_latency_ms"]) if probe["avg_latency_ms"] is not None else None,
             }
@@ -226,12 +235,12 @@ def module_health_overview(hours: int):
             timestamps.append(checked_at)
         items.append({**service, "status": status})
     generated_at = now.isoformat()
-    cached_stale = bool(cached_at and (datetime.now(timezone.utc) - cached_at).total_seconds() > 300)
     return {
         "generated_at": generated_at,
-        "data_timestamp": cached_payload.get("data_timestamp") or (max(timestamps) if timestamps else collected_at.isoformat()),
-        "stale": (datetime.now(timezone.utc) - collected_at).total_seconds() > 300
-        or cached_stale or any(item.get("stale") for item in items),
+        "data_timestamp": max(timestamps) if timestamps else cached_payload.get("data_timestamp") or collected_at.isoformat(),
+        "stale": any(item.get("stale", True) for item in items if item["status"] != "disabled"),
+        "catalog_stale": (now - collected_at).total_seconds() > 300,
+        "uptime_history_pending": any(not item["uptime_window_complete"] for item in items if item["status"] != "disabled"),
         "range_hours": hours,
         "summary": {
             "total": len(items), **counts, "active_incidents": 0, "silenced": 0,
@@ -312,6 +321,29 @@ auth.register(app)
 _probe_worker = None
 
 
+@app.get('/api/v1/internal/alert-targets', dependencies=[Depends(require_internal_service)])
+def alert_targets():
+    services, _ = services_snapshot(include_hidden=True)
+    latest = CatalogStore().latest_probes([row['key'] for row in services])
+    now = datetime.now(timezone.utc)
+    rows = []
+    for row in services:
+        if row.get('probe_enabled') is False or row.get('status') == 'disabled':
+            continue
+        probe = latest.get(row['key'], {})
+        checked = probe.get('checked_at')
+        if checked and checked.tzinfo is None:
+            checked = checked.replace(tzinfo=timezone.utc)
+        timeout = max(int(row.get('staleness_seconds') or 180), int(row.get('probe_interval_seconds') or 60) * 2 + 30)
+        fresh = bool(checked and -30 <= (now - checked).total_seconds() <= timeout)
+        rows.append({'id': row['key'], 'name': row.get('name') or row['key'],
+                     'server_id': str(row.get('server_id') or ''), 'metric': 'service_status',
+                     'value': probe.get('status') if probe.get('status') in {'up', 'down'} and fresh else None,
+                     'observed_at': checked, 'data_status': 'ok' if fresh else 'unknown',
+                     'stale_after_seconds': min(86400, timeout), 'url': '/services'})
+    return {'status': 'ok', 'collected_at': now, 'items': rows}
+
+
 class ManualServiceCreate(BaseModel):
     server_id: UUID
     server_name: str = Field(min_length=1, max_length=100)
@@ -371,6 +403,7 @@ class CredentialUpdate(BaseModel):
 
 
 class ServiceProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     server_id: UUID | None = None
     server_name: str | None = Field(None, max_length=100)
     server_host: str | None = Field(None, max_length=253)
@@ -388,9 +421,6 @@ class ServiceProfileUpdate(BaseModel):
     probe_timeout_seconds: float | None = Field(None, ge=1, le=30)
     probe_success_statuses: str | None = Field(None, min_length=3, max_length=200)
     probe_verify_tls: bool | None = None
-    probe_failure_threshold: int | None = Field(None, ge=1, le=10)
-    probe_recovery_threshold: int | None = Field(None, ge=1, le=5)
-    probe_notifications_enabled: bool | None = None
 
     @field_validator("entry_url", "health_url", "documentation_url")
     @classmethod
@@ -459,9 +489,7 @@ def service_detail(plaza_key: str, user=Depends(app.state.current_user)):
         "timeout_seconds": detail.get("probe_timeout_seconds", 4),
         "success_statuses": detail.get("probe_success_statuses", "200-399,401,403"),
         "verify_tls": detail.get("probe_verify_tls", True),
-        "failure_threshold": detail.get("probe_failure_threshold", 3),
-        "recovery_threshold": detail.get("probe_recovery_threshold", 1),
-        "notifications_enabled": detail.get("probe_notifications_enabled", True),
+        "service_notifications_supported": False,
     }
     cached = CatalogStore().read_snapshot("health-overview:24")
     health_rows = cached[0].get("items", []) if cached and isinstance(cached[0], dict) else []
@@ -474,7 +502,8 @@ def service_detail(plaza_key: str, user=Depends(app.state.current_user)):
     store = CatalogStore()
     probes = store.probe_history(plaza_key, hours=24, limit=5000)
     if probes:
-        first_checked_at = datetime.fromisoformat(probes[0]["checked_at"].replace("Z", "+00:00"))
+        aggregate = store.probe_summaries(24).get(plaza_key, {})
+        first_checked_at = aggregate.get("first_checked_at") or datetime.fromisoformat(probes[0]["checked_at"].replace("Z", "+00:00"))
         if first_checked_at.tzinfo is None:
             first_checked_at = first_checked_at.replace(tzinfo=timezone.utc)
         window_complete = (datetime.now(timezone.utc) - first_checked_at).total_seconds() >= 24 * 3600
@@ -482,7 +511,7 @@ def service_detail(plaza_key: str, user=Depends(app.state.current_user)):
         detail["status_checked_at"] = probes[-1]["checked_at"]
         detail["status_age_seconds"] = max(0, (datetime.now(timezone.utc) - datetime.fromisoformat(
             probes[-1]["checked_at"].replace("Z", "+00:00")).astimezone(timezone.utc)).total_seconds())
-        detail["stale"] = False
+        detail["stale"] = detail["status_age_seconds"] > float(detail.get("staleness_seconds") or 180)
         detail["recent_probes"] = probes[-20:]
         detail["probe_summary"] = {
             "checks_24h": len(probes),
@@ -653,8 +682,11 @@ def probe_loop():
     while True:
         try:
             if time.monotonic() - last_refresh >= 60:
-                refresh_source_snapshot()
                 last_refresh = time.monotonic()
+                try:
+                    refresh_source_snapshot()
+                except Exception:
+                    print("service catalog source refresh failed; keeping saved catalog", flush=True)
             run_probe_cycle()
         except Exception:
             print("service catalog probe cycle failed", flush=True)

@@ -1,5 +1,5 @@
 <template>
-  <aside class="host-sidebar">
+  <aside class="host-sidebar"><p v-if="refreshError" role="status" class="empty-list">主机清单刷新失败，显示最后成功数据：{{ refreshError }}</p>
     <div class="host-sidebar-head"><span>目标主机</span><b>{{ hosts.length }}</b></div>
     <div class="host-list">
       <button v-for="host in hosts" :key="host.id" class="host-item" :class="{ active: host.id === selectedHostId }" @click="selectHost(host.id)">
@@ -18,7 +18,7 @@ import { onMounted } from 'vue'
 import { useHostContext } from '../../hostContext'
 
 defineEmits(['manage'])
-const { hosts, selectedHostId, refreshHosts, selectHost } = useHostContext()
+const { hosts, selectedHostId, refreshError, refreshHosts, selectHost } = useHostContext()
 onMounted(() => { refreshHosts().catch(() => {}) })
 </script>
 

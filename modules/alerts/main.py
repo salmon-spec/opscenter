@@ -15,7 +15,11 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+import math
+import engine
+import center
+from templates import METRICS
 
 from runtime.auth import ModuleAuth
 from runtime.app import create_module_app
@@ -137,7 +141,8 @@ def certificate_provider():
 
 def _events_since(events: list[dict], days: int):
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    return [event for event in events if (created := _parse_time(event.get("created_at"))) and created >= cutoff]
+    return [event for event in events if event.get('status') in {'pending', 'firing', 'acked'}
+            or ((created := _parse_time(event.get("created_at"))) and created >= cutoff)]
 
 
 def _snapshot(required: bool = False):
@@ -145,8 +150,8 @@ def _snapshot(required: bool = False):
     store = _store()
     cached = store.read()
     now = datetime.now(timezone.utc)
-    sync_enabled = os.getenv("ALERTS_SYNC_ENABLED", "true").lower() in {"1", "true", "yes"}
-    if cached and (not sync_enabled or (now - cached[1]).total_seconds() < _refresh_seconds):
+    sync_enabled = os.getenv("ALERTS_SYNC_ENABLED", "false").lower() in {"1", "true", "yes"}
+    if cached:
         return cached[0], cached[1], _last_refresh_error
     if not sync_enabled:
         return {"events": [], "rules": [], "silences": []}, now, ""
@@ -186,10 +191,13 @@ def event_counts(events: list[dict]) -> dict[str, int]:
 
 def summary_provider():
     data, collected_at, error = _snapshot()
+    collected_at = _parse_time(data.get('meta', {}).get('last_evaluated_at')) or collected_at
+    if any(value.get('status') in {'unavailable', 'degraded'} for value in data.get('meta', {}).get('sources', {}).values()):
+        error = '部分告警数据源暂不可用'
     events = _events_since(data["events"], 30)
     counts = event_counts(events)
-    counts["rules_total"] = len(data["rules"])
-    counts["rules_enabled"] = sum(bool(rule.get("enabled")) for rule in data["rules"])
+    counts["rules_total"] = sum(not rule.get('archived') for rule in data["rules"])
+    counts["rules_enabled"] = sum(bool(rule.get("enabled")) and not rule.get('archived') for rule in data["rules"])
     age, status, error = _status(collected_at, error)
     return {"status": status, "collected_at": collected_at, "stale_after_seconds": 300,
             "data": {**counts, "cache_age_seconds": age}, "error": error}
@@ -202,14 +210,14 @@ def findings_provider():
         {
             "id": f"alert-event:{event['id']}",
             "resource_id": event.get("server_id"),
-            "severity": "critical" if event.get("status") == "firing" else "warning",
+            "severity": event.get('severity', 'warning'),
             "title": event.get("rule_name") or "告警事件",
             "summary": f"{event.get('server_name') or '未知主机'} · {event.get('status', 'unknown')} · {event.get('current_value') or '-'}",
             "observed_at": event.get("fired_at") or event.get("created_at") or collected_at,
             "url": "/alerts",
         }
         for event in events
-        if event.get("status") in {"pending", "firing"} and event.get("id")
+        if engine.normalize(event)["condition_status"] == "firing" and event.get("handling_status") == "unacked" and event.get("id")
     ][:1000]
     sources = (
         ("HOST_INVENTORY_INTERNAL_URL", "HOST_INVENTORY_INTERNAL_TOKEN_FILE"),
@@ -249,109 +257,8 @@ def _store():
     return store
 
 
-def _breaches(rule: dict, value) -> bool:
-    if value is None:
-        return False
-    try:
-        left, right = (float(value), float(rule["threshold"])) if rule.get("value_type") == "numeric" else (str(value), str(rule["threshold"]))
-        operation = {">": lambda: left > right, "<": lambda: left < right,
-                     ">=": lambda: left >= right, "<=": lambda: left <= right,
-                     "==": lambda: left == right, "!=": lambda: left != right}.get(rule.get("operator"))
-        return operation() if operation else False
-    except (ValueError, TypeError, KeyError):
-        return False
-
-
 def evaluate_once():
-    """Evaluate supported host metrics; missing/expired sources never create incidents."""
-    inventory = _module_get(os.getenv("HOST_INVENTORY_INTERNAL_URL", ""),
-                            os.getenv("HOST_INVENTORY_INTERNAL_TOKEN_FILE", ""), "/api/v1/internal/hosts")
-    metrics = _module_get(os.getenv("HOST_MONITOR_INTERNAL_URL", ""),
-                          os.getenv("HOST_MONITOR_INTERNAL_TOKEN_FILE", ""), "/api/v1/internal/metrics/latest")
-    inventory_at = _parse_time(inventory.get("collected_at")) if inventory else None
-    now = datetime.now(timezone.utc)
-    inventory_ready = bool(inventory and inventory.get("status") in {"ok", "degraded"}
-                           and not inventory.get("error") and inventory_at
-                           and (now - inventory_at).total_seconds() <= 300)
-    data, _, _ = _snapshot(required=True)
-    metric_hosts = {str(item.get("id")): item for item in (metrics or {}).get("items", [])}
-    hosts = inventory.get("items", []) if inventory_ready else []
-    certificates = _store().read_certificates()
-    changed = False
-    for rule in data["rules"]:
-        if not rule.get("enabled"):
-            continue
-        if rule.get("metric") == "cert_days_left":
-            targets = []
-            for certificate in certificates:
-                checked_at = _parse_time(certificate.get("updated_at"))
-                if (not certificate.get("enabled", True) or certificate.get("last_error")
-                        or certificate.get("days_left") is None or not checked_at
-                        or (now - checked_at).total_seconds() > 28800
-                        or (rule.get("server_id") and str(certificate.get("server_id")) != str(rule["server_id"]))):
-                    continue
-                targets.append((str(certificate.get("server_id") or f"cert:{certificate.get('id')}"),
-                                certificate.get("domain"), certificate["days_left"]))
-        elif inventory_ready:
-            targets = [(str(host.get("id") or ""), host.get("name"), host)
-                       for host in hosts if not rule.get("server_id") or str(host.get("id")) == str(rule["server_id"])]
-        else:
-            continue
-        for host_id, host_name, host in targets:
-            if rule.get("metric") == "cert_days_left":
-                value = host
-            else:
-                sample = metric_hosts.get(host_id, {})
-                sample_at = _parse_time(sample.get("last_sample_at"))
-                if rule.get("metric") == "server_status":
-                    value = host.get("status")
-                elif rule.get("metric") == "agent_status":
-                    value = host.get("agent_status")
-                elif sample_at and (now - sample_at).total_seconds() <= 120:
-                    value = (sample.get("metrics") or {}).get(rule.get("metric"))
-                else:
-                    value = None
-            if value is None:
-                continue
-            silence = any(
-                (not item.get("rule_id") or item.get("rule_id") == rule.get("id"))
-                and (not item.get("server_id") or str(item.get("server_id")) == host_id)
-                and (start := _parse_time(item.get("starts_at"))) and (end := _parse_time(item.get("ends_at")))
-                and start <= now < end for item in data["silences"]
-            )
-            if silence:
-                continue
-            event = next((item for item in reversed(data["events"])
-                          if item.get("rule_id") == rule.get("id") and str(item.get("server_id")) == host_id
-                          and item.get("status") in {"pending", "firing", "acked"}), None)
-            breach = _breaches(rule, value)
-            if breach and event is None:
-                recent = next((item for item in reversed(data["events"])
-                               if item.get("rule_id") == rule.get("id") and str(item.get("server_id")) == host_id
-                               and item.get("status") == "recovered"), None)
-                recovered_at = _parse_time(recent.get("recovered_at")) if recent else None
-                if recovered_at and (now - recovered_at).total_seconds() < int(rule.get("cooldown_sec", 0)):
-                    continue
-                event = {"id": str(uuid.uuid4()), "rule_id": rule["id"], "rule_name": rule["name"],
-                         "server_id": host_id, "server_name": host_name, "status": "pending",
-                         "current_value": str(value), "first_breached_at": now.isoformat(), "created_at": now.isoformat()}
-                data["events"].append(event)
-                changed = True
-            elif event and breach:
-                previous = (event.get("current_value"), event.get("status"))
-                event["current_value"] = str(value)
-                if event["status"] == "pending" and (now - (_parse_time(event.get("first_breached_at") or event.get("created_at")) or now)).total_seconds() >= int(rule.get("duration_sec", 0)):
-                    event.update(status="firing", fired_at=now.isoformat())
-                changed = changed or previous != (event.get("current_value"), event.get("status"))
-            elif event and not breach:
-                if event["status"] == "pending":
-                    data["events"].remove(event)
-                else:
-                    event.update(status="recovered", recovered_at=now.isoformat())
-                changed = True
-    if changed:
-        _store().mutate(data, "system:alert-evaluator", "alert.events.evaluate", "batch")
-    return changed
+    return center.evaluate(_store, _snapshot, _module_get)
 
 
 def _evaluate_loop():
@@ -372,11 +279,11 @@ def _certificate_loop():
 
 app = create_module_app(
     key="alerts",
-    version="0.5.2",
+    version="0.6.0",
     summary_provider=summary_provider,
     findings_provider=findings_provider,
     readiness_provider=readiness_provider,
-    capabilities=["summary:read", "findings:read", "events:read", "events:ack", "rules:read", "rules:write", "silences:read", "silences:write"],
+    capabilities=["summary:read", "findings:read", "events:read", "events:ack", "events:comment", "events:close", "rules:read", "rules:write", "silences:read", "silences:write", "policies:manage", "deliveries:read", "analysis:read"],
 )
 auth = ModuleAuth(AlertsStore)
 auth.register(app)
@@ -421,6 +328,36 @@ class RulePayload(BaseModel):
     threshold: str = Field(min_length=1, max_length=120)
     duration_sec: int = Field(default=60, ge=0, le=86400)
     cooldown_sec: int = Field(default=300, ge=0, le=604800)
+    severity: str = Field(default="warning", pattern="^(critical|warning|info)$")
+    resource_id: str | None = Field(default=None, max_length=300)
+    recovery_sec: int = Field(default=0, ge=0, le=86400)
+    recovery_threshold: str | None = Field(default=None, max_length=120)
+    policy_ids: list[str] = Field(default_factory=list, max_length=30)
+    inhibit_on_host_down: bool = False
+    runbook_url: str = Field(default="", max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_condition(self):
+        if self.metric not in METRICS:
+            raise ValueError("请选择支持的告警指标")
+        if self.value_type != METRICS[self.metric]['value_type']:
+            raise ValueError("值类型与指标不匹配")
+        if self.value_type == 'numeric':
+            for value in (self.threshold, self.recovery_threshold):
+                if value is not None and not math.isfinite(float(value)):
+                    raise ValueError("阈值必须为有限数值")
+            if self.recovery_threshold is not None:
+                if self.operator in ('==', '!='):
+                    raise ValueError('等于和不等于条件无需独立恢复阈值')
+                if self.operator in ('>', '>=') and float(self.recovery_threshold) > float(self.threshold):
+                    raise ValueError("恢复阈值不能高于触发阈值")
+                if self.operator in ('<', '<=') and float(self.recovery_threshold) < float(self.threshold):
+                    raise ValueError("恢复阈值不能低于触发阈值")
+        elif self.operator not in ('==', '!='):
+            raise ValueError("文本状态仅支持等于和不等于")
+        if self.runbook_url and not self.runbook_url.startswith(('https://', 'http://')):
+            raise ValueError("处置文档必须为 HTTP 或 HTTPS 地址")
+        return self
     enabled: bool = True
 
 
@@ -430,6 +367,16 @@ class SilencePayload(BaseModel):
     starts_at: str
     ends_at: str
     reason: str = Field(default="", max_length=500)
+    resource_id: str | None = Field(default=None, max_length=300)
+    weekdays: list[int] = Field(default_factory=list, max_length=7)
+    daily_start: int = Field(default=0, ge=0, le=1439)
+    daily_end: int = Field(default=1440, ge=1, le=1440)
+
+    @model_validator(mode="after")
+    def validate_schedule(self):
+        if any(day < 0 or day > 6 for day in self.weekdays) or (self.weekdays and self.daily_start == self.daily_end):
+            raise ValueError("维护时间无效")
+        return self
 
 
 class CertificatePayload(BaseModel):
@@ -450,9 +397,8 @@ class CertificatePayload(BaseModel):
 
 
 def _mutate(actor: str, action: str, target: str, fn):
-    data, _, _ = _snapshot(required=True)
-    fn(data)
-    _store().mutate(data, actor, action, target)
+    _snapshot(required=True)
+    data = _store().mutate(fn, actor, action, target)
     global _last_refresh_error
     _last_refresh_error = ""
     return data
@@ -462,22 +408,25 @@ def _mutate(actor: str, action: str, target: str, fn):
 def list_events(status: str | None = None, server_id: str | None = None, days: int = Query(default=7, ge=1, le=365)):
     data, _, _ = _snapshot(required=True)
     events = _events_since(data["events"], days)
-    return [event for event in events if (not status or event.get("status") == status)
+    return [engine.normalize(dict(event)) for event in events if (not status or (engine.normalize(event)['handling_status'] == 'acked' if status == 'acked' else event.get("status") == status))
             and (not server_id or event.get("server_id") == server_id)]
 
 
 @app.get("/api/v1/rules")
 def list_rules():
-    return _snapshot(required=True)[0]["rules"]
+    return [row for row in _snapshot(required=True)[0]["rules"] if not row.get("archived")]
 
 
 @app.get("/api/v1/silences")
 def list_silences(active: int | None = Query(default=None, ge=0, le=1)):
     now = datetime.now(timezone.utc)
     rows = []
-    for row in _snapshot(required=True)[0]["silences"]:
+    data = _snapshot(required=True)[0]
+    rule_names = {rule['id']: rule.get('name') for rule in data['rules'] if rule.get('id')}
+    for row in data["silences"]:
         starts, ends = _parse_time(row.get("starts_at")), _parse_time(row.get("ends_at"))
-        item = {**row, "active": bool(starts and ends and starts <= now < ends)}
+        item = {**row, "active": bool(starts and ends and starts <= now < ends and not row.get("ended_at"))}
+        item['rule_name'] = rule_names.get(row.get('rule_id')) or row.get('rule_name') or ('指定规则' if row.get('rule_id') else None)
         if active is None or item["active"] == bool(active):
             rows.append(item)
     return rows
@@ -489,7 +438,13 @@ def ack_event(event_id: str, user=Depends(app.state.require_editor)):
         event = next((row for row in data["events"] if row.get("id") == event_id), None)
         if not event:
             raise HTTPException(404, "告警事件不存在")
-        event.update(status="acked", acked_by=user["username"], acked_at=datetime.now(timezone.utc).isoformat())
+        engine.normalize(event)
+        if event['condition_status'] != 'firing':
+            raise HTTPException(409, "只能确认正在触发的告警")
+        if event['handling_status'] != 'unacked':
+            return False
+        event.update(handling_status="acked", acked_by=user["username"], acked_at=datetime.now(timezone.utc).isoformat())
+        engine.stamp(event, 'acked', datetime.now(timezone.utc), user['username'])
     _mutate(user["username"], "alert.event.ack", event_id, update)
     return {"ok": True, "status": "acked"}
 
@@ -497,7 +452,11 @@ def ack_event(event_id: str, user=Depends(app.state.require_editor)):
 @app.post("/api/v1/rules", status_code=201)
 def create_rule(payload: RulePayload, user=Depends(app.state.require_editor)):
     row = {**payload.model_dump(), "id": str(uuid.uuid4()), "created_at": datetime.now(timezone.utc).isoformat()}
-    _mutate(user["username"], "alert.rule.create", row["id"], lambda data: data["rules"].append(row))
+    def add(data):
+        if any(not any(policy['id'] == key and not policy.get('archived') for policy in data.get('policies', [])) for key in row['policy_ids']):
+            raise HTTPException(422, '所选通知策略已不存在')
+        data['rules'].append(row)
+    _mutate(user["username"], "alert.rule.create", row["id"], add)
     return {"id": row["id"], "name": row["name"]}
 
 
@@ -508,6 +467,10 @@ def update_rule(rule_id: str, payload: RulePayload, user=Depends(app.state.requi
         row = next((item for item in data["rules"] if item.get("id") == rule_id), None)
         if not row:
             raise HTTPException(404, "告警规则不存在")
+        if row.get('archived'):
+            raise HTTPException(409, '该规则已归档')
+        if any(not any(policy['id'] == key and not policy.get('archived') for policy in data.get('policies', [])) for key in values['policy_ids']):
+            raise HTTPException(422, '所选通知策略已不存在')
         row.update(values)
     _mutate(user["username"], "alert.rule.update", rule_id, update)
     return {"id": rule_id, "name": values["name"]}
@@ -518,9 +481,13 @@ def delete_rule(rule_id: str, user=Depends(app.state.require_editor)):
     def remove(data):
         if not any(row.get("id") == rule_id for row in data["rules"]):
             raise HTTPException(404, "告警规则不存在")
-        data["rules"] = [row for row in data["rules"] if row.get("id") != rule_id]
-        data["events"] = [row for row in data["events"] if row.get("rule_id") != rule_id]
-        data["silences"] = [row for row in data["silences"] if row.get("rule_id") != rule_id]
+        rule = next(row for row in data['rules'] if row['id'] == rule_id)
+        rule.update(archived=True, enabled=False, archived_at=datetime.now(timezone.utc).isoformat())
+        for event in data['events']:
+            engine.normalize(event)
+            if event.get('rule_id') == rule_id and event['condition_status'] in {'pending', 'firing'}:
+                event.update(status='cancelled', condition_status='cancelled', ended_at=datetime.now(timezone.utc).isoformat())
+                engine.stamp(event, 'rule_archived', datetime.now(timezone.utc), user['username'])
     _mutate(user["username"], "alert.rule.delete", rule_id, remove)
     return {"ok": True}
 
@@ -545,7 +512,8 @@ def delete_silence(silence_id: str, user=Depends(app.state.require_editor)):
     def remove(data):
         if not any(row.get("id") == silence_id for row in data["silences"]):
             raise HTTPException(404, "静默记录不存在")
-        data["silences"] = [row for row in data["silences"] if row.get("id") != silence_id]
+        row = next(row for row in data['silences'] if row['id'] == silence_id)
+        row['ended_at'] = datetime.now(timezone.utc).isoformat()
     _mutate(user["username"], "alert.silence.delete", silence_id, remove)
     return {"ok": True}
 
@@ -580,3 +548,6 @@ def delete_certificate(certificate_id: str, user=Depends(app.state.require_edito
 @app.post("/api/v1/certificates/scan")
 def trigger_certificate_scan(user=Depends(app.state.require_editor)):
     return {"scanned": scan_certificates()}
+
+
+center.register(app, _store, _snapshot, _mutate, lambda *args: _module_get(*args))

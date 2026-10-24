@@ -27,17 +27,20 @@ def test_collects_read_only_summary_and_warning_findings(monkeypatch):
     }
     monkeypatch.setattr(KubernetesReader, "get", lambda self, path: data[path])
 
-    summary, findings = KubernetesReader().collect()
+    reader = KubernetesReader()
+    summary, findings = reader.collect()
+    assert [row['value'] for row in reader.alert_targets if row['metric']=='k3s_node_ready'] == [1,0]
+    assert [row['value'] for row in reader.alert_targets if row['metric']=='k3s_pvc_pending'] == [0,1]
 
     assert summary["status"] == "degraded"
     assert summary["data"] == {
         "nodes": {"total": 2, "ready": 1},
-        "pods": {"total": 2, "running": 1, "failed": 1},
+        "pods": {"total": 2, "running": 1, "failed": 1, "unready": 2},
         "pvcs": {"total": 2, "unbound": 1},
         "warning_events": 1,
     }
-    assert findings[0]["id"] == "event-1"
-    assert findings[0]["resource_id"] == "app/Pod/web-1"
+    event = next(row for row in findings if row["id"] == "event-1")
+    assert event["resource_id"] == "app/Pod/web-1"
 
 
 def test_snapshot_reuses_one_collection_and_keeps_last_success_after_failure():
@@ -63,3 +66,4 @@ def test_snapshot_reuses_one_collection_and_keeps_last_success_after_failure():
     assert summary["collected_at"] == "2026-10-14T00:00:00Z"
     assert "secret upstream detail" not in summary["error"]
     assert findings == [{"id": "warning-1"}]
+    assert cache.alert_targets()['error'] is not None

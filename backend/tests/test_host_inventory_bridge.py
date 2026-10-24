@@ -38,6 +38,9 @@ def test_publish_sends_only_host_health_fields(monkeypatch, tmp_path):
     assert captured["url"].endswith("/api/v1/agent/telemetry")
     assert captured["token"] == "test-secret"
     assert captured["timeout"] == 2.5
+    registration = captured["payload"].pop("registration")
+    assert registration["name"] == server.name and registration["host"] == server.host
+    assert "agent_token" not in registration
     assert captured["payload"] == {
         "id": "host-1", "status": "online", "docker_available": True, "is_local": False,
         "agent_status": "running", "agent_type": "remote", "last_seen": None,

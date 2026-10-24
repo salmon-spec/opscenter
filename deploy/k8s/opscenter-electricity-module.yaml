@@ -51,7 +51,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: module-electricity
-          image: opscenter/module-electricity:0.7.8
+          image: opscenter/module-electricity:0.10.0
           imagePullPolicy: Never
           ports:
             - containerPort: 8080

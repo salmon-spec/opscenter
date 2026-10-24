@@ -285,10 +285,10 @@ function tlsText(ing) {
   return hosts.length ? hosts.join(', ') : '无'
 }
 function npKind(p) {
-  const parts = []
+  const parts = Array.isArray(p?.types) ? [...p.types] : []
   if (p?.ingress) parts.push('Ingress')
   if (p?.egress) parts.push('Egress')
-  return parts.join(' + ') || '—'
+  return [...new Set(parts)].join(' + ') || '—'
 }
 // Age accepts elapsed seconds or an ISO creation timestamp.
 function fmtAge(v) {

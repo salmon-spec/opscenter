@@ -39,6 +39,7 @@ class MonitorStore:
                     UNIQUE (server_id, metric, timestamp)
                 )
             """)
+            db.execute("ALTER TABLE monitored_hosts ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE")
             db.execute("""
                 CREATE INDEX IF NOT EXISTS ix_monitor_metric_latest
                 ON metric_history (server_id, metric, timestamp DESC)
@@ -77,7 +78,12 @@ class MonitorStore:
 
     def hosts(self):
         with self.connect() as db:
-            return db.execute("SELECT * FROM monitored_hosts ORDER BY name,host").fetchall()
+            return db.execute("SELECT * FROM monitored_hosts WHERE enabled ORDER BY name,host").fetchall()
+
+    def reconcile_hosts(self, active_ids):
+        with self.connect() as db:
+            db.execute("UPDATE monitored_hosts SET enabled=(id=ANY(%s::uuid[])) WHERE enabled IS DISTINCT FROM (id=ANY(%s::uuid[]))",
+                       (active_ids, active_ids))
 
     def latest(self, host_id):
         row = self.host(host_id)
@@ -106,8 +112,19 @@ class MonitorStore:
                     ON CONFLICT (server_id, metric, timestamp) DO NOTHING
                 """, [(host_id, at, metric, float(value)) for metric, value in values.items()])
 
-    def build_rollups(self):
+    def build_rollups(self, lookback_hours: int = 48, backfill: bool = False):
+        if not 2 <= lookback_hours <= 24 * 366 * 5:
+            raise ValueError("Invalid rollup lookback")
         with self.connect() as db:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            latest = {row["resolution"]: row["latest"] for row in db.execute(
+                "SELECT resolution,MAX(bucket_at) AS latest FROM metric_rollups GROUP BY resolution"
+            ).fetchall()}
+            starts = {}
+            for resolution, overlap in (("5m", 2), ("1h", 4)):
+                fallback = now - timedelta(hours=lookback_hours)
+                previous = latest.get(resolution)
+                starts[resolution] = max(fallback, min(previous, now - timedelta(hours=overlap))) if previous and not backfill else fallback
             db.execute("""
                 INSERT INTO metric_rollups
                     (id,server_id,metric,resolution,bucket_at,value_avg,value_min,value_max,sample_count)
@@ -116,11 +133,12 @@ class MonitorStore:
                        AVG(value),MIN(value),MAX(value),COUNT(*)::integer
                 FROM metric_history
                 WHERE timestamp < date_bin('5 minutes',NOW() AT TIME ZONE 'UTC',TIMESTAMP '2000-01-01')
+                  AND timestamp >= date_bin('5 minutes',%s::timestamp,TIMESTAMP '2000-01-01')
                 GROUP BY server_id,metric,date_bin('5 minutes',timestamp,TIMESTAMP '2000-01-01')
                 ON CONFLICT (server_id,metric,resolution,bucket_at) DO UPDATE SET
                     value_avg=EXCLUDED.value_avg,value_min=EXCLUDED.value_min,
                     value_max=EXCLUDED.value_max,sample_count=EXCLUDED.sample_count
-            """)
+            """, (starts["5m"],))
             db.execute("""
                 INSERT INTO metric_rollups
                     (id,server_id,metric,resolution,bucket_at,value_avg,value_min,value_max,sample_count)
@@ -131,11 +149,29 @@ class MonitorStore:
                 FROM metric_rollups
                 WHERE resolution='5m'
                   AND bucket_at < date_bin('1 hour',NOW() AT TIME ZONE 'UTC',TIMESTAMP '2000-01-01')
+                  AND bucket_at >= date_bin('1 hour',%s::timestamp,TIMESTAMP '2000-01-01')
                 GROUP BY server_id,metric,date_bin('1 hour',bucket_at,TIMESTAMP '2000-01-01')
                 ON CONFLICT (server_id,metric,resolution,bucket_at) DO UPDATE SET
                     value_avg=EXCLUDED.value_avg,value_min=EXCLUDED.value_min,
                     value_max=EXCLUDED.value_max,sample_count=EXCLUDED.sample_count
-            """)
+            """, (starts["1h"],))
+
+    def prune_history(self):
+        """Retention is opt-in; bound each transaction to limit shared DB I/O."""
+        with self.connect() as db:
+            for table, column, resolution, setting in (
+                ("metric_history", "timestamp", None, "HOST_MONITOR_RAW_RETENTION_DAYS"),
+                ("metric_rollups", "bucket_at", "5m", "HOST_MONITOR_5M_RETENTION_DAYS"),
+                ("metric_rollups", "bucket_at", "1h", "HOST_MONITOR_1H_RETENTION_DAYS"),
+            ):
+                days = int(os.getenv(setting, "0"))
+                if days <= 0:
+                    continue
+                extra = " AND resolution=%s" if resolution else ""
+                params = (days, resolution) if resolution else (days,)
+                db.execute(f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE {column} < "
+                           f"(NOW() AT TIME ZONE 'UTC') - (%s * interval '1 day'){extra} "
+                           f"ORDER BY {column} LIMIT 5000)", params)
 
     def series(self, host_id: str, names: list[str], start: datetime, end: datetime, resolution: str):
         with self.connect() as db:
@@ -189,7 +225,7 @@ class MonitorStore:
             SELECT a.*,l.latest,l.at FROM aggregate a JOIN latest l USING (server_id,metric)
         """
         with self.connect() as db:
-            hosts = db.execute("SELECT id,name,host,last_sample_at FROM monitored_hosts ORDER BY name,host").fetchall()
+            hosts = db.execute("SELECT id,name,host,last_sample_at FROM monitored_hosts WHERE enabled ORDER BY name,host").fetchall()
             rows = db.execute(query, params).fetchall()
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         result = {str(host["id"]): {
@@ -211,5 +247,6 @@ class MonitorStore:
 def _thin(values: list, limit: int = 2500):
     if len(values) <= limit:
         return values
-    step = max(1, len(values) // limit)
-    return values[::step][:limit]
+    if limit < 2:
+        return values[-max(0, limit):] if limit > 0 else []
+    return [values[index * (len(values) - 1) // (limit - 1)] for index in range(limit)]

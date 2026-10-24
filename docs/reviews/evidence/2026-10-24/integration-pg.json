@@ -1,0 +1,6 @@
+{
+  "postgres_create_and_alter": true,
+  "transaction_rolled_back": true,
+  "shell_entrypoint": true,
+  "temporary_pod": "audit-pg-032600"
+}

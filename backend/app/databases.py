@@ -368,7 +368,7 @@ def create_account(instance_id: str, payload: AccountCreate):
     with _connect(instance, server) as conn:
         if instance.engine == "postgresql":
             from psycopg import sql
-            conn.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD %s").format(sql.Identifier(username)), (payload.password,))
+            conn.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {}").format(sql.Identifier(username), sql.Literal(payload.password)))
             for database in databases:
                 conn.execute(sql.SQL("GRANT ALL PRIVILEGES ON DATABASE {} TO {}").format(sql.Identifier(database), sql.Identifier(username)))
         else:
@@ -390,7 +390,7 @@ def update_account(instance_id: str, username: str, payload: AccountUpdate):
         if instance.engine == "postgresql":
             from psycopg import sql
             if payload.password:
-                conn.execute(sql.SQL("ALTER ROLE {} PASSWORD %s").format(sql.Identifier(username)), (payload.password,))
+                conn.execute(sql.SQL("ALTER ROLE {} PASSWORD {}").format(sql.Identifier(username), sql.Literal(payload.password)))
             if payload.databases is not None:
                 rows = conn.execute("select datname from pg_database where datistemplate = false").fetchall()
                 for row in rows:

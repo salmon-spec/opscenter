@@ -20,6 +20,7 @@ import time
 from typing import Any, Optional
 
 import httpx
+from app.redaction import redact_text
 
 from app.config import (
     K8S_API_URL,
@@ -44,10 +45,7 @@ def valid_k8s_name(value: str) -> bool:
 
 def sanitize_error(exc: Exception) -> str:
     """错误脱敏：绝不携带 token/Authorization/证书内容。"""
-    text = str(exc)
-    for marker in ("Bearer ", "Authorization", "-----BEGIN", "token=", "client-secret"):
-        text = text.replace(marker, "***")
-    return text[:300]
+    return redact_text(exc, 300)
 
 
 class K8sError(Exception):

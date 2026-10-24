@@ -126,13 +126,13 @@ def test_tasks_memory_only_semantics(monkeypatch):
     updated = registry.update("t-1", status="running", message="Bearer abc")
     assert updated["status"] == "running"
     assert updated["phase"] == "执行中"
-    assert updated["message"] == "***abc"
+    assert updated["message"] == "Bearer ***"
     assert registry.update("missing", phase="x") is None
 
     finished = registry.finish("t-1", success=False, message="m", error="agent_token=xyz")
     assert finished["status"] == "failed"
     assert finished["phase"] == "失败"
-    assert finished["error"] == "***=xyz"
+    assert finished["error"] == "***"
 
     assert registry.get_by_server("s-1")["task_id"] == "t-1"
     assert registry.get_by_server("s-1", task_type="demo")["task_id"] == "t-1"
@@ -143,6 +143,7 @@ def test_tasks_memory_only_semantics(monkeypatch):
     assert registry.list(task_type="other") == []
 
     assert registry.cleanup(86400) == 0
+    monkeypatch.setattr(tasks_mod.time, "time", lambda: finished["updated_at"] + 1)
     assert registry.cleanup(0) == 1
     assert registry.get("t-1") is None
     assert no_redis.calls == []
@@ -202,7 +203,7 @@ def test_agent_tasks_delegation(isolated):
     AGENT_TASKS.update("srv-1", phase="校验中", message="Bearer token")
     current = AGENT_TASKS.get("srv-1")
     assert current["phase"] == "校验中"
-    assert current["message"] == "***token"
+    assert current["message"] == "Bearer ***"
 
     AGENT_TASKS.finish("srv-1", success=True, message="ok")
     current = AGENT_TASKS.get("srv-1")

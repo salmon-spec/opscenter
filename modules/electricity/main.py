@@ -19,17 +19,18 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from aiohttp import ClientSession
-from fastapi import Body, HTTPException, Query
+from fastapi import Body, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 import alerts as alerting
+import alert_settings
 import notify
 from collector import collect, describe_error, probe, relogin_count
 from page import render_page  # merged page: tabs [电费监测 | 通知设置]
-from runtime.app import create_module_app
+from runtime.app import create_module_app, require_internal_service
 from storage import ElectricityStore
 
-VERSION = "0.7.8"
+VERSION = "0.10.0"
 KEY = "electricity"
 REFRESH_HOURS = float(os.getenv("ELECTRICITY_REFRESH_HOURS", "12"))
 ALERT_INTERVAL_MINUTES = float(os.getenv("ELECTRICITY_ALERT_INTERVAL_MINUTES", "30"))
@@ -42,7 +43,7 @@ _alert_status: dict[str, Any] = {"message": "尚未评估", "evaluated_at": None
 
 
 def _cfg() -> dict:
-    return alerting.config()
+    return {**alerting.config(), **store.alert_config()}
 
 
 def _env(name: str, default: str = "") -> str:
@@ -87,6 +88,14 @@ def _load_context_snapshot() -> dict:
 
 def _current_context(now: datetime) -> dict:
     return alerting.build_context(_load_context_snapshot(), store.configured(), now, _cfg())
+
+
+def _notification_context(ctx: dict) -> dict:
+    cfg = _cfg()
+    limit = cfg['max_notifications']
+    return {"balance": f"{ctx['balance']:.2f} 元" if ctx.get('balance') is not None else "暂无数据",
+            "remaining_days": f"{ctx['remaining_days']:g} 天" if ctx.get('remaining_days') is not None else "暂无数据",
+            "policy": (f"每轮最多 {limit} 次" if limit else "次数不限") + f"，间隔至少 {cfg['repeat_interval_seconds'] / 60:g} 分钟"}
 
 
 # --------------------------------------------------------------------------- #
@@ -199,17 +208,17 @@ async def evaluate_alerts(trigger: str = "schedule") -> dict:
         ctx = alerting.build_context(snapshot, store.configured(), now, _cfg())
         result = alerting.evaluate(ctx, state, now, _cfg())
 
-        events = result["events"] + [{"action": "resolved", "alert": alert} for alert in result["resolved"]]
+        events = result["events"] + ([{"action": "resolved", "alert": alert} for alert in result["resolved"]]
+                                     if _cfg()["notify_recovery"] else [])
+        for event in events:
+            event["context"] = _notification_context(ctx)
         delivery: list[dict] = []
         if events:
             notify.import_breaker(state.get("channel_health"))
             notify.import_targets(store.notify_targets(enabled_only=True),
                                   store.notify_config().get("settings") or {})
             try:
-                delivery = await notify.deliver(events,
-                                                extra_lines=[f"当前余额：{ctx['balance']}",
-                                                             f"预计可用：{ctx['remaining_days']} 天"]
-                                                if ctx["balance"] is not None else None)
+                delivery = await notify.deliver(events)
             except Exception as exc:  # noqa: BLE001 - notification must never break collection
                 logging.warning("electricity notify dispatch failed: %s", type(exc).__name__)
             state["channel_health"] = notify.export_breaker()
@@ -345,6 +354,26 @@ app = create_module_app(
     readiness_provider=store.ping,
 )
 app.router.lifespan_context = _lifespan
+
+
+@app.get('/api/v1/internal/alert-targets', dependencies=[Depends(require_internal_service)])
+def internal_alert_targets():
+    # Export the owner's completed evaluation, rather than evaluating or notifying again.
+    state = store.alert_state()
+    at = state.get('updated_at')
+    if not at:
+        return {'status': 'unavailable', 'collected_at': datetime.now(timezone.utc), 'items': [], 'error': '尚未评估'}
+    active = state.get('active') or {}
+    context = _current_context(datetime.now(timezone.utc))
+    resource_id = context['resource_id']
+    items = []
+    for key in (value for name, value in vars(alerting).items() if name.startswith('RULE_')):
+        row = active.get(key)
+        items.append({'id': f'{resource_id}:{key}', 'name': row.get('title') if row else key,
+                      'metric': 'electricity_alert', 'value': (1 if row.get('status') == 'firing' else None) if row else 0,
+                      'observed_at': at, 'stale_after_seconds': max(300, int(ALERT_INTERVAL_MINUTES * 60 + 120)),
+                      'notification_owner': 'electricity', 'url': '/modules/electricity/ui'})
+    return {'status': 'ok', 'collected_at': at, 'stale_after_seconds': max(300, int(ALERT_INTERVAL_MINUTES * 60 + 120)), 'items': items}
 
 
 # --------------------------------------------------------------------------- #
@@ -486,6 +515,23 @@ def list_rules():
     return document
 
 
+@app.get("/api/v1/alerts/settings")
+def get_alert_settings():
+    return {"settings": _cfg(), "defaults": alerting.config(), "fields": alert_settings.schema(),
+            "evaluation_interval_minutes": ALERT_INTERVAL_MINUTES}
+
+
+@app.post("/api/v1/alerts/settings")
+async def save_alert_settings(payload: dict = Body(default={})):
+    async with _alert_lock:
+        try:
+            settings = alert_settings.validate(payload, _cfg())
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        store.save_alert_config(settings)
+    return get_alert_settings()
+
+
 @app.post("/api/v1/alerts/test")
 async def test_notification(payload: dict = Body(default={})):
     return await _dispatch_test_notification(str(payload.get("target_id") or "") or None,
@@ -503,7 +549,7 @@ async def _dispatch_test_notification(target_id: str | None, trigger: str, title
             raise HTTPException(503, "尚未配置任何可用的通知方式")
         state = store.alert_state()
         notify.import_breaker(state.get("channel_health"))
-        delivery = await notify.send_test(target_id)
+        delivery = await notify.send_test(target_id, context=_notification_context(_current_context(datetime.now(timezone.utc))))
         state["channel_health"] = notify.export_breaker()
         store.save_alert_state(state)
         store.append_alert_history([{
@@ -604,10 +650,10 @@ def report_csv(month: str = Query(default="", max_length=6)):
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(["类型", "日期/月份", "用电量(度)", "电费(元)", "数据来源"])
-    for row in store.daily_history(365):
+    for row in store.daily_history(0):
         if str(row.get("day", "")).startswith(f"{target[:4]}-{target[4:6]}"):
             writer.writerow(["日用电", row.get("day"), row.get("kwh"), "", "国网公布数据"])
-    for row in store.monthly_history(24):
+    for row in store.monthly_history(0):
         if str(row.get("month")) == target:
             writer.writerow(["月度账单", target, row.get("kwh"), row.get("cost"), "国网账单"])
     alerts_count = sum(1 for item in store.alert_history(500)
@@ -680,6 +726,7 @@ def list_notify_targets():
         "types": ALLOWED_TARGET_TYPES,
         "targets": masked,
         "settings": settings,
+        "message_defaults": {"title_template": notify.DEFAULT_TITLE, "body_template": notify.DEFAULT_BODY},
         "smtp_ready": bool((config.get("settings") or {}).get("smtp_host")),
         "sms_gateway_ready": bool((config.get("settings") or {}).get("sms_webhook")),
     }
@@ -844,10 +891,10 @@ def _build_stats(granularity: str, limit: int, now: datetime) -> dict:
             rows[0] = current
         else:
             rows.insert(0, current)
-        rows = rows[:limit]
+        rows = rows[:limit] if limit else rows
     else:  # year
         by_year: dict[str, dict] = {}
-        for item in store.monthly_history(240):
+        for item in store.monthly_history(0):
             year_label = str(item.get("month"))[:4]
             bucket = by_year.setdefault(year_label, {"kwh": 0.0, "cost": 0.0, "estimated": False})
             bucket["kwh"] += float(item.get("kwh") or 0)
@@ -862,7 +909,8 @@ def _build_stats(granularity: str, limit: int, now: datetime) -> dict:
         rows = [{"label": label, "kwh": round(value["kwh"], 2),
                  "cost": round(value["cost"], 2), "estimated": value["estimated"],
                  "source": "年度账单合计" if not value["estimated"] else "估算"}
-                for label, value in sorted(by_year.items(), reverse=True)][:limit]
+                for label, value in sorted(by_year.items(), reverse=True)]
+        rows = rows[:limit] if limit else rows
 
     # month-over-month / year-over-year delta of spending
     for index, row in enumerate(rows):
@@ -876,13 +924,15 @@ def _build_stats(granularity: str, limit: int, now: datetime) -> dict:
         "avg": round(sum(row["cost"] or 0 for row in rows) / len(rows), 2) if rows else None,
     }
     return {"source": KEY, "granularity": granularity, "limit": limit,
+            "history_range": {"from": min((row["label"] for row in rows), default=None),
+                              "to": max((row["label"] for row in rows), default=None)},
             "price_per_kwh": price, "price_source": ctx["price_source"],
             "rows": rows, "totals": totals,
             "current_balance": ctx["balance"], "remaining_days": ctx["remaining_days"]}
 
 
 @app.get("/api/v1/stats")
-def usage_stats(granularity: str = Query(default="day"), limit: int = Query(default=30, ge=1, le=730)):
+def usage_stats(granularity: str = Query(default="day"), limit: int = Query(default=30, ge=0, le=730)):
     return _build_stats(granularity, limit, datetime.now(timezone.utc))
 
 

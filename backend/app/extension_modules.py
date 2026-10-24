@@ -34,6 +34,24 @@ router = APIRouter(prefix="/api/v2/modules", tags=["extension-modules"])
 MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 BUILTIN_MODULES = {
+    "automation": {'name': '自动化作业', 'version': '0.2.0', 'description': '管理 Semaphore 作业模板、主机清单、执行日志与定时计划', 'icon': 'AT', 'entry_url': '/modules/automation/ui/', 'runtime': 'iframe', 'isolation': 'sandboxed-iframe', 'capabilities': ['templates', 'tasks', 'inventories', 'schedules'], 'permissions': ['automation:admin'], 'manifest': {'api_prefixes': ['/modules/automation/api/v1/'], 'sandbox': ['allow-scripts', 'allow-forms'], 'readonly': False}, 'sort_order': 50},
+    "opencode-agent": {
+        "name": "OpenCode Agent",
+        "version": "0.2.0",
+        "description": "执行终端与文件任务，查看工具过程并确认操作；支持 DeepSeek",
+        "icon": "OC",
+        "entry_url": "/modules/opencode-agent/ui/",
+        "runtime": "iframe",
+        "isolation": "sandboxed-iframe",
+        "capabilities": ["agent:execute", "agent:approve", "agent:stop"],
+        "permissions": ["agent:admin"],
+        "manifest": {
+            "api_prefixes": ["/modules/opencode-agent/api/v1/"],
+            "sandbox": ["allow-scripts", "allow-forms"],
+            "readonly": False,
+        },
+        "sort_order": 40,
+    },
     "oss-browser": {
         "name": "OSS 文件浏览",
         "version": "1.2.2",
@@ -70,7 +88,7 @@ BUILTIN_MODULES = {
     },
     "electricity": {
         "name": "电费监测",
-        "version": "0.1.1",
+        "version": "0.10.0",
         "description": "查看国网电费余额、账单与逐日用电",
         "icon": "⚡",
         "entry_url": "/modules/electricity/ui",
@@ -407,9 +425,9 @@ def check_module_health(module_key: str, user: object = Depends(require_operator
         elif module_key == "command-code-usage":
             _apply_command_code_config(row)
             result = _record_command_code_health(row, model_usage.status(force=True))
-        elif module_key == "electricity":
+        elif module_key in {"electricity", "opencode-agent", "automation"}:
             try:
-                response = requests.get("http://module-electricity:8080/health/ready", timeout=3)
+                response = requests.get(f"http://module-{module_key}:8080/health/ready", timeout=3)
                 available = response.status_code == 200
                 error = "" if available else f"健康探针返回 HTTP {response.status_code}"
             except requests.RequestException as exc:

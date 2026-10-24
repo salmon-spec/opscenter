@@ -1,0 +1,17 @@
+services:
+  automation:
+    build:
+      context: ..
+      dockerfile: automation/Dockerfile
+    ports:
+      - "127.0.0.1:18089:8080"
+    environment:
+      AUTOMATION_MODE: demo
+      AUTOMATION_DATA_DIR: /data
+    volumes:
+      - automation-data:/data
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  automation-data:

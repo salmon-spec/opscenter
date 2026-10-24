@@ -36,6 +36,7 @@ from app.config import (
     MW_PROBE_TIMEOUT,
 )
 from app.services.redis_store import redis_store
+from app.redaction import redact_text
 
 _LEADER_NAME = "leader:mq-worker"
 _LEADER_TTL = 60
@@ -43,7 +44,6 @@ _LEADER_WAIT = 5.0
 _IDLE_SLEEP = 0.5
 _RECONNECT_MIN = 1.0
 _RECONNECT_MAX = 30.0
-_SANITIZE_MARKERS = ("__password__", "Bearer ", "Authorization", "ssh_key", "agent_token")
 
 
 def _mask_password(text: str) -> str:
@@ -64,10 +64,7 @@ def _mask_password(text: str) -> str:
 
 def _sanitize(value: Any, limit: int = 500) -> str:
     text = _mask_password(str(value or ""))
-    for marker in _SANITIZE_MARKERS:
-        if marker in text:
-            text = text.replace(marker, "***")
-    return text[:limit]
+    return redact_text(text, limit)
 
 
 def _oldest_message_age_seconds(item: dict) -> float | int | None:

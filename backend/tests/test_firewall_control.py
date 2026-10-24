@@ -36,8 +36,8 @@ def test_validation_and_ufw_parser_reject_injection():
         firewall_control._source("any; reboot")
     rows = firewall_control._parse_ufw("Status: active\n[ 1] 22/tcp ALLOW IN 10.66.66.0/24\n[ 2] 53/udp DENY IN Anywhere")
     assert rows == [
-        {"id": "1", "port": "22", "protocol": "tcp", "action": "allow", "source": "10.66.66.0/24"},
-        {"id": "2", "port": "53", "protocol": "udp", "action": "deny", "source": "Anywhere"},
+        {"id": "1", "port": "22", "protocol": "tcp", "action": "allow", "source": "10.66.66.0/24", "direction": "in"},
+        {"id": "2", "port": "53", "protocol": "udp", "action": "deny", "source": "Anywhere", "direction": "in"},
     ]
 
 
@@ -55,12 +55,13 @@ def test_delete_rule_requires_extra_confirmation_for_ssh_port(monkeypatch):
     server_id = host(2222)
     commands = []
     monkeypatch.setattr(firewall_control, "_detect", lambda _server: "ufw")
-    monkeypatch.setattr(firewall_control, "_execute", lambda _server, args, timeout=20: commands.append(args) or "")
+    monkeypatch.setattr(firewall_control, "_execute", lambda _server, args, timeout=20: commands.append(args) or "[ 3] 2200:2300/tcp ALLOW IN Anywhere")
     blocked = client.post(f"/api/v2/servers/{server_id}/firewall/rules/delete", json={"rule_id": "3", "port": "2200-2300", "protocol": "tcp"})
     assert blocked.status_code == 409
     allowed = client.post(f"/api/v2/servers/{server_id}/firewall/rules/delete", json={"rule_id": "3", "port": "2200-2300", "protocol": "tcp", "confirm_ssh_disruption": True})
     assert allowed.status_code == 200
-    assert commands == [["sudo", "ufw", "--force", "delete", "3"]]
+    assert commands == [["sudo", "ufw", "status", "numbered"], ["sudo", "ufw", "status", "numbered"],
+                        ["sudo", "ufw", "--force", "delete", "allow", "in", "from", "any", "to", "any", "port", "2200:2300", "proto", "tcp"]]
 
 
 def test_state_change_requires_exact_host_name(monkeypatch):

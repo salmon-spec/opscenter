@@ -1,4 +1,5 @@
 import os
+import math
 import calendar, uuid, asyncio, re, socket, threading
 from datetime import datetime, timedelta, date
 from typing import Optional, List
@@ -16,7 +17,7 @@ from app.version import VERSION
 from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, fetch_agent_system_summary, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host, resolve_management_hosts, fetch_from_agent
-from app.host_inventory_bridge import publish_host_inventory_telemetry
+from app.host_inventory_bridge import publish_host_inventory_telemetry, active_host_ids
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count, RECONNECT_GRACE
 from app.log_scanner import log_scan_loop, run_log_scan
 from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_rule
@@ -198,6 +199,8 @@ _SKIP_PROCESSES = {"hbrclient", "hbrclientupdater", "snapd", "packagekitd", "pol
 
 # === Schemas ===
 class ServerCreate(BaseModel):
+    id: Optional[uuid.UUID] = None
+    cluster_id: Optional[uuid.UUID] = None
     name: str = Field(..., min_length=1, max_length=50)
     host: str = Field(..., min_length=1, max_length=100)
     ssh_port: int = Field(22, ge=1, le=65535)
@@ -218,6 +221,7 @@ class ServerCreate(BaseModel):
     runtime_type: Optional[str] = None
 
 class ServerUpdate(BaseModel):
+    cluster_id: Optional[uuid.UUID] = None
     name: Optional[str] = Field(None, min_length=1, max_length=50)
     host: Optional[str] = Field(None, min_length=1, max_length=100)
     ssh_port: Optional[int] = Field(None, ge=1, le=65535)
@@ -1522,6 +1526,8 @@ def create_server(data: ServerCreate):
         if data.ssh_password and not data.ssh_key:
             ssh_key_val = f"__password__{data.ssh_password}"
         srv = Server(
+            id=data.id or uuid.uuid4(),
+            cluster_id=data.cluster_id,
             name=data.name.strip(), host=data.host.strip(), ssh_port=data.ssh_port,
             ssh_user=data.ssh_user, ssh_key=ssh_key_val,
             tags=data.tags, is_local=data.is_local, remark=data.remark,
@@ -1538,6 +1544,7 @@ def create_server(data: ServerCreate):
         db.refresh(srv)
         server_id = str(srv.id)
         result = {"id": server_id, "name": srv.name, "host": srv.host, "agent_status": srv.agent_status}
+        publish_host_inventory_telemetry(srv)
     return result
 
 @app.get("/api/v2/servers/{server_id}")
@@ -1580,7 +1587,7 @@ def update_server(server_id: str, data: ServerUpdate):
         password = values.pop("ssh_password", None)
         ssh_key = values.pop("ssh_key", None)
         for field, val in values.items():
-            if val is not None:
+            if val is not None or field == "cluster_id":
                 setattr(srv, field, val)
         if password:
             srv.ssh_key = f"__password__{password}"
@@ -1590,6 +1597,7 @@ def update_server(server_id: str, data: ServerUpdate):
             srv.auth_type = "key"
         db.commit()
         forget_system_summary(server_id)
+        publish_host_inventory_telemetry(srv)
         return {"ok": True}
 
 @app.delete("/api/v2/servers/{server_id}")
@@ -3681,6 +3689,7 @@ def _collect_agent_metrics():
     from types import SimpleNamespace
 
     try:
+        active_ids = active_host_ids()
         with get_db() as db:
             targets = [
                 SimpleNamespace(
@@ -3689,9 +3698,9 @@ def _collect_agent_metrics():
                     agent_version=srv.agent_version,
                 )
                 for srv in db.query(Server).all()
-                if srv.agent_type == "local" or (
+                if getattr(srv, "enabled", True) and (active_ids is None or str(srv.id) in active_ids) and (srv.agent_type == "local" or (
                     srv.agent_status != "not_deployed" and bool(srv.agent_token)
-                )
+                ))
             ]
 
         # Agent HTTP calls run concurrently after the read session has closed.
@@ -3720,17 +3729,36 @@ def _collect_agent_metrics():
             if not data:
                 print(f"Agent metrics collection skipped for {target.host}: no lightweight sample", flush=True)
                 continue
+            # Missing values remain unknown instead of becoming fresh zero samples.
+            try:
+                data = dict(data)
+                for key in ("cpu_percent", "memory_percent", "disk_percent", "swap_percent", "load1", "load5", "load15",
+                            "net_rx_bytes", "net_tx_bytes", "disk_read_bytes", "disk_write_bytes",
+                            "net_rx_rate", "net_tx_rate", "disk_read_rate", "disk_write_rate"):
+                    value = data.get(key)
+                    if value is None:
+                        continue
+                    if isinstance(value, bool) or not math.isfinite(float(value)) or float(value) < 0 or (key.endswith("_percent") and float(value) > 100):
+                        raise ValueError("Invalid Agent metric")
+                    data[key] = float(value)
+                if not any(data.get(key) is not None for key in ("cpu_percent", "memory_percent", "disk_percent")):
+                    continue
+                sampled_at = datetime.utcfromtimestamp(float(data["timestamp"])) if data.get("timestamp") is not None else datetime.utcnow()
+                if not -30 <= (datetime.utcnow() - sampled_at).total_seconds() <= 120:
+                    continue
+            except (TypeError, ValueError, OverflowError, OSError):
+                continue
             with get_db() as db:
                 srv = db.query(Server).filter(Server.id == target.id).first()
                 if not srv:
                     continue
 
-                now = datetime.utcnow()
+                now = sampled_at
                 raw_values = {
-                    "net_rx_raw": data.get("net_rx_bytes", 0) or 0,
-                    "net_tx_raw": data.get("net_tx_bytes", 0) or 0,
-                    "disk_read_raw": data.get("disk_read_bytes", 0) or 0,
-                    "disk_write_raw": data.get("disk_write_bytes", 0) or 0,
+                    "net_rx_raw": data.get("net_rx_bytes"),
+                    "net_tx_raw": data.get("net_tx_bytes"),
+                    "disk_read_raw": data.get("disk_read_bytes"),
+                    "disk_write_raw": data.get("disk_write_bytes"),
                 }
                 rates = {}
                 for metric_name, raw_value in raw_values.items():
@@ -3746,17 +3774,17 @@ def _collect_agent_metrics():
                     elapsed = (now - last_rec.timestamp).total_seconds() if last_rec else 0
                     rates[rate_name] = (
                         max(0, (raw_value - last_rec.value) / elapsed)
-                        if last_rec and last_rec.value not in (None, 0) and elapsed > 0 else 0
+                        if raw_value is not None and last_rec and last_rec.value is not None and elapsed > 0 else None
                     )
 
                 metrics_to_store = {
-                    "cpu": data.get("cpu_percent", 0),
-                    "memory": data.get("memory_percent", 0),
-                    "disk": data.get("disk_percent", 0),
-                    "swap": data.get("swap_percent", 0),
-                    "load1": data.get("load1", 0),
-                    "load5": data.get("load5", 0),
-                    "load15": data.get("load15", 0),
+                    "cpu": data.get("cpu_percent"),
+                    "memory": data.get("memory_percent"),
+                    "disk": data.get("disk_percent"),
+                    "swap": data.get("swap_percent"),
+                    "load1": data.get("load1"),
+                    "load5": data.get("load5"),
+                    "load15": data.get("load15"),
                     **rates,
                     **raw_values,
                 }
@@ -3768,6 +3796,8 @@ def _collect_agent_metrics():
                 except Exception:
                     pass
                 for metric_name, value in metrics_to_store.items():
+                    if value is None:
+                        continue
                     db.add(MetricHistory(
                         server_id=target.id, timestamp=now, metric=metric_name,
                         value=float(value) if value else 0,
@@ -3784,16 +3814,19 @@ def _collect_agent_metrics():
 
         ingest_url = os.getenv("HOST_MONITOR_INGEST_URL", "").strip()
         token_file = os.getenv("HOST_MONITOR_INGEST_TOKEN_FILE", "").strip()
-        if bridge_samples and ingest_url and token_file:
+        if (bridge_samples or active_ids is not None) and ingest_url and token_file:
             import json
             from urllib.request import Request, urlopen
             with open(token_file, encoding="utf-8") as secret:
                 token = secret.read().strip()
             if token:
-                request = Request(ingest_url, data=json.dumps(bridge_samples).encode(), method="POST",
-                                  headers={"Content-Type": "application/json", "X-OpsCenter-Monitor-Token": token})
-                with urlopen(request, timeout=5):
-                    pass
+                for offset in range(0, max(1, len(bridge_samples)), 16):
+                    batch = bridge_samples[offset:offset + 16]
+                    payload = {"samples": batch, "active_host_ids": sorted(active_ids)} if active_ids is not None else batch
+                    request = Request(ingest_url, data=json.dumps(payload).encode(), method="POST",
+                                      headers={"Content-Type": "application/json", "X-OpsCenter-Monitor-Token": token})
+                    with urlopen(request, timeout=5):
+                        pass
 
     except Exception as exc:
         print(f"Agent metrics collection error: {exc}")
@@ -3952,11 +3985,11 @@ def health_check():
         except:
             db_ok = False
     
-    return {
+    return JSONResponse(status_code=200 if db_ok else 503, content={
         "status": "ok" if db_ok else "degraded",
         "database": db_ok,
         "timestamp": datetime.utcnow().isoformat(),
-    }
+    })
 
 
 # === Stats ===

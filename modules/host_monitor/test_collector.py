@@ -77,3 +77,28 @@ def test_agent_sample_is_normalized_and_keeps_only_selected_network_fields():
     assert metrics["net_rx"] == 1000
     assert summary["network_summary"] == {"rx_bytes_per_sec": 1000, "tx_bytes_per_sec": 2000}
     assert summary["network_interfaces"] == [{"name": "eth0", "is_uplink": True, "rx_rate_mbps": 0.1}]
+
+
+def test_bad_sample_does_not_discard_other_hosts(monkeypatch, tmp_path):
+    token = tmp_path / "token"
+    token.write_text("ingest-test")
+    monkeypatch.setenv("HOST_MONITOR_INGEST_TOKEN_FILE", str(token))
+    saved = []
+    monkeypatch.setattr(store, "save_sample", lambda *args: saved.append(args))
+    good = {"id": str(uuid4()), "name": "good", "host": "127.0.0.1", "values": {"cpu_percent": 12}}
+    response = TestClient(app).post("/api/v1/internal/samples", json=[good, {**good, "values": {"cpu_percent": 101}}],
+                                   headers={"X-OpsCenter-Monitor-Token": "ingest-test"})
+    assert response.status_code == 200
+    assert response.json() == {"accepted": 1, "rejected": [1]}
+    assert len(saved) == 1 and saved[0][0] == good["id"]
+
+
+def test_asset_reconciliation_retains_history_and_rejects_retired_samples(monkeypatch, tmp_path):
+    token = tmp_path / "token"; token.write_text("ingest-test")
+    monkeypatch.setenv("HOST_MONITOR_INGEST_TOKEN_FILE", str(token))
+    reconciled, saved = [], []
+    monkeypatch.setattr(store, "reconcile_hosts", lambda ids: reconciled.append(ids))
+    monkeypatch.setattr(store, "save_sample", lambda *args: saved.append(args))
+    response = TestClient(app).post("/api/v1/internal/samples", json={"samples": [], "active_host_ids": []},
+                                   headers={"X-OpsCenter-Monitor-Token": "ingest-test"})
+    assert response.status_code == 200 and reconciled == [[]] and not saved

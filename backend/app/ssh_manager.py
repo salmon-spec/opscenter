@@ -2,6 +2,7 @@
 import paramiko
 import io
 import json
+import time
 import re as _re
 from typing import Optional, Tuple, List, Dict
 from app.agent_manager import remember_management_host, resolve_management_hosts
@@ -49,10 +50,26 @@ def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int = 15) -> Tup
     """Execute a command over SSH and return (stdout, stderr, exit_code)."""
     try:
         stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-        exit_code = stdout.channel.recv_exit_status()
-        out = stdout.read().decode('utf-8', errors='replace')
-        err = stderr.read().decode('utf-8', errors='replace')
-        return out, err, exit_code
+        channel = stdout.channel
+        deadline = time.monotonic() + timeout
+        out, err = bytearray(), bytearray()
+        try:
+            while True:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("SSH command timed out")
+                for ready, receive, target in (
+                    (channel.recv_ready, channel.recv, out),
+                    (channel.recv_stderr_ready, channel.recv_stderr, err),
+                ):
+                    if ready():
+                        target.extend(receive(65536))
+                if len(out) + len(err) > 8 * 1024 * 1024:
+                    raise ValueError("SSH output exceeds 8 MiB")
+                if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+                    return out.decode('utf-8', errors='replace'), err.decode('utf-8', errors='replace'), channel.recv_exit_status()
+                time.sleep(0.01)
+        finally:
+            channel.close()
     except Exception as e:
         return '', str(e), -1
 

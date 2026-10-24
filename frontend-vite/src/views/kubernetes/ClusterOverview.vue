@@ -382,7 +382,7 @@ function phaseTagClass(phase) {
   return ({ Running: 'tag-ok', Pending: 'tag-warn', Failed: 'tag-err', Unknown: 'tag-err', Succeeded: 'tag-slate' })[phase] || 'tag-slate'
 }
 function evTime(ev) {
-  const v = ev?.last_timestamp || ev?.first_timestamp || ev?.time || ''
+  const v = ev?.last_at || ev?.first_at || ev?.last_timestamp || ev?.first_timestamp || ev?.time || ''
   if (!v) return '—'
   const d = new Date(v)
   return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleTimeString('zh-CN', { hour12: false })

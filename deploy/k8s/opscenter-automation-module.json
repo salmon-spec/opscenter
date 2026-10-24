@@ -1,0 +1,465 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "opscenter-automation-ui-20261023-r3",
+        "namespace": "opscenter"
+      },
+      "immutable": true,
+      "data": {
+        "index.html": "<!doctype html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>自动化作业 · OpsCenter 0.2.0</title><link rel=\"stylesheet\" href=\"../static/app.css\"><script src=\"../static/app.js\" defer></script></head>\n<body><div id=\"ops-automation-preview\">\n<section class=\"au-login\" id=\"login\"><form id=\"login-form\"><span class=\"op-tag\">AUTOMATION</span><h1>自动化作业</h1><p>独立管理任务模板、主机清单与执行记录。</p><label>模块访问令牌<input class=\"op-field\" name=\"token\" type=\"password\" autocomplete=\"current-password\" required aria-describedby=\"token-help\"></label><p class=\"op-small\" id=\"token-help\">首次启动后，从本模块数据目录的 admin-token 文件读取。</p><button class=\"op-button primary\" type=\"submit\">进入模块</button><p id=\"login-error\" role=\"alert\"></p></form><div class=\"au-login-aside\"><h2>让重复操作<br>成为标准作业。</h2><p>主机健康巡检</p><p>Agent 版本核对</p><p>备份完整性校验</p><small>Semaphore 执行引擎 · OpsCenter 界面</small></div></section>\n<main id=\"application\" class=\"op-main\" hidden>\n<div class=\"op-navigation\"><div class=\"op-tabs\" role=\"tablist\" aria-label=\"作业页面\"><button class=\"op-tab\" id=\"tab-templates\" data-tab=\"templates\" role=\"tab\" aria-controls=\"content\" aria-selected=\"true\">任务模板</button><button class=\"op-tab\" id=\"tab-tasks\" data-tab=\"tasks\" role=\"tab\" aria-controls=\"content\" aria-selected=\"false\">执行历史</button><button class=\"op-tab\" id=\"tab-inventories\" data-tab=\"inventories\" role=\"tab\" aria-controls=\"content\" aria-selected=\"false\">主机清单</button><button class=\"op-tab\" id=\"tab-schedules\" data-tab=\"schedules\" role=\"tab\" aria-controls=\"content\" aria-selected=\"false\">定时计划</button></div></div>\n<div id=\"mode-banner\" class=\"au-banner\" role=\"status\" hidden></div><p id=\"page-error\" role=\"alert\" hidden></p>\n<div class=\"op-toolbar\"><input id=\"search\" class=\"op-field op-search\" type=\"search\" aria-label=\"搜索当前页面\" placeholder=\"搜索模板名称或脚本\"><select id=\"status-filter\" class=\"op-field\" aria-label=\"执行状态\" hidden><option value=\"\">全部状态</option><option value=\"success\">成功</option><option value=\"error\">失败</option><option value=\"running\">运行中</option><option value=\"waiting\">等待中</option><option value=\"stopped\">引擎已停止</option></select><span class=\"op-spacer\"></span><span class=\"op-small\" id=\"result-count\">正在加载…</span><button class=\"op-button\" data-action=\"refresh\">刷新</button><button class=\"op-button\" data-action=\"logout\">退出</button><button class=\"op-button primary\" data-action=\"create\" hidden>＋ 新建模板</button><button class=\"op-button primary\" id=\"add-resource\" hidden></button></div>\n<section id=\"content\" role=\"tabpanel\" aria-labelledby=\"tab-templates\"></section><p id=\"notice\" class=\"op-message\" role=\"status\" aria-live=\"polite\"></p><footer class=\"op-footer\"><span id=\"last-sync\">等待同步</span></footer></main>\n<dialog id=\"drawer\" class=\"au-dialog\" aria-labelledby=\"drawer-title\"><div class=\"op-drawer-head\"><div><h2 id=\"drawer-title\"></h2><p id=\"drawer-subtitle\" class=\"op-small\"></p></div><button class=\"op-button\" data-action=\"close\" aria-label=\"关闭详情\">×</button></div><div id=\"drawer-body\"></div><p id=\"drawer-error\" role=\"alert\"></p></dialog>\n</div></body></html>\n",
+        "app.js": "'use strict';\nconst root = document.getElementById('ops-automation-preview');\nconst $ = selector => root.querySelector(selector);\nconst escapeHtml = value => String(value ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));\nconst embedded = parent !== window, requests = new Map();\nlet nonce = '', ready = false, sequence = 0;\nlet token = embedded ? '' : sessionStorage.getItem('automation-token') || '', state = null, tab = 'templates', loading = false, mutating = false, logTaskId = null;\nconst statusLabels = {success:'成功', error:'失败', failed:'失败', running:'运行中', waiting:'等待中', starting:'启动中', stopping:'停止中', stopped:'引擎已停止'};\nconst activeStatuses = ['running', 'waiting', 'starting', 'stopping'];\nconst date = value => value ? new Date(value).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai', hour12:false}) : '—';\nconst lookup = (kind, id) => state[kind].find(x => x.id === id);\nconst nameOf = (kind, id) => lookup(kind, id)?.name || `#${id}`;\nconst statusBadge = status => `<span class=\"op-status ${['error','failed'].includes(status)?'failed':activeStatuses.includes(status)?'running':''}\">${escapeHtml(statusLabels[status] || status)}</span>`;\nconst field = (label, control) => `<label>${label}${control}</label>`;\nconst input = (name, value = '', attributes = '') => `<input class=\"op-field\" name=\"${name}\" value=\"${escapeHtml(value)}\" ${attributes}>`;\nfunction select(name, rows, selected) { return `<select class=\"op-field\" name=\"${name}\" required>${rows.map(r => `<option value=\"${r.id}\" ${r.id === selected ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('')}</select>`; }\nfunction actions(text = '保存') { return `<div class=\"op-drawer-actions\"><button class=\"op-button\" type=\"button\" data-action=\"close\">取消</button><button class=\"op-button primary\" type=\"submit\">${text}</button></div>`; }\nasync function api(path, method = 'GET', body) {\n  if (embedded) {\n    if (!ready) throw new Error('正在连接运维工作台');\n    const id = 'automation-' + (++sequence);\n    return new Promise((resolve, reject) => {\n      const timeout = setTimeout(() => { requests.delete(id); reject(new Error('请求超时，请刷新核对执行结果')); }, 35000);\n      requests.set(id, {resolve, reject, timeout});\n      // shortcut: the existing host bridge supports GET/POST; edit endpoints also accept POST.\n      parent.postMessage({type:'ops-module-api-request', nonce, id, path:'/modules/automation/api/v1/' + path, method:method === 'PUT' ? 'POST' : method, body, timeoutMs:30000}, '*');\n    });\n  }\n  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);\n  try {\n    const response = await fetch('/api/v1/' + path, {method, headers:{Authorization:'Bearer ' + token, ...(body !== undefined ? {'Content-Type':'application/json'} : {})}, body:body === undefined ? undefined : JSON.stringify(body), signal:controller.signal, credentials:'omit'});\n    const data = await response.json();\n    if (response.status === 401) { logout(); throw new Error('登录已失效，请重新输入模块令牌。'); }\n    if (!response.ok) throw new Error(data.detail || '请求失败');\n    return data;\n  } catch (error) {\n    if (error.name === 'AbortError') throw new Error('请求超时，操作结果可能已生效。请刷新核对，勿重复提交。');\n    throw error;\n  } finally { clearTimeout(timer); }\n}\nfunction logout() { token = ''; state = null; sessionStorage.removeItem('automation-token'); $('#application').hidden = true; $('#login').hidden = false; if ($('#drawer').open) $('#drawer').close(); }\nasync function refresh() {\n  if (loading) return;\n  loading = true; root.querySelectorAll('[data-action=refresh]').forEach(b => b.disabled = true);\n  const requestedToken = token;\n  try {\n    const data = await api('state');\n    if (token !== requestedToken) return;\n    state = data;\n    $('#login').hidden = true; $('#application').hidden = false; $('#page-error').hidden = true;\n    $('#last-sync').textContent = '最近同步 ' + date(data.collected_at) + ' · 北京时间'; render();\n    if ($('#drawer').open && logTaskId !== null) await updateLog();\n  } catch (error) {\n    const el = state || embedded ? $('#page-error') : $('#login-error'); el.textContent = error.message; el.hidden = false;\n    if (state) $('#last-sync').textContent = '刷新失败 · 当前保留上次成功数据';\n    throw error;\n  } finally { loading = false; root.querySelectorAll('[data-action=refresh]').forEach(b => b.disabled = false); }\n}\nfunction table(headers, rows) { return `<div class=\"op-panel\"><div class=\"op-table-wrap\"><table><thead><tr>${headers.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan=\"${headers.length}\" class=\"op-empty\">暂无记录</td></tr>`}</tbody></table></div></div>`; }\nfunction taskRows(tasks) { return tasks.map(t => `<tr><td><span class=\"op-name\">${escapeHtml(nameOf('templates',t.template_id))}</span><div class=\"op-secondary\">#${t.id} · ${t.dry_run === true ? '检查模式' : t.dry_run === false ? '执行模式' : '模式未提供'}</div></td><td>${statusBadge(t.status)}</td><td>${escapeHtml(date(t.created))}</td><td>${t.start && t.end ? Math.max(0,Math.round((new Date(t.end)-new Date(t.start))/1000))+' 秒':'—'}</td><td><button class=\"op-link\" data-log=\"${t.id}\">查看日志</button>${activeStatuses.includes(t.status)?`<button class=\"op-link\" data-stop=\"${t.id}\">停止</button>`:''}</td></tr>`).join(''); }\nfunction render() {\n  if (!state) return;\n  $('#mode-banner').hidden = state.mode !== 'demo';\n  $('#mode-banner').textContent = '演示模式 · 运行仅生成模拟记录，定时计划不会实际触发。';\n  $('[data-action=create]').hidden = tab !== 'templates';\n  $('#search').placeholder = {templates:'搜索模板名称或脚本',tasks:'搜索任务名称或状态',inventories:'搜索清单名称',schedules:'搜索计划名称'}[tab];\n  root.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===tab);if(b.getAttribute('role')==='tab')b.setAttribute('aria-selected',String(b.dataset.tab===tab));});\n  $('#content').setAttribute('aria-labelledby','tab-'+tab); $('#status-filter').hidden = tab !== 'tasks';\n  const add = $('#add-resource'); add.hidden = !['inventories','schedules'].includes(tab); add.textContent = tab==='inventories'?'＋ 新建主机清单':'＋ 新建计划';\n  const query = $('#search').value.toLowerCase(); let rows, list = [...state[tab]];\n  list = list.filter(x => [x.name,x.description,x.playbook,x.status,x.template_id && nameOf('templates',x.template_id)].filter(Boolean).join(' ').toLowerCase().includes(query));\n  if(tab==='tasks')list=list.filter(x=>!$('#status-filter').value||x.status===$('#status-filter').value).sort((a,b)=>b.id-a.id);\n  $('#result-count').textContent = `共 ${list.length} ${ {templates:'个模板',tasks:'条执行记录',inventories:'个清单',schedules:'个计划'}[tab]}`;\n  if(tab==='templates') {\n    rows=list.map(t=>{const last=[...state.tasks].sort((a,b)=>b.id-a.id).find(r=>r.template_id===t.id);return `<tr><td><button class=\"op-link op-name au-name\" data-template=\"${t.id}\">${escapeHtml(t.name)}</button><div class=\"op-secondary\">${escapeHtml(t.description || t.playbook)}</div></td><td>${escapeHtml(t.app || 'ansible')}</td><td>${escapeHtml(nameOf('inventories',t.inventory_id))}</td><td>${last?statusBadge(last.status):'<span class=\"op-small\">未执行</span>'}</td><td><div class=\"op-row-actions\"><button class=\"op-link\" data-run=\"${t.id}\" ${t.app!=='ansible'?'disabled':''}>运行</button><button class=\"op-link\" data-template=\"${t.id}\">详情</button></div></td></tr>`}).join('');\n    $('#content').innerHTML=table(['模板名称','类型','执行范围','最近执行','操作'],rows);\n  } else if(tab==='tasks') $('#content').innerHTML=table(['任务','状态','开始时间','耗时','操作'],taskRows(list));\n  else if(tab==='inventories') $('#content').innerHTML=table(['清单名称','格式','SSH 凭据','操作'],list.map(i=>`<tr><td class=\"op-name\">${escapeHtml(i.name)}</td><td>${escapeHtml(i.type)}</td><td>${escapeHtml(nameOf('keys',i.ssh_key_id))}</td><td><button class=\"op-link\" data-inventory=\"${i.id}\">查看清单</button></td></tr>`).join(''));\n  else $('#content').innerHTML=table(['计划名称','作业模板','Cron','状态','操作'],list.map(s=>`<tr><td class=\"op-name\">${escapeHtml(s.name)}</td><td>${escapeHtml(nameOf('templates',s.template_id))}</td><td><code>${escapeHtml(s.cron_format)}</code></td><td>${s.active?'已启用':'已暂停'}</td><td><button class=\"op-link\" data-schedule=\"${s.id}\">${s.active?'暂停':'启用'}</button></td></tr>`).join(''));\n}\nfunction open(title,subtitle,body) { logTaskId=null;$('#drawer-title').textContent=title;$('#drawer-subtitle').textContent=subtitle;$('#drawer-body').innerHTML=body;$('#drawer-error').textContent='';if(!$('#drawer').open)$('#drawer').showModal(); }\nfunction templateForm(item) {\n  if(!state.inventories.length||!state.repositories.length||!state.environments.length){open('准备模板资源','需要主机清单、仓库与变量环境','<p class=\"op-note\">请先在 Semaphore 项目配置仓库、变量环境和 SSH 凭据，并在本模块建立清单。配置完成后刷新。</p>');return;}\n  const t=item||{};\n  open(item?'编辑模板':'新建模板','Ansible 作业',`<form data-form=\"template\" data-id=\"${t.id||''}\">${field('模板名称',input('name',t.name,'required maxlength=\"100\"'))}${field('描述',input('description',t.description,'maxlength=\"500\"'))}${field('作业仓库',select('repository_id',state.repositories,t.repository_id))}${field('Playbook 路径',input('playbook',t.playbook,'required maxlength=\"250\" placeholder=\"playbooks/host-health.yml\"'))}${field('目标主机清单',select('inventory_id',state.inventories,t.inventory_id))}${field('变量环境',select('environment_id',state.environments,t.environment_id))}${actions()}</form>`);\n}\nfunction runForm(id) { const t=lookup('templates',id);open('运行作业',t.name,`<form data-form=\"run\"><input name=\"template_id\" type=\"hidden\" value=\"${id}\"><div class=\"op-kv\"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>作业脚本</span><code>${escapeHtml(t.playbook)}</code><span>数据源</span><span>${state.mode==='demo'?'本地演示':'真实 Semaphore 项目'}</span></div>${field('执行说明',input('message','','maxlength=\"300\" placeholder=\"填写本次操作原因\"'))}<label class=\"au-check\"><input name=\"dry_run\" type=\"checkbox\" checked>检查模式（Ansible --check）</label><p class=\"op-note\">${state.mode==='demo'?'此模式仅保存模拟记录，不执行脚本。':'检查模式仍会连接真实主机，部分 playbook 的特殊任务可能执行实际动作；请确认脚本可信。'}</p>${actions(state.mode==='demo'?'模拟运行':'提交执行')}</form>`); }\nfunction inventoryForm() { if(!state.keys.length){open('先配置 SSH 凭据','Semaphore 项目配置','<p>请先在 Semaphore 项目中创建 SSH 凭据。模块只引用凭据 ID，不接收或展示私钥。</p>');return;}\n  open('新建主机清单','使用独立执行凭据',`<form data-form=\"inventory\">${field('清单名称',input('name','','required maxlength=\"100\"'))}${field('格式','<select class=\"op-field\" name=\"type\"><option value=\"static\">INI 静态清单</option><option value=\"static-yaml\">YAML 静态清单</option></select>')}${field('SSH 凭据',select('ssh_key_id',state.keys))}${field('清单内容','<textarea class=\"op-field\" name=\"inventory\" rows=\"8\" required maxlength=\"32000\" placeholder=\"[servers]&#10;host1 ansible_host=192.0.2.10\"></textarea>')}<p class=\"op-note\">密码和私钥通过 Semaphore 凭据管理，不要写入清单。</p>${actions()}</form>`);\n}\nfunction scheduleForm() { if(!state.templates.length){templateForm();return;}\n  open('新建定时计划','调度由 Semaphore 执行',`<form data-form=\"schedule\">${field('计划名称',input('name','','required maxlength=\"100\"'))}${field('作业模板',select('template_id',state.templates.filter(t=>t.app==='ansible')))}${field('Cron 表达式',input('cron_format','0 9 * * *','required maxlength=\"120\"'))}<p class=\"op-note\">五段 Cron；真实执行时区以 Semaphore 服务配置为准，请将该服务配置为 Asia/Shanghai。</p><p class=\"op-note\">新计划默认暂停。${state.mode==='demo'?'本地演示不会定时执行。':''}</p>${actions('保存为暂停')}</form>`);\n}\nasync function updateLog(){const requestedId=logTaskId;const result=await api(`tasks/${requestedId}/output`);if(logTaskId===requestedId&&$('#log-output'))$('#log-output').textContent=result.lines.join('\\n')||'暂无输出';}\nasync function mutate(path,method,body){if(mutating)return;mutating=true;$('#drawer').querySelectorAll('button').forEach(b=>b.disabled=true);try{const result=await api(path,method,body);$('#drawer').close();$('#notice').textContent=result?.execution_may_continue?'停止请求已受理；目标上已启动的命令可能继续执行，请检查目标状态。':'操作已提交。';await refresh();}catch(error){const target=$('#drawer').open?$('#drawer-error'):$('#notice');target.textContent=error.message;}finally{mutating=false;$('#drawer').querySelectorAll('button').forEach(b=>b.disabled=false);}}\nroot.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||b.disabled)return;try{\n  if(b.dataset.action==='close'){$('#drawer').close();return;}\n  if(b.dataset.action==='logout'){logout();return;}\n  if(b.dataset.action==='refresh'){await refresh();return;}\n  if(!state)return;\n  if(b.dataset.tab){tab=b.dataset.tab;$('#search').value='';$('#notice').textContent='';render();return;}\n  if(b.dataset.action==='create'){templateForm();return;}\n  if(b.id==='add-resource'){tab==='inventories'?inventoryForm():scheduleForm();return;}\n  if(b.dataset.run){runForm(Number(b.dataset.run));return;}\n  if(b.dataset.template){const t=lookup('templates',Number(b.dataset.template));open(t.name,'模板详情',`<div class=\"op-kv\"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>脚本</span><code>${escapeHtml(t.playbook)}</code><span>仓库</span><span>${escapeHtml(nameOf('repositories',t.repository_id))}</span><span>变量环境</span><span>${escapeHtml(nameOf('environments',t.environment_id))}</span></div><p>${escapeHtml(t.description)}</p><div class=\"op-drawer-actions\"><button class=\"op-button\" data-edit=\"${t.id}\" ${t.app!=='ansible'?'disabled':''}>编辑模板</button><button class=\"op-button primary\" data-run=\"${t.id}\" ${t.app!=='ansible'?'disabled':''}>运行作业</button></div>`);return;}\n  if(b.dataset.edit){templateForm(lookup('templates',Number(b.dataset.edit)));return;}\n  if(b.dataset.inventory){const i=lookup('inventories',Number(b.dataset.inventory));open(i.name,'主机清单 · '+i.type,'<pre class=\"op-log\" id=\"inventory-text\"></pre>');$('#inventory-text').textContent=i.inventory||'此清单由 Semaphore 动态解析。';return;}\n  if(b.dataset.log){const id=Number(b.dataset.log),t=lookup('tasks',id);open(`执行 #${id}`,nameOf('templates',t.template_id),`<div class=\"op-kv\"><span>状态</span><span>${statusBadge(t.status)}</span><span>创建时间</span><span>${escapeHtml(date(t.created))}</span><span>执行说明</span><span>${escapeHtml(t.message)}</span></div><pre class=\"op-log\" id=\"log-output\">正在读取日志…</pre><p class=\"op-note\">${t.status==='stopped'?'引擎已停止调度；目标上已启动的命令仍可能执行，请核对目标状态。':'日志可能含敏感运维数据，请限制访问范围。'}</p>`);logTaskId=id;await updateLog();return;}\n  if(b.dataset.stop){const id=Number(b.dataset.stop);open('停止作业',`执行 #${id}`,`<form data-form=\"stop\" data-id=\"${id}\"><p>将请求 Semaphore 停止任务。目标上已经启动的命令可能继续执行，已有变更不会自动回滚；请随后核对目标状态。</p>${actions('请求停止')}</form>`);return;}\n  if(b.dataset.schedule){const s=lookup('schedules',Number(b.dataset.schedule));open(s.active?'暂停计划':'启用计划',s.name,`<form data-form=\"active\" data-id=\"${s.id}\" data-active=\"${!s.active}\"><p>${s.active?'暂停后将不再产生新的定时任务。':state.mode==='demo'?'演示计划仅保存启用状态，不触发执行。':'启用后会按 Semaphore 服务时区自动执行，可能修改目标主机。'}</p>${actions('确认'+(s.active?'暂停':'启用'))}</form>`);}\n}catch(error){($('#drawer').open?$('#drawer-error'):$('#notice')).textContent=error.message;}});\nroot.addEventListener('submit',async e=>{e.preventDefault();const f=e.target;\n  if(f.id==='login-form'){if(loading)return;token=f.elements.token.value.trim();$('#login-error').textContent='';try{await refresh();sessionStorage.setItem('automation-token',token);f.reset();}catch{}return;}\n  if(!f.dataset.form||mutating)return;\n  const data=Object.fromEntries(new FormData(f));\n  for(const key of ['template_id','inventory_id','repository_id','environment_id','ssh_key_id'])if(key in data)data[key]=Number(data[key]);\n  const type=f.dataset.form;\n  if(type==='template'){data.app='ansible';await mutate('templates'+(f.dataset.id?'/'+f.dataset.id:''),f.dataset.id?'PUT':'POST',data);}\n  if(type==='inventory')await mutate('inventories','POST',data);\n  if(type==='schedule')await mutate('schedules','POST',{...data,active:false,type:''});\n  if(type==='run'){data.dry_run=f.elements.dry_run.checked;await mutate('tasks','POST',data);}\n  if(type==='stop')await mutate(`tasks/${f.dataset.id}/stop`,'POST',{});\n  if(type==='active')await mutate(`schedules/${f.dataset.id}/active`,'PUT',{active:f.dataset.active==='true'});\n});\n$('#drawer').addEventListener('close',()=>{logTaskId=null;});\n$('#search').addEventListener('input',render);$('#status-filter').addEventListener('change',render);\nsetInterval(()=>{if(!document.hidden&&state&&!loading&&!mutating&&(tab==='tasks'||logTaskId!==null||state.tasks.some(t=>activeStatuses.includes(t.status))))refresh().catch(()=>{});},5000);\nif(token)refresh().catch(()=>{});\nif (embedded) {\n  $('#login').hidden = true;\n  $('#application').hidden = false;\n  root.querySelectorAll('[data-action=logout]').forEach(b => b.hidden = true);\n  window.addEventListener('message', event => {\n    if (event.source !== parent) return;\n    const data = event.data || {};\n    if (data.type === 'ops-module-info' && data.module?.key === 'automation') {\n      nonce = data.nonce;\n      if (!ready) { ready = true; refresh().catch(() => {}); }\n    } else if (data.type === 'ops-module-api-response' && data.nonce === nonce) {\n      const request = requests.get(data.id);\n      if (!request) return;\n      requests.delete(data.id); clearTimeout(request.timeout);\n      data.ok ? request.resolve(data.data) : request.reject(new Error(data.data?.message || '模块请求失败'));\n    }\n  });\n  const handshake = setInterval(() => { if (ready) clearInterval(handshake); else parent.postMessage({type:'ops-module-ready'}, '*'); }, 500);\n  parent.postMessage({type:'ops-module-ready'}, '*');\n  window.addEventListener('pagehide', () => { clearInterval(handshake); for (const request of requests.values()) clearTimeout(request.timeout); });\n}\n",
+        "app.css": "body{margin:0;background:#f4f6fa}\n#ops-automation-preview{--op-panel:#fff;--op-text:#1f2937;--op-muted:#6b7280;--op-border:#e5e9f0;--op-blue:#2563eb;--op-green:#16a34a;--op-red:#dc2626;font:14px/1.5 -apple-system,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif;color:var(--op-text);color-scheme:light}\n#ops-automation-preview *{box-sizing:border-box}\n#ops-automation-preview [hidden]{display:none!important}\n#ops-automation-preview button,#ops-automation-preview input,#ops-automation-preview select{font:inherit}\n#ops-automation-preview button{cursor:pointer}\n#ops-automation-preview button:disabled{opacity:.5;cursor:not-allowed}\n#ops-automation-preview button:focus-visible,#ops-automation-preview input:focus-visible,#ops-automation-preview select:focus-visible{outline:2px solid var(--op-blue);outline-offset:3px}\n#ops-automation-preview .op-main{padding:16px 24px 20px;background:var(--op-panel);min-height:100vh;min-width:0}\n#ops-automation-preview h2{font-size:20px;line-height:1.4;margin:0;font-weight:600}\n#ops-automation-preview p{margin:6px 0}\n#ops-automation-preview .op-small{font-size:12px;color:var(--op-muted);white-space:nowrap}\n#ops-automation-preview .op-spacer{flex:1}\n#ops-automation-preview .op-navigation{display:flex;align-items:center;gap:20px;border-bottom:1px solid var(--op-border);margin-bottom:20px}\n#ops-automation-preview .op-tabs{display:flex;align-self:stretch;flex:1;gap:28px;min-width:0;overflow-x:auto}\n#ops-automation-preview .op-tab{border:0;border-bottom:2px solid transparent;background:none;padding:12px 0;color:var(--op-muted);white-space:nowrap}\n#ops-automation-preview .op-tab[aria-selected=true]{border-bottom-color:var(--op-blue);color:var(--op-blue);font-weight:600}\n#ops-automation-preview .au-actions{display:flex;gap:8px;flex-shrink:0;padding-bottom:4px}\n#ops-automation-preview .op-button{border:1px solid var(--op-border);background:var(--op-panel);border-radius:8px;padding:7px 14px;color:var(--op-text);font-size:13px;white-space:nowrap}\n#ops-automation-preview .op-button:hover{border-color:var(--op-blue);color:var(--op-blue)}\n#ops-automation-preview .op-button.primary{background:var(--op-blue);color:#fff;border-color:var(--op-blue)}\n#ops-automation-preview .op-button.primary:hover{background:#1d4ed8}\n#ops-automation-preview .op-link{border:0;background:none;color:var(--op-blue);padding:4px 5px;white-space:nowrap;font-size:13px}\n#ops-automation-preview .op-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px}\n#ops-automation-preview .op-field{border:1px solid var(--op-border);border-radius:8px;background:var(--op-panel);color:var(--op-text);padding:8px 12px;font-size:13px;max-width:100%;min-width:0}\n#ops-automation-preview .op-search{width:240px}\n#ops-automation-preview .op-panel{background:var(--op-panel);border:1px solid var(--op-border);border-radius:8px;overflow:hidden}\n#ops-automation-preview .op-table-wrap{overflow-x:auto}\n#ops-automation-preview table{border-collapse:collapse;width:100%;font-size:13px;text-align:left}\n#ops-automation-preview th{background:#f8fafc;color:var(--op-muted);font-weight:500;padding:12px 16px;white-space:nowrap}\n#ops-automation-preview td{padding:14px 16px;border-top:1px solid var(--op-border);vertical-align:middle}\n#ops-automation-preview tbody tr:hover{background:#fafbfe}\n#ops-automation-preview .op-name{font-size:13px;font-weight:500;white-space:nowrap}\n#ops-automation-preview .au-name{padding-left:0;color:var(--op-text)}\n#ops-automation-preview .op-secondary{font-size:12px;color:var(--op-muted);margin-top:3px}\n#ops-automation-preview .op-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;color:var(--op-green)}\n#ops-automation-preview .op-status:before{content:\"\";width:6px;height:6px;border-radius:50%;background:currentColor}\n#ops-automation-preview .op-status.failed{color:var(--op-red)}\n#ops-automation-preview .op-status.running{color:var(--op-blue)}\n#ops-automation-preview .op-row-actions{display:flex;gap:8px}\n#ops-automation-preview .op-empty{padding:48px 16px;text-align:center;color:var(--op-muted)}\n#ops-automation-preview .op-footer{margin-top:14px;font-size:12px;color:var(--op-muted)}\n#ops-automation-preview .op-message{font-size:13px;color:var(--op-blue)}\n#ops-automation-preview .op-message:empty{display:none}\n#ops-automation-preview .au-banner{border:1px solid #dbeafe;background:#eff6ff;padding:10px 14px;border-radius:8px;margin-bottom:16px;color:#1e40af;font-size:13px}\n#ops-automation-preview #page-error,#ops-automation-preview #drawer-error,#ops-automation-preview #login-error{color:var(--op-red);font-size:13px;margin-bottom:16px}\n#ops-automation-preview .au-dialog{position:fixed;inset:0 0 0 auto;margin:0;border:0;border-left:1px solid var(--op-border);width:min(540px,100%);max-width:100%;height:100dvh;max-height:100dvh;background:var(--op-panel);color:var(--op-text);padding:24px;overflow-y:auto}\n#ops-automation-preview .au-dialog::backdrop{background:#0f1b2d66}\n#ops-automation-preview .op-drawer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-bottom:1px solid var(--op-border);padding-bottom:18px;margin-bottom:18px}\n#ops-automation-preview .au-dialog label{display:block;margin:17px 0;font-size:13px}\n#ops-automation-preview .au-dialog label>.op-field{display:block;width:100%;margin-top:7px}\n#ops-automation-preview .au-check{display:flex!important;gap:8px;align-items:center}\n#ops-automation-preview .op-kv{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;font-size:13px;margin-bottom:20px;overflow-wrap:anywhere}\n#ops-automation-preview .op-kv span:nth-child(odd){color:var(--op-muted)}\n#ops-automation-preview .op-kv code{word-break:break-all}\n#ops-automation-preview .op-log{background:#0f1b2d;color:#dbe6f5;padding:16px;font:12px/1.8 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:8px;min-height:200px}\n#ops-automation-preview .op-note{margin:12px 0;color:var(--op-muted);font-size:12px}\n#ops-automation-preview .op-drawer-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}\n#ops-automation-preview textarea{resize:vertical;font:13px/1.6 Consolas,monospace}\n#ops-automation-preview .op-tag{font-size:11px;color:var(--op-muted)}\n#ops-automation-preview .au-login{display:grid;grid-template-columns:1fr 1fr;max-width:900px;margin:90px auto;background:#fff;border:1px solid var(--op-border);border-radius:10px;overflow:hidden}\n#ops-automation-preview .au-login form{padding:40px}\n#ops-automation-preview .au-login h1{font-size:26px;margin:20px 0 12px}\n#ops-automation-preview .au-login p{color:var(--op-muted);margin:12px 0 22px}\n#ops-automation-preview .au-login label{display:block;margin-top:28px}\n#ops-automation-preview .au-login input{display:block;width:100%;margin-top:8px}\n#ops-automation-preview .au-login-aside{background:#eff6ff;padding:60px 40px;color:#344c71}\n#ops-automation-preview .au-login-aside h2{font-size:28px;margin-bottom:32px}\n#ops-automation-preview .au-login-aside small{display:block;margin-top:40px;font-size:12px}\n@media(max-width:760px){#ops-automation-preview .op-main{padding:8px 16px 16px}#ops-automation-preview .op-navigation{gap:14px;margin-bottom:16px}#ops-automation-preview .op-tabs{gap:12px;justify-content:space-between}#ops-automation-preview .op-tab{font-size:13px}#ops-automation-preview .op-toolbar{gap:10px}#ops-automation-preview .op-search{width:100%}#ops-automation-preview td,#ops-automation-preview th{padding:12px}#ops-automation-preview .au-dialog{padding:20px}#ops-automation-preview .au-login{display:block;margin:24px 16px}#ops-automation-preview .au-login-aside{display:none}#ops-automation-preview .au-login form{padding:28px 22px}}\n@media(pointer:coarse){#ops-automation-preview button,#ops-automation-preview input,#ops-automation-preview select{min-height:44px}#ops-automation-preview input,#ops-automation-preview select{font-size:16px}}\n"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "module-automation-data",
+        "namespace": "opscenter"
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "storageClassName": "local-path",
+        "resources": {
+          "requests": {
+            "storage": "2Gi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "module-automation",
+        "namespace": "opscenter"
+      },
+      "spec": {
+        "replicas": 1,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "module-automation"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "module-automation"
+            },
+            "annotations": {
+              "opscenter.io/automation-ui": "20261023-r3"
+            }
+          },
+          "spec": {
+            "automountServiceAccountToken": false,
+            "nodeSelector": {
+              "kubernetes.io/hostname": "k8s-worker-02"
+            },
+            "securityContext": {
+              "fsGroup": 10001,
+              "fsGroupChangePolicy": "OnRootMismatch"
+            },
+            "initContainers": [
+              {
+                "name": "prepare-data",
+                "image": "semaphoreui/semaphore:v2.19.17",
+                "imagePullPolicy": "Never",
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "runAsUser": 1001,
+                  "runAsGroup": 10001,
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  }
+                },
+                "command": [
+                  "sh",
+                  "-ec",
+                  "umask 0007; mkdir -p /state/gateway /state/engine /state/config /state/runbooks; chmod 0770 /state/*; cp /runbooks/*.yml /state/runbooks/; cd /state/runbooks; if [ ! -d .git ]; then git init -b main; git config user.name 'OpsCenter acceptance'; git config user.email automation@localhost; git add .; git commit -m 'Add isolated acceptance playbooks'; fi"
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/state"
+                  },
+                  {
+                    "name": "runbooks",
+                    "mountPath": "/runbooks",
+                    "readOnly": true
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "64Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "256Mi"
+                  }
+                }
+              }
+            ],
+            "containers": [
+              {
+                "env": [
+                  {
+                    "name": "AUTOMATION_MODE",
+                    "value": "semaphore"
+                  },
+                  {
+                    "name": "AUTOMATION_ALLOWED_HOSTS",
+                    "value": "*"
+                  },
+                  {
+                    "name": "SEMAPHORE_URL",
+                    "value": "http://127.0.0.1:3000"
+                  },
+                  {
+                    "name": "SEMAPHORE_PROJECT_ID",
+                    "value": "1"
+                  },
+                  {
+                    "name": "SEMAPHORE_TOKEN_FILE",
+                    "value": "/run/secrets/engine-token"
+                  },
+                  {
+                    "name": "OPS_JWT_PUBLIC_KEY_FILE",
+                    "value": "/run/secrets/jwt-public.pem"
+                  },
+                  {
+                    "name": "OPS_ADMIN_USER",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "opscenter-env",
+                        "key": "OPS_ADMIN_USER"
+                      }
+                    }
+                  }
+                ],
+                "image": "opscenter/module-automation:0.2.0-20261023",
+                "imagePullPolicy": "Never",
+                "livenessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": "http",
+                    "scheme": "HTTP"
+                  },
+                  "periodSeconds": 20,
+                  "successThreshold": 1,
+                  "timeoutSeconds": 5
+                },
+                "name": "gateway",
+                "ports": [
+                  {
+                    "containerPort": 8080,
+                    "name": "http",
+                    "protocol": "TCP"
+                  }
+                ],
+                "readinessProbe": {
+                  "failureThreshold": 3,
+                  "httpGet": {
+                    "path": "/health/ready",
+                    "port": "http",
+                    "scheme": "HTTP"
+                  },
+                  "periodSeconds": 10,
+                  "successThreshold": 1,
+                  "timeoutSeconds": 5
+                },
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "64Mi"
+                  },
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "256Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsGroup": 10001,
+                  "runAsNonRoot": true,
+                  "runAsUser": 10001
+                },
+                "startupProbe": {
+                  "failureThreshold": 30,
+                  "httpGet": {
+                    "path": "/health/ready",
+                    "port": "http",
+                    "scheme": "HTTP"
+                  },
+                  "periodSeconds": 5,
+                  "successThreshold": 1,
+                  "timeoutSeconds": 5
+                },
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File",
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data",
+                    "subPath": "gateway"
+                  },
+                  {
+                    "name": "engine-secret",
+                    "mountPath": "/run/secrets/engine-token",
+                    "subPath": "engine-token",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "jwt-public",
+                    "mountPath": "/run/secrets/jwt-public.pem",
+                    "subPath": "jwt-public.pem",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "automation-ui",
+                    "mountPath": "/app/modules/automation/static",
+                    "readOnly": true
+                  }
+                ]
+              },
+              {
+                "name": "engine",
+                "image": "semaphoreui/semaphore:v2.19.17",
+                "imagePullPolicy": "Never",
+                "securityContext": {
+                  "runAsNonRoot": true,
+                  "runAsUser": 1001,
+                  "runAsGroup": 10001,
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  }
+                },
+                "resources": {
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  },
+                  "limits": {
+                    "cpu": "750m",
+                    "memory": "768Mi"
+                  }
+                },
+                "env": [
+                  {
+                    "name": "SEMAPHORE_DB_DIALECT",
+                    "value": "sqlite"
+                  },
+                  {
+                    "name": "SEMAPHORE_DB",
+                    "value": "/var/lib/semaphore/database.sqlite"
+                  },
+                  {
+                    "name": "SEMAPHORE_ADMIN",
+                    "value": "automation-admin"
+                  },
+                  {
+                    "name": "SEMAPHORE_ADMIN_NAME",
+                    "value": "Automation Admin"
+                  },
+                  {
+                    "name": "SEMAPHORE_ADMIN_EMAIL",
+                    "value": "automation@localhost"
+                  },
+                  {
+                    "name": "SEMAPHORE_ADMIN_PASSWORD_FILE",
+                    "value": "/run/secrets/admin-password"
+                  },
+                  {
+                    "name": "SEMAPHORE_ACCESS_KEY_ENCRYPTION_FILE",
+                    "value": "/run/secrets/encryption-key"
+                  },
+                  {
+                    "name": "SEMAPHORE_INTERFACE",
+                    "value": "127.0.0.1"
+                  },
+                  {
+                    "name": "TZ",
+                    "value": "Asia/Shanghai"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/etc/semaphore",
+                    "subPath": "config",
+                    "readOnly": false
+                  },
+                  {
+                    "name": "data",
+                    "mountPath": "/var/lib/semaphore",
+                    "subPath": "engine",
+                    "readOnly": false
+                  },
+                  {
+                    "name": "data",
+                    "mountPath": "/run/validation-runbooks",
+                    "subPath": "runbooks",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "engine-secret",
+                    "mountPath": "/run/secrets",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "runbooks",
+                    "mountPath": "/etc/ssh/ssh_config.d/semaphore.conf",
+                    "subPath": "ssh.conf",
+                    "readOnly": true
+                  }
+                ],
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "curl",
+                      "--fail",
+                      "--silent",
+                      "http://127.0.0.1:3000/api/ping"
+                    ]
+                  },
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 5
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "module-automation-data"
+                }
+              },
+              {
+                "name": "engine-secret",
+                "secret": {
+                  "secretName": "opscenter-automation-engine",
+                  "defaultMode": 288
+                }
+              },
+              {
+                "name": "runbooks",
+                "configMap": {
+                  "name": "opscenter-automation-runbooks-20261023"
+                }
+              },
+              {
+                "name": "jwt-public",
+                "secret": {
+                  "secretName": "opscenter-jwt-keypair",
+                  "defaultMode": 288,
+                  "items": [
+                    {
+                      "key": "jwt-public.pem",
+                      "path": "jwt-public.pem"
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "automation-ui",
+                "configMap": {
+                  "name": "opscenter-automation-ui-20261023-r3",
+                  "defaultMode": 420
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "module-automation",
+        "namespace": "opscenter"
+      },
+      "spec": {
+        "selector": {
+          "app": "module-automation"
+        },
+        "ports": [
+          {
+            "name": "http",
+            "port": 8080,
+            "targetPort": "http"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "name": "module-automation-boundary",
+        "namespace": "opscenter"
+      },
+      "spec": {
+        "podSelector": {
+          "matchLabels": {
+            "app": "module-automation"
+          }
+        },
+        "policyTypes": [
+          "Ingress",
+          "Egress"
+        ],
+        "egress": [],
+        "ingress": [
+          {
+            "from": [
+              {
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "web"
+                  }
+                }
+              },
+              {
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "backend"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "protocol": "TCP",
+                "port": 8080
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

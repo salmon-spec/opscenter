@@ -1,0 +1,10 @@
+{
+  "backend_version": "5.5.20",
+  "legacy_before": 10,
+  "migrated": 10,
+  "legacy_after": 0,
+  "decrypted_credentials": 10,
+  "remote_interruption_preserved_original": true,
+  "remote_atomic_save_and_permissions": true,
+  "temporary_fixture_removed": true
+}

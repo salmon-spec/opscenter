@@ -1,0 +1,57 @@
+name: opscenter-opencode
+services:
+  runner:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/opencode-runner.Dockerfile
+    restart: unless-stopped
+    init: true
+    user: "1000:10001"
+    environment:
+      GIT_CONFIG_GLOBAL: /runner-data/config/opscenter.gitconfig
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    secrets: [runner_password]
+    volumes:
+      - runner-data:/runner-data
+      - workspace:/workspace
+    networks: [agent]
+  gateway:
+    build:
+      context: ../..
+      dockerfile: modules/opencode_agent/Dockerfile
+    restart: unless-stopped
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    environment:
+      OPENCODE_RUNNER_URL: http://runner:4096
+      OPENCODE_WORKSPACE: /workspace
+      OPENCODE_RUNNER_PASSWORD_FILE: /run/secrets/runner_password
+      OPENCODE_GATEWAY_DATA: /data
+      OPENCODE_NATIVE_CONFIG_FILE: /runner-shared/config/opencode/opencode.jsonc
+      OPS_JWT_PUBLIC_KEY_FILE: /run/secrets/ops_jwt_public
+      OPS_ADMIN_USER: ${OPS_ADMIN_USER:-admin}
+    secrets: [runner_password, ops_jwt_public]
+    volumes:
+      - workspace:/workspace
+      - runner-data:/runner-shared
+      - ${OPENCODE_GATEWAY_DATA_DIR:?set an empty directory owned by uid 10001}:/data
+    ports: ["127.0.0.1:18086:8080"]
+    networks: [agent]
+    depends_on: [runner]
+secrets:
+  runner_password:
+    file: ${OPENCODE_RUNNER_PASSWORD_FILE:?set a protected runner password file}
+  ops_jwt_public:
+    file: ${OPS_JWT_PUBLIC_KEY_FILE:?set the workbench public key file}
+volumes:
+  workspace:
+  runner-data:
+networks:
+  agent:

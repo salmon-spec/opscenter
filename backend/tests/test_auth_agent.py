@@ -46,8 +46,9 @@ class _StubHandler:
         return False
 
 
-def test_agent_version_is_2_6_3():
-    assert opsagent.AGENT_VERSION == "2.6.3"
+def test_agent_version_matches_bundled_backend():
+    from app.agent_manager import get_agent_version
+    assert opsagent.AGENT_VERSION == get_agent_version()
 
 
 def test_network_selection_skips_bridge_taps_and_overlays():

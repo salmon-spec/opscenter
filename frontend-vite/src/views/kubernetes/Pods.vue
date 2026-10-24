@@ -457,7 +457,7 @@ function fmtAge(v) {
   return `${Math.floor(sec / 86400)}d`
 }
 function evTime(ev) {
-  const v = ev?.last_timestamp || ev?.first_timestamp || ev?.time || ''
+  const v = ev?.last_at || ev?.first_at || ev?.last_timestamp || ev?.first_timestamp || ev?.time || ''
   if (!v) return '—'
   const dt = new Date(v)
   return Number.isNaN(dt.getTime()) ? String(v) : dt.toLocaleTimeString('zh-CN', { hour12: false })
