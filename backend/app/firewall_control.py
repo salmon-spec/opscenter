@@ -137,6 +137,66 @@ def _parse_ufw(output: str) -> list[dict]:
     return rules
 
 
+def _ssh_allowed(added: str, ssh_port: int, peer: str) -> bool:
+    """Accept simple UFW rules whose source covers this management connection."""
+    allowed = False
+    for line in added.splitlines():
+        if not line.startswith("ufw "):
+            continue
+        try:
+            parts = shlex.split(line, comments=True)[1:]
+            if "out" in parts or parts[:1] == ["route"]:
+                continue
+            if parts[0] != "allow":
+                return False
+            parts = parts[1:]
+            if parts[:1] == ["in"]:
+                parts = parts[1:]
+            source = "any"
+            if len(parts) == 1:
+                port, _, protocol = parts[0].partition("/")
+            elif len(parts) == 8 and parts[0] == "from" and parts[2:5] == ["to", "any", "port"] and parts[6] == "proto":
+                source, port, protocol = parts[1], parts[5], parts[7]
+            else:
+                return False
+            _, start, end = _port(port)
+            if start <= ssh_port <= end and protocol in {"", "tcp"}:
+                allowed |= source == "any" or ipaddress.ip_address(peer) in ipaddress.ip_network(source, strict=False)
+        except (ValueError, IndexError, HTTPException):
+            return False
+    return allowed
+
+
+def _enable_firewall(server: Server, backend: str) -> None:
+    if backend != "ufw":
+        raise HTTPException(409, "尚不能验证 firewalld 的离线规则与回退，请从主机控制台启用")
+    status = _execute(server, ["sudo", "ufw", "status"])
+    if "Status: active" in status:
+        return
+    managed = _execute(server, ["sudo", "sh", "-c", "if [ -d /etc/rancher/k3s ] || [ -d /etc/pve ] || systemctl is-active --quiet k3s.service || systemctl is-active --quiet k3s-agent.service; then echo managed; else echo standalone; fi"]).strip()
+    if managed != "standalone":
+        raise HTTPException(409, "K3s/PVE 主机需要独立网络变更方案；工作台禁止直接启用防火墙，以免阻断集群或管理连接")
+    peer = _execute(server, ["sh", "-c", 'printf "%s" "${SSH_CONNECTION%% *}"']).strip()
+    added = _execute(server, ["sudo", "ufw", "show", "added"])
+    if not _ssh_allowed(added, int(server.ssh_port or 22), peer):
+        raise HTTPException(409, f"无法确认管理连接的 SSH 端口 {server.ssh_port or 22} 已放行；请检查规则后从主机控制台启用")
+    # The host owns the rollback timer even if this process or its SSH connection dies.
+    unit = "opscenter-fw-rollback-" + uuid.uuid4().hex
+    _execute(server, ["test", "-x", "/usr/sbin/ufw"])
+    _execute(server, ["sudo", "systemd-run", "--unit=" + unit, "--on-active=180s", "/usr/sbin/ufw", "--force", "disable"])
+    if _execute(server, ["sudo", "systemctl", "is-active", unit + ".timer"]).strip() != "active":
+        raise HTTPException(502, "回退计时器未就绪，未启用防火墙")
+    _execute(server, ["sudo", "ufw", "--force", "enable"])
+    if not (server.agent_type == "local" and not CONTAINERIZED):
+        client = get_ssh_client(server)
+        if not client:
+            raise HTTPException(502, "启用后无法建立新的 SSH 连接，3 分钟内将自动停用防火墙；请稍后刷新核对")
+        client.close()
+    if "Status: active" not in _execute(server, ["sudo", "ufw", "status"]):
+        raise HTTPException(502, "防火墙启用结果未确认，保留自动停用计时器，请刷新核对")
+    _execute(server, ["sudo", "systemctl", "stop", unit + ".timer"])
+
+
 @router.get("/servers/{server_id}/firewall", dependencies=[Depends(get_current_user)])
 def firewall_status(server_id: str):
     server = _server(server_id)
@@ -224,8 +284,10 @@ def set_firewall_state(server_id: str, payload: FirewallStateRequest):
     backend = _detect(server)
     if not backend:
         raise HTTPException(status_code=400, detail="主机未安装 UFW 或 firewalld")
-    if backend == "ufw":
-        _execute(server, ["sudo", "ufw", "--force", "enable" if payload.enabled else "disable"])
+    if payload.enabled:
+        _enable_firewall(server, backend)
+    elif backend == "ufw":
+        _execute(server, ["sudo", "ufw", "--force", "disable"])
     else:
         _execute(server, ["sudo", "systemctl", "enable" if payload.enabled else "disable", "--now", "firewalld"])
     return {"ok": True, "backend": backend, "enabled": payload.enabled}

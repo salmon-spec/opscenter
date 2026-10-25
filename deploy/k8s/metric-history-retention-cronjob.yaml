@@ -35,7 +35,7 @@ spec:
             - |
               set -eu
               DBURL=$(printf '%s' "$DATABASE_URL" | sed 's/postgresql+psycopg/postgresql/')
-              BATCH=20000
+              BATCH=1000
               TOTAL=0
               START=$(date +%s)
               echo "retention: deleting metric_history rows older than 14 days (batch=$BATCH)"
@@ -47,12 +47,12 @@ spec:
                 fi
                 DELETED=$(PGOPTIONS='-c statement_timeout=60000 -c lock_timeout=5000' psql "$DBURL" -X -q -v ON_ERROR_STOP=1 -tA -c "
                   WITH doomed AS (
-                    SELECT id FROM metric_history
+                    SELECT ctid FROM metric_history
                     WHERE timestamp < now() - interval '14 days'
                     ORDER BY timestamp
                     LIMIT $BATCH
                   ), deleted AS (
-                    DELETE FROM metric_history m USING doomed WHERE m.id = doomed.id RETURNING 1
+                    DELETE FROM metric_history m USING doomed WHERE m.ctid = doomed.ctid RETURNING 1
                   ) SELECT count(*) FROM deleted;") || {
                     echo "retention failed: SQL error or timeout; total=$TOTAL" >&2
                     exit 1

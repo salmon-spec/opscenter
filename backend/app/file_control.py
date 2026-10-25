@@ -325,25 +325,45 @@ def upload_file(server_id: str, payload: FileUploadRequest):
         raise HTTPException(status_code=413, detail="单文件上传最大支持 10MB")
     with _filesystem(server) as (remote, sftp, _client):
         parent = _clean_path(payload.parent, remote)
+        if remote:
+            parent = sftp.normalize(parent)
         target = posixpath.join(parent, name) if remote else os.path.join(parent, name)
         _ensure_writable(target)
+        temporary = target + f".opscenter-{uuid.uuid4().hex}.tmp"
         try:
             if remote:
-                try:
-                    sftp.stat(target)
-                except FileNotFoundError:
-                    pass
-                else:
-                    raise HTTPException(status_code=409, detail="同名文件已存在")
-                with sftp.open(target, "wb") as handle:
+                with sftp.open(temporary, "wx") as handle:
                     handle.write(raw)
+                    handle.flush()
+                if sftp.stat(temporary).st_size != len(raw):
+                    raise OSError("Incomplete remote upload")
+                # Standard SFTP rename refuses an existing destination; posix_rename replaces it.
+                sftp.rename(temporary, target)
             else:
-                with open(target, "xb") as handle:
+                with open(temporary, "xb") as handle:
                     handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.link(temporary, target)
         except FileExistsError:
             raise HTTPException(status_code=409, detail="同名文件已存在")
         except PermissionError:
             raise HTTPException(status_code=403, detail="没有文件上传权限")
+        except OSError:
+            # OpenSSH can return generic failure instead of EEXIST for rename conflicts.
+            if remote:
+                try:
+                    sftp.lstat(target)
+                except OSError:
+                    pass
+                else:
+                    raise HTTPException(409, "同名文件已存在")
+            raise HTTPException(502, "上传未完成，请刷新目录核对后重试")
+        finally:
+            try:
+                sftp.remove(temporary) if remote else os.unlink(temporary)
+            except OSError:
+                pass
     return {"ok": True, "path": target, "size": len(raw)}
 
 

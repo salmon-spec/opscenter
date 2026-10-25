@@ -1,6 +1,6 @@
 # OpsCenter 运维工作台
 
-> **当前源码索引：v5.5.21 · 2026-10-25**。源码、构建产物、模块、Agent、部署配置与 Git 历史均在本仓库维护；生产版本以发布清单和验收记录为准。
+> **当前源码索引：v5.5.22 · 2026-10-25**。源码、构建产物、模块、Agent、部署配置与 Git 历史均在本仓库维护；生产版本以发布清单和验收记录为准。
 > 仓库：[GitHub](https://github.com/salmon-spec/opscenter) · Forgejo `root/opscenter`，两端 main 与发布标签同步。
 
 OpsCenter 是中文自托管运维工作台，提供服务广场与管理、主机台账和监控大屏、系统工具、K3s、告警、日志、OSS、模型用量及电费监测。
@@ -9,7 +9,7 @@ OpsCenter 是中文自托管运维工作台，提供服务广场与管理、主�
 
 | 组件 | 当前版本 | 代码/说明 |
 | --- | --- | --- |
-| 工作台前后端 | 5.5.21 | [Vue/Vite](frontend-vite/)、[发布说明](docs/releases/v5.5.21.md) |
+| 工作台前后端 | 5.5.22 | [Vue/Vite](frontend-vite/)、[发布说明](docs/releases/v5.5.22.md) |
 | OpsAgent | 2.6.4 | [源码](agent/opsagent.py)、[升级说明](agent/RELEASE-2.6.4.md) |
 | 电费监测 | 0.10.0 | [模块与通知](modules/electricity/README.md) |
 | 服务目录 | 0.7.4 | [模块说明](modules/README.md) |
@@ -22,7 +22,7 @@ OpsCenter 是中文自托管运维工作台，提供服务广场与管理、主�
 - K3s 部署及版本补丁 `deploy/k8s/`；隔离构建候选流水线 `deploy/ci/Jenkinsfile`、`deploy/ci/build.sh`。
 - [代码与历史版本索引](docs/releases/2026-10-20-source-index.md) 说明提交范围、标签、验证及生产覆盖文件的构建边界。
 - 样例配置入库；真实密码、API Key、私钥、运行时数据库和部署备份保存在各环境的受保护存储中。
-- 2026-10-24 生产采用 K3s 与不可变 ConfigMap 源码/静态文件覆盖；完整运行归档和恢复边界见[本次审查修复记录](docs/reviews/2026-10-24-audit-fixes.md)。源码推送不等于部署。VM100 原 OpsCenter 测试栈已于 2026-10-15 删除，之后的模块隔离试部署见各模块说明。
+- 2026-10-25 已完成不可变镜像发布，应用源码覆盖挂载清零；运行配置和持久数据单独保留，生产状态以当次验收记录为准。源码推送不等于部署。VM100 原 OpsCenter 测试栈已于 2026-10-15 删除，之后的模块隔离试部署见各模块说明。
 
 ## 历史架构资料
 
