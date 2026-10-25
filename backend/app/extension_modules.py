@@ -28,12 +28,21 @@ from app.models import ExtensionModule
 from app.services.aliyun_oss import OssModuleError, aliyun_oss
 from app.services.command_code import CommandCodeUsageError, command_code
 from app.services.model_usage import model_usage
+from app.services import password_manager
 
 router = APIRouter(prefix="/api/v2/modules", tags=["extension-modules"])
 
 MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 BUILTIN_MODULES = {
+    "password-manager": {
+        "name": "密码管理", "version": "0.1.0",
+        "description": "打开个人密码库，查看连接状态与手机、浏览器客户端配置",
+        "icon": "PW", "entry_url": "/v3/#/extensions/password-manager",
+        "runtime": "native", "isolation": "independent-origin",
+        "capabilities": ["vault:open", "health:read"], "permissions": ["password-manager:read"],
+        "manifest": {"readonly": True}, "sort_order": 60,
+    },
     "automation": {'name': '自动化作业', 'version': '0.2.0', 'description': '管理 Semaphore 作业模板、主机清单、执行日志与定时计划', 'icon': 'AT', 'entry_url': '/modules/automation/ui/', 'runtime': 'iframe', 'isolation': 'sandboxed-iframe', 'capabilities': ['templates', 'tasks', 'inventories', 'schedules'], 'permissions': ['automation:admin'], 'manifest': {'api_prefixes': ['/modules/automation/api/v1/'], 'sandbox': ['allow-scripts', 'allow-forms'], 'readonly': False}, 'sort_order': 50},
     "opencode-agent": {
         "name": "OpenCode Agent",
@@ -200,8 +209,8 @@ def seed_extension_modules() -> None:
             if row is None:
                 row = ExtensionModule(
                     key=key,
-                    running=key == "electricity",
-                    status="running" if key == "electricity" else "stopped",
+                    running=key in {"electricity", "password-manager"},
+                    status="running" if key in {"electricity", "password-manager"} else "stopped",
                 )
                 db.add(row)
                 changed = True
@@ -419,7 +428,9 @@ def stop_module(module_key: str, user: object = Depends(require_operator)):
 def check_module_health(module_key: str, user: object = Depends(require_operator)):
     with get_db() as db:
         row = _get_module(db, module_key)
-        if module_key == "oss-browser":
+        if module_key == "password-manager":
+            result = _record_health(row, password_manager.status())
+        elif module_key == "oss-browser":
             _apply_oss_config(row)
             result = _record_health(row, aliyun_oss.status(force=True))
         elif module_key == "command-code-usage":
@@ -567,7 +578,9 @@ def oss_status(
 ):
     with get_db() as db:
         row = _require_running(db, module_key)
-        if module_key == "command-code-usage":
+        if module_key == "password-manager":
+            result = _record_health(row, password_manager.status())
+        elif module_key == "command-code-usage":
             _apply_command_code_config(row)
             try:
                 result = model_usage.status(force=force, account_id=account_id,

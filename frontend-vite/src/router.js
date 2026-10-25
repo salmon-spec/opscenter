@@ -50,6 +50,7 @@ const routes = [
   { path: '/hosts', name: 'Hosts', component: Hosts, meta: { title: '主机管理', hostScope: 'none', clusterScope: 'none' } },
   { path: '/modules', name: 'ModuleManager', component: ModuleManager, meta: { title: '模块管理', hostScope: 'none', clusterScope: 'none' } },
   { path: '/extensions/middleware-console', redirect: '/' },
+  { path: '/extensions/password-manager', name: 'PasswordManager', component: () => import('./views/PasswordManager.vue'), meta: { title: '密码管理', hostScope: 'none', clusterScope: 'none' } },
   { path: '/extensions/:moduleKey', name: 'ExtensionHost', component: ExtensionHost, meta: { title: '扩展模块', hostScope: 'none', clusterScope: 'none' } },
   { path: '/data-services', redirect: '/' },
   { path: '/data-services/:pathMatch(.*)*', redirect: '/' },

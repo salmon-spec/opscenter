@@ -75,6 +75,10 @@
             respond 404
         }
     }
+    handle /modules/password-manager/status /modules/password-manager/health /modules/password-manager/start /modules/password-manager/stop {
+        rewrite * /api/v2{uri}
+        reverse_proxy backend:9091
+    }
     handle /modules/* {
         respond `{"detail":"业务模块网关尚未接入"}` 503
     }

@@ -373,7 +373,7 @@ def test_discover_buckets_derives_regional_endpoints(monkeypatch):
 
 def test_builtin_seed_and_lifecycle():
     items = client.get(BASE).json()["items"]
-    assert [item["key"] for item in items] == ["oss-browser", "command-code-usage", "electricity", "opencode-agent", "automation"]
+    assert [item["key"] for item in items] == ["oss-browser", "command-code-usage", "electricity", "opencode-agent", "automation", "password-manager"]
     module = items[0]
     assert module["source"] == "builtin"
     assert module["running"] is False
@@ -395,7 +395,7 @@ def test_builtin_seed_and_lifecycle():
     assert command_code_started.json()["running"] is True
 
     running = client.get(BASE, params={"running": True}).json()["items"]
-    assert [item["key"] for item in running] == ["oss-browser", "command-code-usage", "electricity"]
+    assert [item["key"] for item in running] == ["oss-browser", "command-code-usage", "electricity", "password-manager"]
 
     stopped = client.post(f"{BASE}/oss-browser/stop")
     assert stopped.status_code == 200
@@ -682,3 +682,72 @@ def test_module_routes_require_operator_when_configured(monkeypatch):
     headers = {"Authorization": "Bearer module-secret"}
     assert client.get(BASE, headers=headers).status_code == 200
     assert client.post(f"{BASE}/oss-browser/start", headers=headers).status_code == 200
+
+
+def test_password_manager_probe_verifies_tls_without_operator_credentials(monkeypatch):
+    from app.services import password_manager as vault
+    monkeypatch.setattr(vault._settings, 'vaultwarden_url', 'https://vault.example')
+    monkeypatch.setattr(vault._settings, 'vaultwarden_ca_file', '/trusted-ca.crt')
+    session = vault.requests.Session()
+    calls = []
+    def get(url, **kwargs):
+        assert session.trust_env is False
+        assert 'Authorization' not in session.headers
+        assert kwargs == {'timeout': 4, 'verify': '/trusted-ca.crt', 'allow_redirects': False}
+        calls.append(url)
+        return SimpleNamespace(status_code=200, headers={'Content-Type': 'text/html'},
+                               raise_for_status=lambda: None, json=lambda: {'version': '1.0', 'secret': 'never-return-this'})
+    monkeypatch.setattr(session, 'get', get)
+    monkeypatch.setattr(vault.requests, 'Session', lambda: session)
+    result = vault.status()
+    assert result['available'] and result['version'] == '1.0'
+    assert calls == ['https://vault.example/api/config', 'https://vault.example/']
+    assert 'never-return-this' not in str(result)
+
+
+@pytest.mark.parametrize('url', ['', 'http://vault.example', 'https://user:pass@vault.example', 'https://vault.example/path', 'https://vault.example/?token=secret', 'https://vault.example:bad', 'https://vault.example:'])
+def test_password_manager_rejects_invalid_configuration_without_network(monkeypatch, url):
+    from app.services import password_manager as vault
+    monkeypatch.setattr(vault._settings, 'vaultwarden_url', url)
+    monkeypatch.setattr(vault.requests, 'Session', lambda: pytest.fail('invalid configuration reached network'))
+    result = vault.status()
+    assert not result['available'] and not result['url'] and result['error']
+
+
+@pytest.mark.parametrize('failure', ['tls', 'connection', 'redirect', 'invalid-json', 'missing-version', 'missing-page'])
+def test_password_manager_probe_fails_closed_and_masks_details(monkeypatch, failure):
+    from app.services import password_manager as vault
+    monkeypatch.setattr(vault._settings, 'vaultwarden_url', 'https://vault.example')
+    monkeypatch.setattr(vault._settings, 'vaultwarden_ca_file', '')
+    session = vault.requests.Session()
+    def get(url, **kwargs):
+        assert kwargs['verify'] is True and kwargs['allow_redirects'] is False
+        if failure == 'tls': raise vault.requests.exceptions.SSLError('private-diagnostic')
+        if failure == 'connection': raise vault.requests.ConnectionError('private-diagnostic')
+        def content():
+            if failure == 'invalid-json': raise ValueError('private-diagnostic')
+            return {} if failure == 'missing-version' else {'version': '1.0'}
+        return SimpleNamespace(status_code=302 if failure == 'redirect' or failure == 'missing-page' and url.endswith('/') else 200,
+                               headers={'Content-Type': 'text/html'}, raise_for_status=lambda: None, json=content)
+    monkeypatch.setattr(session, 'get', get)
+    monkeypatch.setattr(vault.requests, 'Session', lambda: session)
+    result = vault.status()
+    assert not result['available'] and result['error']
+    assert 'private-diagnostic' not in str(result)
+
+
+def test_password_manager_registry_authentication_and_hidden_entry(monkeypatch):
+    vault = extension_modules_service.password_manager
+    monkeypatch.setattr(vault, 'status', lambda: {'available': True, 'configured': True, 'url': 'https://vault.example', 'error': ''})
+    module = client.get(BASE + '/password-manager').json()
+    assert module['running'] and module['runtime'] == 'native' and module['isolation'] == 'independent-origin'
+    assert client.get(BASE + '/password-manager/status').json()['health']['available']
+    assert client.post(BASE + '/password-manager/health').json()['health']['available']
+    client.post(BASE + '/password-manager/stop')
+    seed_extension_modules()
+    assert client.get(BASE + '/password-manager/status').status_code == 409
+    client.post(BASE + '/password-manager/start')
+    monkeypatch.setattr(auth, 'OPERATOR_TOKEN', 'test-vault-operator')
+    assert client.get(BASE + '/password-manager/status').status_code == 401
+    assert client.post(BASE + '/password-manager/health').status_code == 401
+    assert client.get(BASE + '/password-manager/status', headers={'Authorization': 'Bearer test-vault-operator'}).status_code == 200

@@ -13,7 +13,7 @@
       <div class="metric"><span>模块总数</span><b>{{ modules.length }}</b><small>内置与外部接入</small></div>
       <div class="metric"><span>入口已显示</span><b class="ok">{{ visibleCount }}</b><small>仅代表导航目录状态</small></div>
       <div class="metric"><span>独立运行状态</span><b>未聚合</b><small>请查看各模块健康接口</small></div>
-      <div class="metric"><span>隔离方式</span><b>Sandbox</b><small>无同源权限 iframe</small></div>
+      <div class="metric"><span>隔离方式</span><b>独立服务</b><small>沙箱模块与独立密码库</small></div>
     </div>
 
     <section class="manager-panel">

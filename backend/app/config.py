@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     preview_mode: bool = False
     containerized: bool = False
+    vaultwarden_url: str = ""
+    vaultwarden_ca_file: str = ""
 
     # ── Alerting (v3.26, F4/F5) ──
     alerting_enabled: bool = True                       # ALERTING_ENABLED=false 一键关停告警引擎
