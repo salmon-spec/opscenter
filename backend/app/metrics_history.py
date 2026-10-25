@@ -13,6 +13,7 @@ from sqlalchemy import and_, func, text
 from app.auth import require_metric_reader
 from app.config import RETENTION_ROLLUP_1H_DAYS, RETENTION_ROLLUP_5M_DAYS
 from app.database import engine, get_db
+from app.host_inventory_bridge import active_host_ids
 from app.models import MetricHistory, MetricRollup, Server
 
 
@@ -275,8 +276,10 @@ def metric_hosts_overview(
 ):
     """Return one aggregate row per host without making the browser query hosts one by one."""
     names, start_dt, end_dt, selected_resolution = _metric_query_args(metrics, start, end, resolution)
+    active_ids = active_host_ids()
     with get_db() as db:
-        servers = db.query(Server).order_by(Server.name.asc(), Server.host.asc()).all()
+        servers = [srv for srv in db.query(Server).filter(Server.enabled == True).order_by(Server.name.asc(), Server.host.asc()).all()
+                   if active_ids is None or str(srv.id) in active_ids]
         if selected_resolution == "raw":
             aggregates = db.query(
                 MetricHistory.server_id,

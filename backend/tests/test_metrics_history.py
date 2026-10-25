@@ -184,3 +184,17 @@ def test_host_overview_aggregates_all_hosts_in_one_request():
     rollup_cpu = {item["server_id"]: item for item in rollup.json()["hosts"]}[server_id]["metrics"]["cpu"]
     assert rollup_cpu["average"] == pytest.approx(25.0)
     assert rollup_cpu["samples"] == 4
+
+
+def test_host_overview_excludes_retired_and_disabled_hosts(monkeypatch):
+    from app import metrics_history
+    with SessionLocal() as db:
+        active = Server(name="active", host="192.0.2.1", enabled=True)
+        retired = Server(name="retired", host="192.0.2.2", enabled=True)
+        disabled = Server(name="disabled", host="192.0.2.3", enabled=False)
+        db.add_all([active, retired, disabled]); db.commit()
+        active_id, disabled_id = str(active.id), str(disabled.id)
+    monkeypatch.setattr(metrics_history, "active_host_ids", lambda: {active_id, disabled_id})
+    response = client.get("/api/v2/metrics/hosts/overview", params={"resolution": "raw"})
+    assert response.status_code == 200
+    assert [row["server_id"] for row in response.json()["hosts"]] == [active_id]
