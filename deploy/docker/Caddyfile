@@ -75,7 +75,8 @@
             respond 404
         }
     }
-    handle /modules/password-manager/status /modules/password-manager/health /modules/password-manager/start /modules/password-manager/stop {
+    @passwordManager path /modules/password-manager/status /modules/password-manager/health /modules/password-manager/start /modules/password-manager/stop
+    handle @passwordManager {
         rewrite * /api/v2{uri}
         reverse_proxy backend:9091
     }
