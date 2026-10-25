@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 PYTHON=${VERIFY_PYTHON:-$ROOT/venv/bin/python3}
 [ -x "$PYTHON" ] || PYTHON=$(command -v python3)
+expected_version=$("$PYTHON" -c 'import runpy,sys; print(runpy.run_path(sys.argv[1])["VERSION"])' "$ROOT/backend/app/version.py")
 DB_PORT=${VERIFY_DB_PORT:-55432}
 API_PORT=${VERIFY_API_PORT:-19091}
 WEB_PORT=${VERIFY_WEB_PORT:-18081}
@@ -23,7 +24,7 @@ cleanup() {
   fi
   [ -z "$backend_pid" ] || kill "$backend_pid" 2>/dev/null || true
   [ -z "$web_pid" ] || kill "$web_pid" 2>/dev/null || true
-  docker rm -f "$container" >/dev/null 2>&1 || true
+  docker rm -f -v "$container" >/dev/null 2>&1 || true
   rm -rf "$work"
   exit "$rc"
 }
@@ -54,7 +55,7 @@ docker exec -i "$container" pg_restore -U opscenter -d opscenter --clean --if-ex
     "$PYTHON" -m uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT" >"$work/backend.log" 2>&1
 ) &
 backend_pid=$!
-caddy file-server --root "$ROOT/frontend-vite/dist" --listen ":$WEB_PORT" >"$work/web.log" 2>&1 &
+caddy file-server --root "$ROOT/frontend-vite/dist" --listen "127.0.0.1:$WEB_PORT" >"$work/web.log" 2>&1 &
 web_pid=$!
 for _ in $(seq 1 30); do
   curl -fsS "http://127.0.0.1:${API_PORT}/openapi.json" >/dev/null 2>&1 && break
@@ -72,7 +73,7 @@ p50=$(sort -n "$work/times" | awk 'NR==50 {print $1}')
 p95=$(sort -n "$work/times" | awk 'NR==95 {print $1}')
 curl -fsS "http://127.0.0.1:${WEB_PORT}/" >/dev/null
 
-[ "$version" = 5.5.0 ]
+[ "$version" = "$expected_version" ]
 [ "$tables" -gt 0 ]
 [ "$servers" -gt 0 ]
 [ "$plaza" -gt 0 ]
