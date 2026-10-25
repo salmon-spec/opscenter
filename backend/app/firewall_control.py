@@ -183,7 +183,7 @@ def _enable_firewall(server: Server, backend: str) -> None:
     # The host owns the rollback timer even if this process or its SSH connection dies.
     unit = "opscenter-fw-rollback-" + uuid.uuid4().hex
     _execute(server, ["test", "-x", "/usr/sbin/ufw"])
-    _execute(server, ["sudo", "systemd-run", "--unit=" + unit, "--on-active=180s", "/usr/sbin/ufw", "--force", "disable"])
+    _execute(server, ["sudo", "systemd-run", "--unit=" + unit, "--on-active=180s", "--timer-property=AccuracySec=1s", "/usr/sbin/ufw", "--force", "disable"])
     if _execute(server, ["sudo", "systemctl", "is-active", unit + ".timer"]).strip() != "active":
         raise HTTPException(502, "回退计时器未就绪，未启用防火墙")
     _execute(server, ["sudo", "ufw", "--force", "enable"])

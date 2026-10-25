@@ -77,6 +77,7 @@ def test_firewall_enable_requires_preflight_and_host_owned_rollback(monkeypatch,
     if scenario == "success":
         fw._enable_firewall(server, "ufw")
         reconnect.assert_called_once_with(server)
+        assert any('--timer-property=AccuracySec=1s' in c for c in calls)
         assert calls[-1][:3] == ["sudo","systemctl","stop"]
     else:
         with pytest.raises(HTTPException): fw._enable_firewall(server, "firewalld" if scenario == "firewalld" else "ufw")
