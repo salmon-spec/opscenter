@@ -64,6 +64,13 @@ fi
   pnpm install --frozen-lockfile --prefer-offline
   node --test tests/*.test.mjs
   node ../modules/opencode_agent/test_ui.cjs
+  python3 - ../modules/electricity/page.py <<'PY'
+import re, runpy, subprocess, sys
+page = runpy.run_path(sys.argv[1])['render_page']()
+script = re.search(r'<script>(.*?)</script>', page, re.S).group(1)
+subprocess.run(['node', '--check'], input=script, text=True, check=True)
+print('1 electricity rendered JavaScript check passed')
+PY
   pnpm build
   node -e 'const fs=require("node:fs");const p=JSON.parse(fs.readFileSync("package.json"));fs.writeFileSync("dist/release.json",JSON.stringify({version:p.version,git_commit:process.argv[1]},null,2))' "$sha"
 )
