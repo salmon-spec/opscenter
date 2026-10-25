@@ -95,7 +95,7 @@ images+=("opscenter/extension-worker:$tag")
 docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=128m \
   "opscenter/module-opencode-agent:$tag" python -c 'import os,pathlib; assert os.geteuid()==10001; [p.read_bytes() for p in pathlib.Path("/opt/module").rglob("*") if p.is_file()]; import main,websocket; print("IMAGE_CHECK opencode readable")'
 docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=128m \
-  "opscenter/module-automation:$tag" python -c 'import os,pathlib; assert os.geteuid()==10001; [p.read_bytes() for p in pathlib.Path("/app").rglob("*") if p.is_file()]; from modules.automation.main import create_app; create_app(data_dir="/tmp/check"); print("IMAGE_CHECK automation readable")'
+  "opscenter/module-automation:$tag" python -c 'import os,pathlib; assert os.geteuid()==10001; [p.read_bytes() for root in ["/app/modules","/app/runtime"] for p in pathlib.Path(root).rglob("*") if p.is_file()]; from modules.automation.main import create_app; create_app(data_dir="/tmp/check"); print("IMAGE_CHECK automation readable")'
 docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=128m \
   "opscenter/opencode-runner:$tag" sh -ec 'test -r /etc/opencode/config.json; test "$(opencode-runner --version)" = 1.19.3; echo "IMAGE_CHECK runner readable"'
 
