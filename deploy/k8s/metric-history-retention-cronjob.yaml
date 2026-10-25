@@ -6,7 +6,8 @@ metadata:
   labels:
     app: opscenter-maintenance
 spec:
-  schedule: "20 * * * *"
+  schedule: "20 3 * * *"
+  timeZone: Etc/UTC
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 2
@@ -32,22 +33,31 @@ spec:
             command: ["/bin/sh","-c"]
             args:
             - |
-              DBURL=$(echo "$DATABASE_URL" | sed 's/postgresql+psycopg/postgresql/')
+              set -eu
+              DBURL=$(printf '%s' "$DATABASE_URL" | sed 's/postgresql+psycopg/postgresql/')
               BATCH=20000
               TOTAL=0
               START=$(date +%s)
               echo "retention: deleting metric_history rows older than 14 days (batch=$BATCH)"
               while true; do
                 NOW=$(date +%s)
-                if [ $((NOW-START)) -gt 1400 ]; then echo "time budget reached, total=$TOTAL"; break; fi
-                DELETED=$(psql "$DBURL" -tA -c "
+                if [ $((NOW-START)) -ge 1400 ]; then
+                  echo "retention budget reached: total=$TOTAL; remaining rows deferred to next run"
+                  break
+                fi
+                DELETED=$(PGOPTIONS='-c statement_timeout=60000 -c lock_timeout=5000' psql "$DBURL" -X -q -v ON_ERROR_STOP=1 -tA -c "
                   WITH doomed AS (
                     SELECT id FROM metric_history
                     WHERE timestamp < now() - interval '14 days'
                     ORDER BY timestamp
                     LIMIT $BATCH
-                  )
-                  DELETE FROM metric_history m USING doomed WHERE m.id = doomed.id RETURNING 1;" | grep -c "^1$" || true)
+                  ), deleted AS (
+                    DELETE FROM metric_history m USING doomed WHERE m.id = doomed.id RETURNING 1
+                  ) SELECT count(*) FROM deleted;") || {
+                    echo "retention failed: SQL error or timeout; total=$TOTAL" >&2
+                    exit 1
+                  }
+                case "$DELETED" in ''|*[!0-9]*) echo "retention failed: invalid row count" >&2; exit 1;; esac
                 TOTAL=$((TOTAL+DELETED))
                 echo "$(date -u +%FT%TZ) batch=$DELETED total=$TOTAL"
                 if [ "$DELETED" -lt "$BATCH" ]; then echo "retention complete: total=$TOTAL"; break; fi

@@ -1,6 +1,6 @@
 # OpsCenter 运维工作台
 
-> **当前发布索引：v5.5.20 · 2026-10-24**。源码、构建产物、模块、Agent、部署配置与 Git 历史均在本仓库维护。
+> **当前源码索引：v5.5.21 · 2026-10-25**。源码、构建产物、模块、Agent、部署配置与 Git 历史均在本仓库维护；生产版本以发布清单和验收记录为准。
 > 仓库：[GitHub](https://github.com/salmon-spec/opscenter) · Forgejo `root/opscenter`，两端 main 与发布标签同步。
 
 OpsCenter 是中文自托管运维工作台，提供服务广场与管理、主机台账和监控大屏、系统工具、K3s、告警、日志、OSS、模型用量及电费监测。
@@ -9,7 +9,7 @@ OpsCenter 是中文自托管运维工作台，提供服务广场与管理、主�
 
 | 组件 | 当前版本 | 代码/说明 |
 | --- | --- | --- |
-| 工作台前后端 | 5.5.20 | [Vue/Vite](frontend-vite/)、[发布说明](docs/releases/v5.5.20.md) |
+| 工作台前后端 | 5.5.21 | [Vue/Vite](frontend-vite/)、[发布说明](docs/releases/v5.5.21.md) |
 | OpsAgent | 2.6.4 | [源码](agent/opsagent.py)、[升级说明](agent/RELEASE-2.6.4.md) |
 | 电费监测 | 0.10.0 | [模块与通知](modules/electricity/README.md) |
 | 服务目录 | 0.7.4 | [模块说明](modules/README.md) |

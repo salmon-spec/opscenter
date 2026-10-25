@@ -34,6 +34,11 @@ if [[ ! -d $work ]]; then
 fi
 [[ $(git -C "$work" rev-parse HEAD) == "$sha" ]] || exit 1
 echo "CI_SOURCE sha=$sha tag=$tag work=$work"
+cmp -s "$0" "$work/deploy/ci/build.sh" || {
+  echo 'Installed CI gate differs from this source revision; install its verified build.sh first' >&2
+  exit 1
+}
+echo "CI_GATE_SCRIPT sha256=$(sha256sum "$0" | awk '{print $1}')"
 
 python3 -m compileall -q "$work/backend" "$work/modules"
 docker build -q -t "opscenter/backend:$tag" -f "$work/deploy/docker/backend.Dockerfile" "$work"
@@ -48,7 +53,7 @@ if docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=512m 
     for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms runtime extension_worker automation opencode_agent; do
       PYTHONPATH="/opt/opscenter/modules/$module:/opt/opscenter/modules:/opt/opscenter/backend" python -m pytest -q "modules/$module"
     done' >"$test_log" 2>&1; then
-  grep -E '[0-9]+ passed' "$test_log" | tail -1
+  grep -E '[0-9]+ passed' "$test_log"
 else
   echo "backend tests failed; root-only log: $test_log" >&2
   exit 1
@@ -82,4 +87,11 @@ images+=("opscenter/extension-worker:$tag")
 archive="$root/opscenter-images-$tag.tar"
 docker save "${images[@]}" -o "$archive"
 sha256sum "$archive" > "$archive.sha256"
+python3 - "$sha" "${images[@]}" > "$root/opscenter-release-$tag.json" <<'PY'
+import json, subprocess, sys
+images = json.loads(subprocess.check_output(['docker', 'image', 'inspect', *sys.argv[2:]]))
+print(json.dumps({'git_commit': sys.argv[1], 'images': [
+    {'tags': image['RepoTags'], 'id': image['Id']} for image in images
+]}, indent=2))
+PY
 echo "CI_OK sha=$sha tag=$tag archive=$archive"

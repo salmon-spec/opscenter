@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import hashlib
 import os
 import posixpath
 import shutil
@@ -33,6 +34,7 @@ _PROTECTED_WRITE_PREFIXES = ("/proc", "/sys", "/dev")
 class FileWriteRequest(BaseModel):
     content: str = Field(max_length=_TEXT_LIMIT)
     expected_mtime: Optional[float] = None
+    expected_sha256: Optional[str] = Field(None, pattern=r"^[0-9a-f]{64}$")
 
 
 class DirectoryCreateRequest(BaseModel):
@@ -156,6 +158,14 @@ def _filesystem(server: Server):
         client.close()
 
 
+def _editable_bytes(remote, sftp, path):
+    with (sftp.open(path, "rb") if remote else open(path, "rb")) as handle:
+        raw = handle.read(_TEXT_LIMIT + 1)
+    if len(raw) > _TEXT_LIMIT:
+        raise HTTPException(413, "文本编辑最大支持 1MB")
+    return raw
+
+
 def _entry(name: str, path: str, attrs) -> dict:
     mode = int(attrs.st_mode)
     kind = "directory" if stat.S_ISDIR(mode) else "symlink" if stat.S_ISLNK(mode) else "file"
@@ -206,11 +216,7 @@ def read_file(server_id: str, path: str):
             attrs = sftp.stat(target) if remote else os.stat(target)
             if attrs.st_size > _TEXT_LIMIT:
                 raise HTTPException(status_code=413, detail="文本预览最大支持 1MB")
-            if remote:
-                with sftp.open(target, "rb") as handle:
-                    raw = handle.read(_TEXT_LIMIT + 1)
-            else:
-                raw = Path(target).read_bytes()
+            raw = _editable_bytes(remote, sftp, target)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="文件不存在")
         except PermissionError:
@@ -219,7 +225,8 @@ def read_file(server_id: str, path: str):
         content = raw.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=415, detail="当前文件不是 UTF-8 文本，请使用下载功能")
-    return {"path": target, "content": content, "size": len(raw), "mtime": float(attrs.st_mtime)}
+    return {"path": target, "content": content, "size": len(raw), "mtime": float(attrs.st_mtime),
+            "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 @router.put("/servers/{server_id}/files/content", dependencies=[Depends(get_current_user)])
@@ -238,6 +245,9 @@ def write_file(server_id: str, path: str, payload: FileWriteRequest):
             attrs = sftp.stat(target) if remote else os.stat(target)
             if payload.expected_mtime is not None and abs(float(attrs.st_mtime) - payload.expected_mtime) > 0.001:
                 raise HTTPException(status_code=409, detail="文件已被其他进程修改，请重新加载")
+            original_digest = hashlib.sha256(_editable_bytes(remote, sftp, target)).hexdigest()
+            if payload.expected_sha256 is not None and original_digest != payload.expected_sha256:
+                raise HTTPException(409, "文件内容已被其他进程修改，请重新加载")
             if remote:
                 temporary = target + f".opscenter-{uuid.uuid4().hex}.tmp"
                 try:
@@ -248,8 +258,10 @@ def write_file(server_id: str, path: str, payload: FileWriteRequest):
                         raise OSError("Incomplete remote write")
                     sftp.chmod(temporary, stat.S_IMODE(attrs.st_mode))
                     sftp.chown(temporary, attrs.st_uid, attrs.st_gid)
+                    # shortcut: SFTP has no atomic CAS; use cooperative locking if strict external-writer coordination is required.
                     current = sftp.stat(target)
-                    if (current.st_mtime, current.st_size) != (attrs.st_mtime, attrs.st_size):
+                    if ((current.st_mtime, current.st_size) != (attrs.st_mtime, attrs.st_size)
+                            or hashlib.sha256(_editable_bytes(remote, sftp, target)).hexdigest() != original_digest):
                         raise HTTPException(409, "文件已被其他进程修改，请重新加载")
                     # OpenSSH atomic replacement keeps the original intact on failure.
                     sftp.posix_rename(temporary, target)
@@ -261,9 +273,19 @@ def write_file(server_id: str, path: str, payload: FileWriteRequest):
                 mtime = float(sftp.stat(target).st_mtime)
             else:
                 temporary = target + f".opscenter-{uuid.uuid4().hex}.tmp"
-                Path(temporary).write_bytes(raw)
-                os.chmod(temporary, stat.S_IMODE(attrs.st_mode))
-                os.replace(temporary, target)
+                try:
+                    with open(temporary, "xb") as handle:
+                        handle.write(raw)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.chmod(temporary, stat.S_IMODE(attrs.st_mode))
+                    if os.name == "posix":
+                        os.chown(temporary, attrs.st_uid, attrs.st_gid)
+                    if hashlib.sha256(_editable_bytes(False, None, target)).hexdigest() != original_digest:
+                        raise HTTPException(409, "文件内容已被其他进程修改，请重新加载")
+                    os.replace(temporary, target)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
                 mtime = float(os.stat(target).st_mtime)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="文件不存在")
@@ -271,7 +293,7 @@ def write_file(server_id: str, path: str, payload: FileWriteRequest):
             raise HTTPException(status_code=403, detail="没有文件写入权限")
         except OSError:
             raise HTTPException(status_code=502, detail="保存结果未确认，请重新加载核对；完整写入后才会替换原文件")
-    return {"ok": True, "path": target, "size": len(raw), "mtime": mtime}
+    return {"ok": True, "path": target, "size": len(raw), "mtime": mtime, "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 @router.post("/servers/{server_id}/files/directories", dependencies=[Depends(get_current_user)], status_code=201)

@@ -62,7 +62,7 @@ import { useHostContext } from '../hostContext'
 const { selectedHostId,currentHost,refreshHosts }=useHostContext()
 const path=ref('/'),pathInput=ref('/'),items=ref([]),loading=ref(false),hydrated=ref(false),error=ref(''),search=ref(''),showHidden=ref(false),uploadInput=ref(null)
 const meta=reactive({total:0,source:'',duration_ms:undefined,truncated:false,parent:'/'})
-const editor=reactive({path:'',name:'',content:'',mtime:null,loading:false,saving:false})
+const editor=reactive({path:'',name:'',content:'',mtime:null,sha256:null,loading:false,saving:false})
 const trashOpen=ref(false),trashLoading=ref(false),trashItems=ref([])
 let controller=null
 const filteredItems=computed(()=>{const needle=search.value.trim().toLowerCase();return needle?items.value.filter(item=>item.name.toLowerCase().includes(needle)):items.value})
@@ -83,9 +83,9 @@ async function openTrash(){trashOpen.value=true;await loadTrash()}
 async function loadTrash(){if(!selectedHostId.value)return;trashLoading.value=true;try{const data=await api.get(`/servers/${selectedHostId.value}/files/trash`);trashItems.value=data.items||[]}catch(e){toast(`回收站读取失败：${e.message}`,'err')}finally{trashLoading.value=false}}
 async function restoreItem(item){let target=item.original_path||window.prompt('该旧条目未记录原路径，请输入完整恢复路径：',joinPath(path.value,item.name));if(!target)return;try{await api.post(`/servers/${selectedHostId.value}/files/trash/restore`,{trash_name:item.trash_name,target});toast('文件已恢复','ok');await loadTrash();await loadFiles()}catch(e){if(e.status===409){target=window.prompt('原路径已有同名文件，请输入新的完整恢复路径：',target);if(target)try{await api.post(`/servers/${selectedHostId.value}/files/trash/restore`,{trash_name:item.trash_name,target});toast('文件已恢复','ok');await loadTrash();await loadFiles()}catch(retry){toast(`恢复失败：${retry.message}`,'err')}}else toast(`恢复失败：${e.message}`,'err')}}
 async function purgeItem(item){const name=window.prompt(`彻底删除“${item.name}”后无法恢复。请输入文件名确认：`);if(name!==item.name)return;try{await api.post(`/servers/${selectedHostId.value}/files/trash/purge`,{trash_name:item.trash_name,confirm_name:name});toast('已彻底删除','ok');await loadTrash()}catch(e){toast(`彻底删除失败：${e.message}`,'err')}}
-async function openEditor(item){Object.assign(editor,{path:item.path,name:item.name,content:'',mtime:null,loading:true,saving:false});try{const data=await api.get(`/servers/${selectedHostId.value}/files/content`,{path:item.path});editor.content=data.content;editor.mtime=data.mtime}catch(e){toast(`读取失败：${e.message}`,'err');closeEditor()}finally{editor.loading=false}}
-function closeEditor(){Object.assign(editor,{path:'',name:'',content:'',mtime:null,loading:false,saving:false})}
-async function saveFile(){editor.saving=true;try{const data=await api.put(`/servers/${selectedHostId.value}/files/content`,{content:editor.content,expected_mtime:editor.mtime},{query:{path:editor.path}});editor.mtime=data.mtime;toast('文件已保存','ok');closeEditor();await loadFiles()}catch(e){toast(`保存失败：${e.message}`,'err')}finally{editor.saving=false}}
+async function openEditor(item){Object.assign(editor,{path:item.path,name:item.name,content:'',mtime:null,sha256:null,loading:true,saving:false});try{const data=await api.get(`/servers/${selectedHostId.value}/files/content`,{path:item.path});editor.content=data.content;editor.mtime=data.mtime;editor.sha256=data.sha256}catch(e){toast(`读取失败：${e.message}`,'err');closeEditor()}finally{editor.loading=false}}
+function closeEditor(){Object.assign(editor,{path:'',name:'',content:'',mtime:null,sha256:null,loading:false,saving:false})}
+async function saveFile(){editor.saving=true;try{const data=await api.put(`/servers/${selectedHostId.value}/files/content`,{content:editor.content,expected_mtime:editor.mtime,expected_sha256:editor.sha256},{query:{path:editor.path}});editor.mtime=data.mtime;editor.sha256=data.sha256;toast('文件已保存','ok');closeEditor();await loadFiles()}catch(e){toast(`保存失败：${e.message}`,'err')}finally{editor.saving=false}}
 watch(selectedHostId,()=>{controller?.abort();path.value='/';pathInput.value='/';items.value=[];trashItems.value=[];trashOpen.value=false;hydrated.value=false;loadFiles()})
 onMounted(async()=>{await refreshHosts();loadFiles()})
 </script>

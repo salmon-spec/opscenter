@@ -1,5 +1,6 @@
 """Failure-path regressions from the October 23 production audit."""
 from contextlib import nullcontext
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import Mock
 import uuid
@@ -28,7 +29,7 @@ def test_remote_save_failure_preserves_original(monkeypatch, failure):
         files[target] = files.pop(source)
     sftp = SimpleNamespace(normalize=lambda path: path,
         stat=lambda path: SimpleNamespace(st_size=len(files[path]), st_mtime=10, st_mode=0o640, st_uid=1000, st_gid=1000),
-        open=lambda path, mode: Writer(path), chmod=lambda *args: ownership.append(args),
+        open=lambda path, mode: BytesIO(files[path]) if mode == "rb" else Writer(path), chmod=lambda *args: ownership.append(args),
         chown=lambda *args: ownership.append(args), posix_rename=rename,
         remove=lambda path: files.pop(path, None))
     monkeypatch.setattr(file_control, "_server", lambda _: object())
@@ -61,7 +62,7 @@ def test_ufw_rule_without_protocol_can_be_deleted_by_verified_content(monkeypatc
     monkeypatch.setattr(firewall_control, "_detect", lambda _: "ufw")
     monkeypatch.setattr(firewall_control, "_execute", lambda _, args: calls.append(args) or "[ 2] 80 ALLOW IN Anywhere")
     firewall_control.delete_firewall_rule("host", firewall_control.FirewallDeleteRequest(rule_id="2",port="80",protocol="any"))
-    assert calls[-1] == ["sudo","ufw","--force","delete","allow","in","from","any","to","any","port","80"]
+    assert calls[-1] == ["sudo","ufw","--force","delete","allow","in","from","0.0.0.0/0","to","0.0.0.0/0","port","80"]
 
 
 @pytest.mark.parametrize("sample,expected", [({"cpu_percent": 0}, {"cpu": 0}), ({"cpu_percent": float("nan")}, {}), ({"cpu_percent": 12, "timestamp": 0}, {})])

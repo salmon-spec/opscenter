@@ -21,7 +21,7 @@ from app.ssh_manager import get_ssh_client, ssh_exec
 
 router = APIRouter(prefix="/api/v2", tags=["firewall"])
 _PORT_RE = re.compile(r"^(\d{1,5})(?:[-:](\d{1,5}))?$")
-_UFW_RULE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+(ALLOW|DENY|REJECT)\s+(IN|OUT)?\s*(.*)$", re.I)
+_UFW_RULE_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)(?:\s+\((v6)\))?\s+(ALLOW|DENY|REJECT)\s+(IN|OUT)?\s*(.*)$", re.I)
 
 
 class FirewallRuleRequest(BaseModel):
@@ -39,6 +39,8 @@ class FirewallDeleteRequest(BaseModel):
     source: Optional[str] = None
     action: Optional[Literal["allow", "deny", "reject"]] = None
     direction: Optional[Literal["in", "out"]] = None
+    family: Optional[Literal["ipv4", "ipv6"]] = None
+    comment: Optional[str] = None
 
 
 class FirewallStateRequest(BaseModel):
@@ -126,7 +128,12 @@ def _parse_ufw(output: str) -> list[dict]:
             continue
         target = match.group(2)
         port, _, protocol = target.partition("/")
-        rules.append({"id": match.group(1), "port": port, "protocol": protocol or "any", "action": match.group(3).lower(), "source": match.group(5).strip() or "any", "direction": (match.group(4) or "IN").lower()})
+        source, _, comment = match.group(6).partition("#")
+        source = re.sub(r"\s+\(v6\)$", "", source.strip(), flags=re.I)
+        rules.append({"id": match.group(1), "port": port, "protocol": protocol or "any",
+                      "action": match.group(4).lower(), "source": source or "any",
+                      "direction": (match.group(5) or "IN").lower(),
+                      "family": "ipv6" if match.group(3) else "ipv4", "comment": comment.strip()})
     return rules
 
 
@@ -185,6 +192,8 @@ def delete_firewall_rule(server_id: str, payload: FirewallDeleteRequest):
         if (not rule or _port(rule["port"])[0] != port or rule["protocol"] != payload.protocol
                 or (payload.source is not None and rule["source"] != payload.source)
                 or (payload.direction is not None and rule["direction"] != payload.direction)
+                or (payload.family is not None and rule["family"] != payload.family)
+                or (payload.comment is not None and rule["comment"] != payload.comment)
                 or (payload.action is not None and rule["action"] != payload.action)):
             raise HTTPException(status_code=409, detail="防火墙规则已变化，请刷新后重试")
     ssh_port = int(server.ssh_port or 22)
@@ -193,8 +202,11 @@ def delete_firewall_rule(server_id: str, payload: FirewallDeleteRequest):
     if backend == "ufw":
         # Delete the verified rule itself so a concurrent renumber cannot select SSH.
         source = _source(rule["source"])
+        # Explicit networks keep a v4 deletion from also selecting its v6 twin.
+        destination = "::/0" if rule["family"] == "ipv6" else "0.0.0.0/0"
+        source = destination if source == "any" else source
         _execute(server, ["sudo", "ufw", "--force", "delete", rule["action"], rule["direction"],
-                          "from", source, "to", "any", "port", port.replace("-", ":"),
+                          "from", source, "to", destination, "port", port.replace("-", ":"),
                           *(["proto", payload.protocol] if payload.protocol != "any" else [])])
     else:
         if payload.protocol == "any":

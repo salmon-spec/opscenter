@@ -362,13 +362,19 @@ def _start_periodic(name, factory) -> asyncio.Task:
     ))
 
 # === Background Health Check ===
+def _is_active_host(server, active_ids):
+    return getattr(server, "enabled", True) and (active_ids is None or str(getattr(server, "id", "")) in active_ids)
+
+
 def _run_server_health_check():
     """Check host reachability without holding a DB session during socket I/O."""
     try:
+        active_ids = active_host_ids()
         with get_db() as db:
             targets = [
                 (srv.id, srv.agent_type, srv.host, srv.lan_ip, srv.ssh_port or 22, srv.agent_port or 19100)
                 for srv in db.query(Server).all()
+                if _is_active_host(srv, active_ids)
             ]
 
         results = {}
@@ -412,9 +418,10 @@ def _run_agent_health_check():
     collection.  A running service's on-host config is authoritative for its
     port, token and version; the token is never logged or returned to clients.
     """
+    active_ids = active_host_ids()
     with get_db() as db:
         local_srv = db.query(Server).filter(Server.agent_type == "local").first()
-        if local_srv:
+        if local_srv and _is_active_host(local_srv, active_ids):
             try:
                 local_data = _fetch_monitoring_sample(local_srv)
                 if local_data:
@@ -434,6 +441,8 @@ def _run_agent_health_check():
 
         remote_servers = db.query(Server).filter(Server.agent_type != "local").order_by(Server.id).all()
         for srv in remote_servers:
+            if not _is_active_host(srv, active_ids):
+                continue
             try:
                 result = check_agent_status(srv)
                 new_status = result.get("status", "unknown")
@@ -2768,9 +2777,12 @@ def _agent_request(server, path, timeout=5):
 
 def _run_network_aggregation_once() -> None:
     try:
+        active_ids = active_host_ids()
         with get_db() as db:
             servers = db.query(Server).filter(Server.enabled == True).all()
             for srv in servers:
+                if not _is_active_host(srv, active_ids):
+                    continue
                 data = _agent_request(srv, "/api/v1/network")
                 if not data:
                     continue
@@ -3698,7 +3710,7 @@ def _collect_agent_metrics():
                     agent_version=srv.agent_version,
                 )
                 for srv in db.query(Server).all()
-                if getattr(srv, "enabled", True) and (active_ids is None or str(srv.id) in active_ids) and (srv.agent_type == "local" or (
+                if _is_active_host(srv, active_ids) and (srv.agent_type == "local" or (
                     srv.agent_status != "not_deployed" and bool(srv.agent_token)
                 ))
             ]
