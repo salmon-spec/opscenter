@@ -1295,6 +1295,8 @@ async def startup():
                 print(f"[modules] seed skipped: {exc}", flush=True)
             break
         except Exception:
+            if i == 29:
+                raise
             await asyncio.sleep(2)
 
     # Preview uses an isolated database and intentionally runs no scanners/timers.
@@ -1302,7 +1304,6 @@ async def startup():
         return
 
     # Start Agent health check background task
-    import asyncio
     _start_periodic("agent-health", _agent_health_check_loop)
     # v3.29 T4: 服务健康检查后台循环（间隔/阈值走环境变量）
     _start_periodic("service-health", service_health_loop)
