@@ -12,7 +12,8 @@ from app import file_control as files, firewall_control as fw
 @pytest.mark.parametrize("failure", [None, "race", "interrupted"])
 def test_upload_publishes_complete_file_without_overwriting(monkeypatch, failure):
     contents = {}
-    target = "/tmp/upload.txt"
+    filename = "a" * 255 if failure is None else "upload.txt"
+    target = "/tmp/" + filename
     class Writer(BytesIO):
         def __init__(self, path): super().__init__(); self.path = path
         def write(self, raw):
@@ -23,6 +24,7 @@ def test_upload_publishes_complete_file_without_overwriting(monkeypatch, failure
         def close(self): contents[self.path] = self.getvalue(); super().close()
     def opening(path, mode):
         assert mode == "wx" and path != target
+        assert len(path.rsplit('/', 1)[1]) <= 255
         if failure == "race": contents[target] = b"other task"
         return Writer(path)
     def attrs(path):
@@ -37,11 +39,11 @@ def test_upload_publishes_complete_file_without_overwriting(monkeypatch, failure
     monkeypatch.setattr(files, "_filesystem", lambda _:nullcontext((True,sftp,None)))
     if failure:
         with pytest.raises(HTTPException) as error:
-            files.upload_file("host", files.FileUploadRequest(parent="/tmp", name="upload.txt", content_base64="bmV3"))
+            files.upload_file("host", files.FileUploadRequest(parent="/tmp", name=filename, content_base64="bmV3"))
         assert error.value.status_code == (409 if failure == "race" else 502)
         assert contents == ({target:b"other task"} if failure == "race" else {})
     else:
-        assert files.upload_file("host", files.FileUploadRequest(parent="/tmp", name="upload.txt", content_base64="bmV3"))["ok"]
+        assert files.upload_file("host", files.FileUploadRequest(parent="/tmp", name=filename, content_base64="bmV3"))["ok"]
         assert contents == {target:b"new"}
 
 

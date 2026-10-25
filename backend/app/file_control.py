@@ -329,7 +329,7 @@ def upload_file(server_id: str, payload: FileUploadRequest):
             parent = sftp.normalize(parent)
         target = posixpath.join(parent, name) if remote else os.path.join(parent, name)
         _ensure_writable(target)
-        temporary = target + f".opscenter-{uuid.uuid4().hex}.tmp"
+        temporary = (posixpath.join if remote else os.path.join)(parent, f".opscenter-{uuid.uuid4().hex}.tmp")
         try:
             if remote:
                 with sftp.open(temporary, "wx") as handle:
