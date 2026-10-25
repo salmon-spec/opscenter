@@ -99,8 +99,8 @@ docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=128m \
 docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=128m \
   "opscenter/opencode-runner:$tag" sh -ec 'test -r /etc/opencode/config.json; test "$(opencode-runner --version)" = 1.19.3; echo "IMAGE_CHECK runner readable"'
 
-archive="$root/opscenter-images-$tag.tar"
-docker save "${images[@]}" -o "$archive"
+archive="$root/opscenter-images-$tag.tar.gz"
+docker save "${images[@]}" | gzip -1 > "$archive"
 sha256sum "$archive" > "$archive.sha256"
 python3 - "$sha" "${images[@]}" > "$root/opscenter-release-$tag.json" <<'PY'
 import json, subprocess, sys

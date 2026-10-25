@@ -33,6 +33,8 @@ def active_host_ids():
 
 
 def publish_host_inventory_telemetry(server, opener=None) -> bool:
+    if not getattr(server, "enabled", True):
+        return False
     url = os.getenv("HOST_INVENTORY_INGEST_URL", "").strip()
     token_path = os.getenv("HOST_INVENTORY_INGEST_TOKEN_FILE", "").strip()
     if not url or not token_path:

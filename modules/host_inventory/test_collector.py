@@ -10,8 +10,17 @@ from main import app
 from storage import HostInventoryStore
 
 
+def test_source_sync_excludes_disabled_historical_hosts(monkeypatch):
+    response = MagicMock()
+    response.__enter__.return_value.read.return_value = json.dumps([
+        {"id": "active", "enabled": True}, {"id": "retired", "enabled": False}, {"id": "legacy"},
+    ]).encode()
+    monkeypatch.setattr(collector, "urlopen", lambda *a, **kw: response)
+    assert [h["id"] for h in HostInventoryReader(FakeStore()).fetch_source()] == ["active", "legacy"]
+
+
 def test_module_version_matches_release():
-    assert TestClient(app).get("/api/v1/version").json()["version"] == "0.2.7"
+    assert TestClient(app).get("/api/v1/version").json()["version"] == "0.2.8"
 
 
 def test_internal_asset_ids_and_log_coverage_are_token_scoped(monkeypatch, tmp_path):

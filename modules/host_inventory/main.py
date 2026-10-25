@@ -17,7 +17,7 @@ from storage import HostInventoryStore
 
 app = create_module_app(
     key="host-inventory",
-    version="0.2.7",
+    version="0.2.8",
     summary_provider=summary_provider,
     findings_provider=findings_provider,
     capabilities=["summary:read", "findings:read", "hosts:read", "hosts:create", "hosts:update", "hosts:archive"],

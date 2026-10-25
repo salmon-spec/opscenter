@@ -1425,6 +1425,7 @@ def list_servers(response: Response):
                 "id": str(s.id),
                 "name": s.name,
                 "host": s.host,
+                "enabled": bool(s.enabled),
                 "ssh_port": s.ssh_port,
                 "ssh_user": s.ssh_user,
                 "tags": s.tags or [],

@@ -143,7 +143,7 @@ function itemActive(item) { return item.matches ? item.matches.some((path) => ro
 
 // 顶栏时钟 + 主机概览
 const nowStr = ref('')
-const hostSummary = ref({ total: 0, online: 0 })
+const hostSummary = computed(() => ({ total: hosts.value.length, online: hosts.value.filter((host) => host.status === 'online').length }))
 const runningModules = ref([])
 let clockTimer = null
 
@@ -162,11 +162,7 @@ async function loadModules() {
 
 async function loadHosts() {
   try {
-    const list = await refreshHosts()
-    hostSummary.value = {
-      total: list.length,
-      online: list.filter((s) => s.status === 'online').length,
-    }
+    await refreshHosts()
   } catch { /* 后端未就绪时静默 */ }
 }
 

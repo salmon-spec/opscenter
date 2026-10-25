@@ -4,6 +4,16 @@ from types import SimpleNamespace
 from app.host_inventory_bridge import publish_host_inventory_telemetry
 
 
+def test_disabled_historical_host_never_publishes_registration(monkeypatch, tmp_path):
+    token = tmp_path / "token"
+    token.write_text("test-token")
+    monkeypatch.setenv("HOST_INVENTORY_INGEST_URL", "http://inventory/telemetry")
+    monkeypatch.setenv("HOST_INVENTORY_INGEST_TOKEN_FILE", str(token))
+    def unexpected_request(*args, **kwargs):
+        raise AssertionError("disabled host must not be registered")
+    assert publish_host_inventory_telemetry(SimpleNamespace(id="retired", enabled=False), unexpected_request) is False
+
+
 def test_publish_sends_only_host_health_fields(monkeypatch, tmp_path):
     token_file = tmp_path / "token"
     token_file.write_text("test-secret", encoding="utf-8")

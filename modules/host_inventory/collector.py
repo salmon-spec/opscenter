@@ -55,7 +55,7 @@ class HostInventoryReader:
             "kubernetes_node_name": str(host.get("kubernetes_node_name") or ""),
             "node_role": str(host.get("node_role") or ""),
             "runtime_type": str(host.get("runtime_type") or ""),
-        } for host in source_hosts]
+        } for host in source_hosts if host.get("enabled", True)]
 
     def collect(self) -> tuple[dict, list[dict], list[dict]]:
         global _last_sync
