@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash git python
     && npm install -g --ignore-scripts opencode-ai@${OPENCODE_VERSION} \
     && ln -s /usr/local/lib/node_modules/opencode-ai/node_modules/opencode-linux-x64/bin/opencode /usr/local/bin/opencode-runner \
     && mkdir /workspace /runner-data && chown node:10001 /workspace /runner-data && chmod 2770 /workspace /runner-data
-COPY modules/opencode_agent/opencode.json /etc/opencode/config.json
+COPY --chown=node:node modules/opencode_agent/opencode.json /etc/opencode/config.json
 ENV OPENCODE_CONFIG=/etc/opencode/config.json OPENCODE_DISABLE_DEFAULT_PLUGINS=true \
     OPENCODE_DISABLE_EXTERNAL_SKILLS=true OPENCODE_DISABLE_PROJECT_CONFIG=false \
     GIT_CONFIG_GLOBAL=/runner-data/config/opscenter.gitconfig \
