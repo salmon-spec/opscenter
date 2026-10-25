@@ -59,7 +59,7 @@ def test_ufw_comments_and_address_family_are_preserved(monkeypatch, family, mark
     assert calls[-1] == ["sudo", "ufw", "--force", "delete", "allow", "in", "from", network, "to", network, "port", "8080", "proto", "tcp"]
 
 
-def test_retired_hosts_are_excluded_from_agent_and_network_loops(monkeypatch):
+def test_retired_hosts_are_excluded_from_background_host_work(monkeypatch):
     retired = SimpleNamespace(id="retired", enabled=True, name="retired")
     class Query:
         def filter(self, *a): return self
@@ -69,13 +69,15 @@ def test_retired_hosts_are_excluded_from_agent_and_network_loops(monkeypatch):
     db = SimpleNamespace(query=lambda _: Query(), commit=lambda: None)
     monkeypatch.setattr(main, "get_db", lambda: nullcontext(db))
     monkeypatch.setattr(main, "active_host_ids", lambda: {"active"})
-    check, publish, network = Mock(), Mock(), Mock()
+    check, publish, network, ssh = Mock(), Mock(), Mock(), Mock()
     monkeypatch.setattr(main, "check_agent_status", check)
     monkeypatch.setattr(main, "publish_host_inventory_telemetry", publish)
     monkeypatch.setattr(main, "_agent_request", network)
+    monkeypatch.setattr(main, "get_ssh_client", ssh)
     main._run_agent_health_check()
     main._run_network_aggregation_once()
-    check.assert_not_called(); publish.assert_not_called(); network.assert_not_called()
+    assert main._scan_all_impl()["servers"] == []
+    check.assert_not_called(); publish.assert_not_called(); network.assert_not_called(); ssh.assert_not_called()
     assert main._is_active_host(SimpleNamespace(id="active", enabled=True), {"active"})
     assert not main._is_active_host(SimpleNamespace(id="active", enabled=False), None)
     assert main._is_active_host(SimpleNamespace(id="active", enabled=True), None)

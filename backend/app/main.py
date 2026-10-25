@@ -3133,11 +3133,13 @@ _service_scan_lock = threading.Lock()
 
 
 def _scan_all_impl():
+    active_ids = active_host_ids()
     with get_db() as db:
         total_added = 0
         total_updated = 0
         server_results = []
-        servers = db.query(Server).order_by(Server.created_at.asc()).all()
+        servers = [srv for srv in db.query(Server).order_by(Server.created_at.asc()).all()
+                   if _is_active_host(srv, active_ids)]
         for srv in servers:
             sr_detail = {"server_id": str(srv.id), "name": srv.name, "host": srv.host, "source": "", "added": 0, "updated": 0, "status": "ok"}
             try:
