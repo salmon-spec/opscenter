@@ -11,8 +11,9 @@ from app.config import _settings
 
 def status() -> dict:
     url = _settings.vaultwarden_url.strip().rstrip("/")
+    workbench_origin = _settings.vaultwarden_workbench_origin.strip().rstrip("/")
     result = {
-        "configured": bool(url), "available": False, "url": "", "version": "",
+        "configured": bool(url and workbench_origin), "available": False, "url": "", "version": "", "workbench_origin": "",
         "error": "", "checked_at": datetime.now(timezone.utc).isoformat(),
     }
     if not url:
@@ -28,6 +29,17 @@ def status() -> dict:
         result["error"] = "密码库地址必须是独立的 HTTPS 站点，且不包含账号、路径或参数"
         return result
     result["url"] = url
+    try:
+        parent = urlsplit(workbench_origin)
+        if (parent.scheme != "https" or not parent.hostname or parent.username or parent.password
+                or parent.path or parent.query or parent.fragment or parent.netloc.endswith(":")
+                or parent.netloc.lower() == parsed.netloc.lower()):
+            raise ValueError("invalid workbench origin")
+        parent.port
+    except ValueError:
+        result["error"] = "工作台需要配置独立的 HTTPS 来源"
+        return result
+    result["workbench_origin"] = workbench_origin
     started = monotonic()
     try:
         # A separate session never inherits the operator's Authorization or cookies.
@@ -42,6 +54,11 @@ def status() -> dict:
             page = session.get(url + "/", **options)
             if page.status_code != 200 or "text/html" not in page.headers.get("Content-Type", ""):
                 raise ValueError("invalid vault page")
+            policy = page.headers.get("Content-Security-Policy", "")
+            ancestors = next((rule.split()[1:] for rule in policy.split(";") if rule.strip().startswith("frame-ancestors ")), [])
+            if workbench_origin not in ancestors:
+                result["error"] = "密码库尚未允许此工作台内嵌"
+                return result
             result.update(available=True, version=config["version"][:80])
     except requests.exceptions.SSLError:
         result["error"] = "密码库证书验证失败，请检查证书有效期和信任链"

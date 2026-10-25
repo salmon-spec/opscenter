@@ -36,8 +36,8 @@ MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 BUILTIN_MODULES = {
     "password-manager": {
-        "name": "密码管理", "version": "0.1.0",
-        "description": "打开个人密码库，查看连接状态与手机、浏览器客户端配置",
+        "name": "密码管理", "version": "0.2.0",
+        "description": "在工作台中登录、解锁和使用个人密码库",
         "icon": "PW", "entry_url": "/v3/#/extensions/password-manager",
         "runtime": "native", "isolation": "independent-origin",
         "capabilities": ["vault:open", "health:read"], "permissions": ["password-manager:read"],

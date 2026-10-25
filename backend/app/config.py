@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     containerized: bool = False
     vaultwarden_url: str = ""
     vaultwarden_ca_file: str = ""
+    vaultwarden_workbench_origin: str = ""
 
     # ── Alerting (v3.26, F4/F5) ──
     alerting_enabled: bool = True                       # ALERTING_ENABLED=false 一键关停告警引擎

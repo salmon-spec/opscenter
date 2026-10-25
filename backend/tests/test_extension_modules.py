@@ -36,6 +36,7 @@ def _fresh_db(monkeypatch):
     monkeypatch.setattr(command_code, "COMMAND_CODE_API_BASE", "https://api.commandcode.ai")
     monkeypatch.setattr(auth, "AUTH_ENABLED", False)
     monkeypatch.setattr(auth, "OPERATOR_TOKEN", "")
+    monkeypatch.setattr(extension_modules_service.password_manager._settings, "vaultwarden_workbench_origin", "https://workbench.example")
     seed_extension_modules()
     yield
     Base.metadata.drop_all(bind=engine)
@@ -695,7 +696,7 @@ def test_password_manager_probe_verifies_tls_without_operator_credentials(monkey
         assert 'Authorization' not in session.headers
         assert kwargs == {'timeout': 4, 'verify': '/trusted-ca.crt', 'allow_redirects': False}
         calls.append(url)
-        return SimpleNamespace(status_code=200, headers={'Content-Type': 'text/html'},
+        return SimpleNamespace(status_code=200, headers={'Content-Type': 'text/html', 'Content-Security-Policy': "frame-ancestors 'self' https://workbench.example;"},
                                raise_for_status=lambda: None, json=lambda: {'version': '1.0', 'secret': 'never-return-this'})
     monkeypatch.setattr(session, 'get', get)
     monkeypatch.setattr(vault.requests, 'Session', lambda: session)
@@ -751,3 +752,23 @@ def test_password_manager_registry_authentication_and_hidden_entry(monkeypatch):
     assert client.get(BASE + '/password-manager/status').status_code == 401
     assert client.post(BASE + '/password-manager/health').status_code == 401
     assert client.get(BASE + '/password-manager/status', headers={'Authorization': 'Bearer test-vault-operator'}).status_code == 200
+
+
+@pytest.mark.parametrize('origin', ['', 'http://workbench.example', 'https://user:password@workbench.example', 'https://workbench.example/path', 'https://vault.example', 'https://workbench.example:invalid'])
+def test_password_manager_requires_an_independent_secure_parent(monkeypatch, origin):
+    from app.services import password_manager as vault
+    monkeypatch.setattr(vault._settings, 'vaultwarden_url', 'https://vault.example')
+    monkeypatch.setattr(vault._settings, 'vaultwarden_workbench_origin', origin)
+    monkeypatch.setattr(vault.requests, 'Session', lambda: pytest.fail('invalid parent reached network'))
+    assert not vault.status()['available']
+
+
+@pytest.mark.parametrize('policy', ['', "frame-ancestors 'self';", 'frame-ancestors https://different.example;', 'frame-ancestors https://workbench.example.evil;'])
+def test_password_manager_requires_exact_frame_ancestor_permission(monkeypatch, policy):
+    from app.services import password_manager as vault
+    monkeypatch.setattr(vault._settings, 'vaultwarden_url', 'https://vault.example')
+    session = vault.requests.Session()
+    monkeypatch.setattr(session, 'get', lambda *args, **kwargs: SimpleNamespace(status_code=200, headers={'Content-Type': 'text/html', 'Content-Security-Policy': policy}, raise_for_status=lambda: None, json=lambda: {'version': '1.0'}))
+    monkeypatch.setattr(vault.requests, 'Session', lambda: session)
+    result = vault.status()
+    assert not result['available'] and result['error']
