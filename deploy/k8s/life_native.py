@@ -1,6 +1,6 @@
 """Independent browser origins keep upstream scripts away from workbench storage."""
 PORTS = {'subscriptions': (31191, 31591), 'home-inventory': (31192, 31592), 'life-reminders': (31193, 31593)}
-PARENTS = ['http://10.66.66.13:30088', 'https://10.66.66.13']
+PARENTS = ['http://10.66.66.13:30088', 'https://10.66.66.13', 'http://10.66.66.15:30088']
 
 
 def gateway(upstream_port):

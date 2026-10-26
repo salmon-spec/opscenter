@@ -32,6 +32,7 @@ def manifests(tag):
                'LIFE_CREDENTIAL_KEY_FILE': '/run/life/credential-key'}
         env |= {'LIFE_NATIVE_HTTP_ORIGIN': f'http://10.66.66.13:{http}',
                 'LIFE_NATIVE_HTTPS_ORIGIN': f'https://10.66.66.13:{https}',
+                'LIFE_NATIVE_ORIGIN_ALIASES': json.dumps({'http://10.66.66.15:30088': f'http://10.66.66.15:{http}'}),
                 'LIFE_NATIVE_PARENTS': ' '.join(native['PARENTS']), 'LIFE_NATIVE_LOGIN_FILE': '/run/life/native-login'}
         if key == 'life-reminders':
             env |= {'LIFE_SUBSCRIPTIONS_URL': 'http://module-subscriptions:8080',

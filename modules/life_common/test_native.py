@@ -80,3 +80,16 @@ def test_proxy_cookie_allowlist():
     assert native.upstream_cookies(raw, 'vikunja') == 'vikunja_refresh_token=refresh'
     assert native.upstream_cookies(raw, 'wallos', True) == 'PHPSESSID=tls'
     assert native.upstream_cookies('PHPSESSID=unscoped', 'wallos') == ''
+
+
+def test_alternate_workbench_origin_keeps_same_site_cookies(monkeypatch):
+    c = client(monkeypatch)
+    monkeypatch.setenv('LIFE_NATIVE_PARENTS', 'http://workbench.test http://alternate.test')
+    monkeypatch.setenv('LIFE_NATIVE_ORIGIN_ALIASES', '{"http://alternate.test":"http://alternate.test:31191"}')
+    data = issue(c, 'http://alternate.test').json()
+    assert data['origin'] == 'http://alternate.test:31191'
+    assert c.post('/_ops/launch', data={'ticket': data['ticket']}, headers={'Origin': 'http://workbench.test'}).status_code == 401
+    data = issue(c, 'http://alternate.test').json()
+    assert c.post('/_ops/launch', data={'ticket': data['ticket']}, headers={'Origin': 'http://alternate.test'}).status_code == 200
+    assert c.get('/_ops/verify', headers={'X-Forwarded-Method': 'POST', 'Origin': data['origin']}).status_code == 204
+    assert issue(c, 'http://untrusted.test').status_code == 403

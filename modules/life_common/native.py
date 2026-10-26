@@ -17,7 +17,15 @@ from .core import secret
 
 
 def origins():
-    return [os.getenv('LIFE_NATIVE_HTTP_ORIGIN', ''), os.getenv('LIFE_NATIVE_HTTPS_ORIGIN', '')]
+    return [os.getenv('LIFE_NATIVE_HTTP_ORIGIN', ''), os.getenv('LIFE_NATIVE_HTTPS_ORIGIN', '')] + list(origin_aliases().values())
+
+
+def origin_aliases():
+    return json.loads(os.getenv('LIFE_NATIVE_ORIGIN_ALIASES', '{}'))
+
+
+def origin_for_parent(parent):
+    return origin_aliases().get(parent) or origins()[int(parent.startswith('https:'))]
 
 
 def parent_origins():
@@ -97,7 +105,7 @@ def register_native(app, key, upstream):
     def issue(body: LaunchRequest, request: Request, user=Depends(app.state.require_admin)):
         if body.parent_origin not in parent_origins():
             raise HTTPException(403, '不允许此工作台来源')
-        origin = origins()[int(body.parent_origin.startswith('https:'))]
+        origin = origin_for_parent(body.parent_origin)
         if not origin:
             raise HTTPException(503, '完整应用入口尚未配置')
         claims = jwt.decode(request.headers['authorization'].split(' ', 1)[1], options={'verify_signature': False})
@@ -123,7 +131,7 @@ def register_native(app, key, upstream):
             row = db.execute('DELETE FROM life_preferences WHERE key=%s RETURNING value',
                              ('native-ticket:' + digest(ticket),)).fetchone()
         data = row['value'] if row else {}
-        origin = origins()[int(parent.startswith('https:'))]
+        origin = origin_for_parent(parent)
         if (data.get('until', 0) <= time.time() or data.get('exp', 0) <= time.time()
                 or data.get('parent') != parent or data.get('origin') != origin):
             raise HTTPException(401, '启动凭证已使用或过期，请重新连接')
