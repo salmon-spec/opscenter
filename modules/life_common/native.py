@@ -90,7 +90,8 @@ def register_native(app, key, upstream):
         expires = min(int(claims['exp']), int(time.time()) + 8 * 3600)
         ticket = secrets.token_urlsafe(32)
         with store.connect() as db:
-            db.execute("DELETE FROM life_preferences WHERE key LIKE 'native-ticket:%' AND (value->>'until')::bigint < %s", (int(time.time()),))
+            db.execute("DELETE FROM life_preferences WHERE key LIKE %s AND (value->>'until')::bigint < %s",
+                       ('native-ticket:%', int(time.time())))
         store.set_preference('native-ticket:' + digest(ticket), {'until': int(time.time()) + 60,
                              'exp': expires, 'origin': origin, 'parent': body.parent_origin, 'actor': user['username']})
         return {'origin': origin, 'ticket': ticket, 'expires_in': 60}
