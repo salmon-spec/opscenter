@@ -35,16 +35,23 @@ router = APIRouter(prefix="/api/v2/modules", tags=["extension-modules"])
 MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 BUILTIN_MODULES = {
-    **{
-        key: {'name': name, 'version': '0.1.0', 'description': description, 'icon': icon,
-              'entry_url': '/v3/#/extensions/' + key, 'runtime': 'native', 'isolation': 'module-api',
-              'capabilities': ['read', 'write'], 'permissions': [key + ':read', key + ':write'],
-              'manifest': {'readonly': False}, 'sort_order': order}
-        for key, name, description, icon, order in [
-            ('subscriptions', '订阅与续费', '管理周期费用、续费日期与取消提醒', 'SUB', 70),
-            ('home-inventory', '家庭物品', '记录物品位置、购买凭证、保修和维护', 'BOX', 80),
-            ('life-reminders', '生活待办', '管理生活清单、重复任务及统一到期提醒', 'TODO', 90),
-        ]
+    'subscriptions': {
+        'name': '订阅与续费', 'version': '0.1.0', 'description': '管理周期费用、续费日期与取消提醒', 'icon': 'SUB',
+        'entry_url': '/v3/#/extensions/subscriptions', 'runtime': 'native', 'isolation': 'module-api',
+        'capabilities': ['read', 'write'], 'permissions': ['subscriptions:read', 'subscriptions:write'],
+        'manifest': {'readonly': False}, 'sort_order': 70,
+    },
+    'home-inventory': {
+        'name': '家庭物品', 'version': '0.1.0', 'description': '记录物品位置、购买凭证、保修和维护', 'icon': 'BOX',
+        'entry_url': '/v3/#/extensions/home-inventory', 'runtime': 'native', 'isolation': 'module-api',
+        'capabilities': ['read', 'write'], 'permissions': ['home-inventory:read', 'home-inventory:write'],
+        'manifest': {'readonly': False}, 'sort_order': 80,
+    },
+    'life-reminders': {
+        'name': '生活待办', 'version': '0.1.0', 'description': '管理生活清单、重复任务及统一到期提醒', 'icon': 'TODO',
+        'entry_url': '/v3/#/extensions/life-reminders', 'runtime': 'native', 'isolation': 'module-api',
+        'capabilities': ['read', 'write'], 'permissions': ['life-reminders:read', 'life-reminders:write'],
+        'manifest': {'readonly': False}, 'sort_order': 90,
     },
     "password-manager": {
         "name": "密码管理", "version": "0.2.0",
