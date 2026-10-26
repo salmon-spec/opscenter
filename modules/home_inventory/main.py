@@ -57,6 +57,9 @@ class Item(Model):
         values['soldPrice'] = float(self.soldPrice) if self.soldPrice is not None else None
         for key in ['purchaseDate', 'warrantyExpires','soldDate']:
             values[key] = values[key] + 'T00:00:00Z' if values[key] else '0001-01-01T00:00:00Z'
+        for key in ['quantity','assetId','insured','soldDate','soldPrice','soldTo','soldNotes']:
+            if key not in self.model_fields_set:
+                values.pop(key,None)
         return values
 
 
@@ -130,6 +133,9 @@ def create(body: Item, idempotency_key: UUID = Header(), user=Depends(editor)):
         payload = body.update_body()
         first = {k: payload[k] for k in ['name', 'entityTypeId', 'parentId', 'description', 'manufacturer', 'modelNumber', 'tagIds']}
         row = upstream.request('POST', '/entities', body=first | {'quantity': 1})
+        payload.setdefault('quantity',body.quantity)
+        if not body.assetId:
+            payload['assetId']=row.get('assetId','')
         # Persist the new ID before the second request so an interrupted create can be located.
         store.set_preference('pending-item:' + str(idempotency_key), {'id': row['id'], 'name': body.name})
         result = upstream.request('PUT', '/entities/' + row['id'], body=payload)

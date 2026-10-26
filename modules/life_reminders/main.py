@@ -69,13 +69,17 @@ class Task(Model):
 
     def payload(self):
         period = {'none': 0, 'daily': 86400, 'weekly': 604800, 'monthly': 1, 'yearly': 31536000}[self.repeat]
-        return {'title': self.title, 'description': self.description, 'project_id': self.project_id,
+        values = {'title': self.title, 'description': self.description, 'project_id': self.project_id,
                 'percent_done':self.percent_done,'is_favorite':self.is_favorite,
                 'start_date':self.start_date.isoformat() if self.start_date else '0001-01-01T00:00:00Z',
                 'end_date':self.end_date.isoformat() if self.end_date else '0001-01-01T00:00:00Z',
                 'priority': self.priority, 'due_date': self.due_date.isoformat() if self.due_date else '0001-01-01T00:00:00Z',
                 'reminders': [{'reminder': self.reminder.isoformat()}] if self.reminder else [],
                 'repeat_after': period, 'repeat_mode': 1 if self.repeat == 'monthly' else 0}
+        for key in ['percent_done','is_favorite','start_date','end_date']:
+            if key not in self.model_fields_set:
+                values.pop(key,None)
+        return values
 
 
 @app.get('/api/v1/tasks')

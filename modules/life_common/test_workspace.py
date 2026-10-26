@@ -124,3 +124,25 @@ def test_homebox_maintenance_uses_its_string_money_contract():
 def test_username_cannot_be_a_parent_path_segment():
     for value in ['.','..','../admin','name%2fadmin']:
         with pytest.raises(HTTPException):identifier(value,'username')
+
+
+def test_older_api_updates_do_not_clear_new_inventory_or_task_fields():
+    from home_inventory.main import Item
+    from life_reminders.main import Task
+    body=Item(name='既有物品',entityTypeId=uuid4()).update_body()
+    assert not {'quantity','assetId','insured','soldPrice','soldDate','soldTo','soldNotes'} & body.keys()
+    task=Task(title='既有事项',project_id=1).payload()
+    assert not {'percent_done','is_favorite','start_date','end_date'} & task.keys()
+
+
+def test_item_create_keeps_generated_asset_identifier(monkeypatch):
+    import home_inventory.main as module
+    calls=[];item_id=str(uuid4())
+    def request(method,path,body=None):
+        calls.append((method,body.copy()))
+        return {'id':item_id,'assetId':'000-123'}
+    monkeypatch.setattr(module,'upstream',SimpleNamespace(request=request))
+    monkeypatch.setattr(module,'store',SimpleNamespace(once=lambda k,a,p,u,f:f(),set_preference=lambda *a:None))
+    module.create(module.Item(name='新物品',entityTypeId=uuid4()),uuid4(),{'username':'editor'})
+    assert calls[-1][1]['assetId']=='000-123'
+    assert calls[-1][1]['quantity']==1
