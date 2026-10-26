@@ -41,7 +41,7 @@ python deploy/k8s/life_modules.py <commit> > life-modules.json
 
 ## 完整应用网关（0.2.0）
 
-HTTP端口18091/18092/18093，HTTPS端口18491/18492/18493，依次对应Wallos/Homebox/Vikunja。仅允许配置的工作台来源内嵌，60秒一次性启动凭证经POST交换，不放入URL。HttpOnly网关会话期限不超过原工作台JWT且最多8小时。原版会话独立于工作台；网关只向本上游转发其Cookie，写入需匹配应用来源。Caddy承载静态文件、流式下载和WebSocket，应用原版路径保持完整。
+HTTP节点端口31191/31192/31193，HTTPS节点端口31591/31592/31593，依次对应Wallos/Homebox/Vikunja。仅允许配置的工作台来源内嵌，60秒一次性启动凭证经POST交换，不放入URL。HttpOnly网关会话期限不超过原工作台JWT且最多8小时。原版会话独立于工作台；网关只向本上游转发其Cookie，写入需匹配应用来源。Caddy承载静态文件、流式下载和WebSocket，应用原版路径保持完整。
 
 模块Secret另需native-login JSON（原版username/password），命名空间另需life-native-tls服务器证书与私钥。凭据只保留服务端。管理员可在原版管理注册/账号；所有原版路径仍受工作台派生会话保护。HTTP用于既有VPN内HTTP工作台，HTTPS页面选择HTTPS应用入口；摄像头/剪贴板等浏览器安全上下文能力须HTTPS与客户端正常证书信任。外部邮件/通知/AI/SSO/第三方导入须配置各自服务与网络，不由界面接入自动启用。
 

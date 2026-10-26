@@ -9,6 +9,11 @@ from pathlib import Path
 
 tag = sys.argv[1]
 assert re.fullmatch('[0-9a-f]{8}', tag)
+native = runpy.run_path(str(Path(__file__).resolve().parents[1]/'k8s/life_native.py'))
+for key, ports in native['PORTS'].items():
+    service = native['resources'](key, tag, 8085)[1]['spec']
+    assert service['type'] == 'NodePort'
+    assert [p['nodePort'] for p in service['ports']] == list(ports)
 network = 'opscenter-ci-life-' + tag
 mock = network + '-upstream'
 web = network + '-web'
@@ -93,7 +98,7 @@ try:
         subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
                         '-subj', '/CN=life-native-web', '-addext', 'subjectAltName=DNS:life-native-web',
                         '-keyout', str(root/'tls.key'), '-out', str(root/'tls.crt')], check=True, capture_output=True)
-        config = runpy.run_path(str(Path(__file__).resolve().parents[1]/'k8s/life_native.py'))['gateway'](8085)
+        config = native['gateway'](8085)
         config = config.replace('127.0.0.1:', mock + ':')
         (root/'Caddyfile').write_text(config)
         for file in root.iterdir():

@@ -1,5 +1,5 @@
 """Independent browser origins keep upstream scripts away from workbench storage."""
-PORTS = {'subscriptions': (18091, 18491), 'home-inventory': (18092, 18492), 'life-reminders': (18093, 18493)}
+PORTS = {'subscriptions': (31191, 31591), 'home-inventory': (31192, 31592), 'life-reminders': (31193, 31593)}
 PARENTS = ['http://10.66.66.13:30088', 'https://10.66.66.13']
 
 
@@ -54,6 +54,7 @@ def resources(key, tag, upstream_port):
         {'apiVersion': 'v1', 'kind': 'ConfigMap', 'metadata': {'name': name + '-native', 'namespace': 'opscenter-life'},
          'data': {'Caddyfile': gateway(upstream_port)}},
         {'apiVersion': 'v1', 'kind': 'Service', 'metadata': {'name': name + '-native', 'namespace': 'opscenter-life'},
-         'spec': {'type': 'LoadBalancer', 'selector': {'app': name}, 'ports': [
-             {'name': 'http', 'port': http, 'targetPort': 8082}, {'name': 'https', 'port': https, 'targetPort': 8443}]}}
+         'spec': {'type': 'NodePort', 'selector': {'app': name}, 'ports': [
+             {'name': 'http', 'port': http, 'nodePort': http, 'targetPort': 8082},
+             {'name': 'https', 'port': https, 'nodePort': https, 'targetPort': 8443}]}}
     ]
