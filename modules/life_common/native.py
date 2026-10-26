@@ -32,7 +32,10 @@ def cookie_name(key, secure):
     return 'ops_native_' + key.replace('-', '_') + ('_tls' if secure else '_http')
 
 
-def upstream_cookies(raw, name):
+PRIVATE_COOKIES = {'PHPSESSID', 'wallos_login', 'hb.auth.token', 'vikunja_refresh_token'}
+
+
+def upstream_cookies(raw, name, secure=False):
     cookies = SimpleCookie()
     try:
         cookies.load(raw)
@@ -41,7 +44,18 @@ def upstream_cookies(raw, name):
     allowed = {'wallos': lambda k: k in {'PHPSESSID', 'wallos_login', 'language', 'sortOrder', 'colorTheme', 'theme'},
                'homebox': lambda k: k.startswith('hb.'),
                'vikunja': lambda k: k == 'vikunja_refresh_token'}[name]
-    return '; '.join(k + '=' + v.coded_value for k, v in cookies.items() if allowed(k))
+    result = []
+    prefix = 'tls_' if secure else 'http_'
+    for key, value in cookies.items():
+        original = key.removeprefix(prefix)
+        if original in PRIVATE_COOKIES:
+            if not key.startswith(prefix):
+                continue
+        elif key.startswith(('http_', 'tls_')):
+            continue
+        if allowed(original):
+            result.append(original + '=' + value.coded_value)
+    return '; '.join(result)
 
 
 def native_login(name, origin, base):
@@ -130,7 +144,9 @@ def register_native(app, key, upstream):
         response.set_cookie(cookie_name(key, secure), session, max_age=data['exp'] - int(time.time()),
                             httponly=True, secure=secure, samesite='lax')
         for cookie in cookies:
-            response.set_cookie(cookie.name, cookie.value, path=cookie.path or '/', secure=secure,
+            name = ('tls_' if secure else 'http_') + cookie.name if cookie.name in PRIVATE_COOKIES else cookie.name
+            response.set_cookie(name, cookie.value, path=cookie.path or '/',
+                                secure=secure if cookie.name in PRIVATE_COOKIES else cookie.secure,
                                 httponly=any(k.lower() == 'httponly' for k in cookie._rest), samesite='lax')
         return response
 
@@ -149,5 +165,5 @@ def register_native(app, key, upstream):
             if source not in origins():
                 raise HTTPException(403, '此操作来源无效')
         return Response(status_code=204, headers={
-            'X-Native-Cookie': upstream_cookies(request.headers.get('cookie', ''), upstream.name),
+            'X-Native-Cookie': upstream_cookies(request.headers.get('cookie', ''), upstream.name, secure),
             'Cache-Control': 'no-store'})

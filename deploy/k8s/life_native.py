@@ -30,16 +30,17 @@ def gateway(upstream_port):
             header_up -X-Native-Cookie
             header_down -X-Frame-Options
             header_down Content-Security-Policy "frame-ancestors[^;]*" "frame-ancestors PARENTS"
+            header_down Set-Cookie "^(PHPSESSID|wallos_login|hb[.]auth[.]token|vikunja_refresh_token)=" "{args[0]}$1="
             flush_interval -1
         }
     }
 }
 http://:8082 {
-    import native
+    import native http_
 }
 https://:8443 {
     tls /run/native-tls/tls.crt /run/native-tls/tls.key
-    import native
+    import native tls_
 }
 '''.replace('PARENTS', parents).replace('UPSTREAM', str(upstream_port))
 

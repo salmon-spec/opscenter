@@ -74,7 +74,9 @@ def test_tls_launch_and_token_stays_in_upstream_origin(monkeypatch):
 
 
 def test_proxy_cookie_allowlist():
-    raw = 'ops-access-token=workbench; ops_native_subscriptions_http=gate; hb.auth.token=private; PHPSESSID=php; vikunja_refresh_token=refresh'
+    raw = 'ops-access-token=workbench; ops_native_subscriptions_http=gate; http_hb.auth.token=private; http_PHPSESSID=php; http_vikunja_refresh_token=refresh; tls_PHPSESSID=tls'
     assert native.upstream_cookies(raw, 'wallos') == 'PHPSESSID=php'
     assert native.upstream_cookies(raw, 'homebox') == 'hb.auth.token=private'
     assert native.upstream_cookies(raw, 'vikunja') == 'vikunja_refresh_token=refresh'
+    assert native.upstream_cookies(raw, 'wallos', True) == 'PHPSESSID=tls'
+    assert native.upstream_cookies('PHPSESSID=unscoped', 'wallos') == ''

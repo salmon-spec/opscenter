@@ -26,7 +26,7 @@ class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   if self.path=='/_ops/verify':
    self.send_response(204 if self.headers.get('Cookie')=='test-gate=valid' else 401);self.send_header('X-Native-Cookie','native-session=private');self.end_headers();return
-  self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('X-Frame-Options','DENY');self.end_headers();self.wfile.write(json.dumps({'path':self.path,'cookie':self.headers.get('Cookie','')}).encode())
+  self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('X-Frame-Options','DENY');self.send_header('Set-Cookie','PHPSESSID=server; HttpOnly; Path=/');self.end_headers();self.wfile.write(json.dumps({'path':self.path,'cookie':self.headers.get('Cookie','')}).encode())
 threading.Thread(target=HTTPServer(('0.0.0.0',8085),Handler).serve_forever,daemon=True).start()
 HTTPServer(('0.0.0.0',8080),Handler).serve_forever()
 '''
@@ -60,6 +60,7 @@ for scheme,port in [('http',8082),('https',8443)]:
   r=s.get(base+path,headers={'Cookie':'test-gate=valid'},verify='/run/test/tls.crt',timeout=3)
   assert r.status_code==200 and r.json()['path']==path
   assert r.json()['cookie']=='native-session=private'
+  assert r.headers['Set-Cookie'].startswith(('tls_' if scheme=='https' else 'http_')+'PHPSESSID=')
   assert 'X-Frame-Options' not in r.headers
   assert 'frame-ancestors http://10.66.66.13:30088 https://10.66.66.13' in r.headers['Content-Security-Policy']
 print('8 native gateway route checks passed')
