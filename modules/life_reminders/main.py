@@ -4,14 +4,17 @@ import calendar
 import os
 import threading
 import logging
+import hashlib
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal, Annotated
 from uuid import UUID, uuid5, NAMESPACE_URL
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, UploadFile, File
+from fastapi.responses import Response
 from pydantic import Field, model_validator
 from life_common.app import create_app
 from life_common.core import Model, Upstream, check_revision, summary, timestamp
+from life_common.files import attachment_type
 from life_reminders.notifications import scan, deliveries, settings, save_settings, acknowledge, snooze, source_events
 
 upstream = Upstream('vikunja')
@@ -41,6 +44,10 @@ class Task(Model):
     description: str = Field(default='', max_length=4000)
     project_id: int = Field(gt=0)
     priority: int = Field(default=0, ge=0, le=5)
+    percent_done: float = Field(default=0,ge=0,le=1)
+    is_favorite: bool = False
+    start_date: datetime | None = None
+    end_date: datetime | None = None
     due_date: datetime | None = None
     reminder: datetime | None = None
     repeat: Literal['none', 'daily', 'weekly', 'monthly', 'yearly'] = 'none'
@@ -51,16 +58,21 @@ class Task(Model):
 
     @model_validator(mode='after')
     def valid_dates(self):
-        for value in [self.due_date, self.reminder]:
+        for value in [self.due_date, self.reminder,self.start_date,self.end_date]:
             if value and (value.utcoffset() is None or value.year < 1970):
                 raise ValueError('日期必须包含时区且不早于1970年')
         if self.repeat != 'none' and not self.due_date:
             raise ValueError('重复任务必须填写截止时间')
+        if self.start_date and self.end_date and self.end_date<self.start_date:
+            raise ValueError('结束时间不能早于开始时间')
         return self
 
     def payload(self):
         period = {'none': 0, 'daily': 86400, 'weekly': 604800, 'monthly': 1, 'yearly': 31536000}[self.repeat]
         return {'title': self.title, 'description': self.description, 'project_id': self.project_id,
+                'percent_done':self.percent_done,'is_favorite':self.is_favorite,
+                'start_date':self.start_date.isoformat() if self.start_date else '0001-01-01T00:00:00Z',
+                'end_date':self.end_date.isoformat() if self.end_date else '0001-01-01T00:00:00Z',
                 'priority': self.priority, 'due_date': self.due_date.isoformat() if self.due_date else '0001-01-01T00:00:00Z',
                 'reminders': [{'reminder': self.reminder.isoformat()}] if self.reminder else [],
                 'repeat_after': period, 'repeat_mode': 1 if self.repeat == 'monthly' else 0}
@@ -69,6 +81,35 @@ class Task(Model):
 @app.get('/api/v1/tasks')
 def list_tasks():
     return {'items': tasks()}
+
+
+@app.get('/api/v1/tasks/{task_id}')
+def task_detail(task_id: int):
+    if task_id<=0:
+        raise HTTPException(422,'无效任务编号')
+    return upstream.get(f'/tasks/{task_id}')
+
+
+@app.post('/api/v1/tasks/{task_id}/attachments')
+def upload_attachment(task_id: int,idempotency_key: UUID=Header(),file: UploadFile=File(),user=Depends(editor)):
+    task_detail(task_id)
+    content=file.file.read(5*1024*1024+1)
+    if not content or len(content)>5*1024*1024:
+        raise HTTPException(413,'附件不能为空或超过5MiB')
+    media,ext=attachment_type(content)
+    name=(file.filename or 'attachment').replace('\\','/').split('/')[-1][:120]
+    if not name.lower().endswith(ext) and not (ext=='.jpg' and name.lower().endswith('.jpeg')):
+        raise HTTPException(422,'附件扩展名与内容不匹配')
+    return store.once(idempotency_key,f'task:{task_id}:attachment',{'sha256':hashlib.sha256(content).hexdigest(),'name':name},user['username'],
+                      lambda:upstream.request('PUT',f'/tasks/{task_id}/attachments',files={'files':(name,content,media)}))
+
+
+@app.get('/api/v1/tasks/{task_id}/attachments/{attachment_id}')
+def download_attachment(task_id: int,attachment_id: int):
+    if task_id<=0 or attachment_id<=0:
+        raise HTTPException(422,'无效附件编号')
+    content,media=upstream.get(f'/tasks/{task_id}/attachments/{attachment_id}',binary=True)
+    return Response(content,media_type=media,headers={'Content-Disposition':'attachment; filename="attachment"','X-Content-Type-Options':'nosniff'})
 
 
 @app.get('/api/v1/catalog')

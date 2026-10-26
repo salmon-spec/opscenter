@@ -36,19 +36,19 @@ MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 BUILTIN_MODULES = {
     'subscriptions': {
-        'name': '订阅与续费', 'version': '0.2.0', 'description': '管理周期费用、续费日期与取消提醒', 'icon': 'SB',
+        'name': '订阅与续费', 'version': '0.3.0', 'description': '管理周期费用、续费日期与取消提醒', 'icon': 'SB',
         'entry_url': '/v3/#/extensions/subscriptions', 'runtime': 'native', 'isolation': 'module-api',
         'capabilities': ['read', 'write'], 'permissions': ['subscriptions:read', 'subscriptions:write'],
         'manifest': {'readonly': False}, 'sort_order': 70,
     },
     'home-inventory': {
-        'name': '家庭物品', 'version': '0.2.0', 'description': '记录物品位置、购买凭证、保修和维护', 'icon': 'HB',
+        'name': '家庭物品', 'version': '0.3.0', 'description': '记录物品位置、购买凭证、保修和维护', 'icon': 'HB',
         'entry_url': '/v3/#/extensions/home-inventory', 'runtime': 'native', 'isolation': 'module-api',
         'capabilities': ['read', 'write'], 'permissions': ['home-inventory:read', 'home-inventory:write'],
         'manifest': {'readonly': False}, 'sort_order': 80,
     },
     'life-reminders': {
-        'name': '生活待办', 'version': '0.2.0', 'description': '管理生活清单、重复任务及统一到期提醒', 'icon': 'TD',
+        'name': '生活待办', 'version': '0.3.0', 'description': '管理生活清单、重复任务及统一到期提醒', 'icon': 'TD',
         'entry_url': '/v3/#/extensions/life-reminders', 'runtime': 'native', 'isolation': 'module-api',
         'capabilities': ['read', 'write'], 'permissions': ['life-reminders:read', 'life-reminders:write'],
         'manifest': {'readonly': False}, 'sort_order': 90,

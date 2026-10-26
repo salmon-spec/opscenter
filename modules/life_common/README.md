@@ -2,7 +2,7 @@
 
 `subscriptions`、`home_inventory`、`life_reminders`各自部署，复用本目录的固定上游传输、工作台认证和幂等记录。业务数据分别由Wallos、Homebox、Vikunja拥有，适配元数据使用各自独立PostgreSQL逻辑库。
 
-前端默认通过`LifeModule.vue`展示三个固定版本上游的完整界面；第二个页签保留原生`LifeWorkspace.vue`及聚合提醒。工作台API Key与登录令牌不下发上游界面；浏览器在独立来源使用各上游的原生会话。工作台入口沿用当前管理员身份。完整应用的用户/团队管理属于上游账号体系，不等同于工作台多用户权限。
+前端由`LifeWorkspace.vue`、`LifeResources.vue`和`LifeCalendar.vue`提供工作台原生页面，通过同源模块API调用三个上游；上游仅作为业务服务运行。浏览器只持有工作台会话，专用上游API凭据保留服务端。工作台入口沿用当前管理员身份；上游团队/项目权限仍由上游账号体系执行。
 
 ## 构建
 
@@ -39,10 +39,12 @@ python deploy/k8s/life_modules.py <commit> > life-modules.json
 
 本项目不复制修改这三个上游的业务源码；镜像保留上游声明。首次部署与升级仍应检查固定版本的许可、安全和兼容性。
 
-## 完整应用网关（0.2.0）
+## 业务管理接口（0.3.0）
 
-HTTP节点端口31191/31192/31193，HTTPS节点端口31591/31592/31593，依次对应Wallos/Homebox/Vikunja。仅允许配置的工作台来源内嵌，60秒一次性启动凭证经POST交换，不放入URL。HttpOnly网关会话期限不超过原工作台JWT且最多8小时。原版会话独立于工作台；网关只向本上游转发其Cookie，写入需匹配应用来源。Caddy承载静态文件、流式下载和WebSocket，应用原版路径保持完整。
+`GET /api/v1/workspace/catalog`返回业务表单字段；`GET /api/v1/workspace/{resource}`读取记录，作用域参数只接受正整数；`POST`只允许create/update/delete三个命名操作，字段使用固定白名单与类型校验，编辑/删除必须带读取时的revision，写入进入既有幂等记录与目标锁。浏览器不能指定上游URL、任意请求头或凭据。
 
-模块Secret另需native-login JSON（原版username/password），命名空间另需life-native-tls服务器证书与私钥。凭据只保留服务端。管理员可在原版管理注册/账号；所有原版路径仍受工作台派生会话保护。HTTP用于既有VPN内HTTP工作台，HTTPS页面选择HTTPS应用入口；摄像头/剪贴板等浏览器安全上下文能力须HTTPS与客户端正常证书信任。外部邮件/通知/AI/SSO/第三方导入须配置各自服务与网络，不由界面接入自动启用。
+- Wallos：分类、付款方式、家庭成员、币种与汇率、预算；主页面提供订阅增改删、费用汇总、下次续费日历、CSV预览导入与导出。
+- Homebox：标签、物品类型、物品模板、维护记录、集合设置与成员；主页面提供物品/位置增改删、复制、投保/转售、附件与维护、保修日历和清单导出。
+- Vikunja：项目、标签、团队、评论、负责人、项目成员/团队权限及视图；主页面提供任务增改删、子任务、日期/进度/收藏、附件、日历、看板和统一提醒。
 
-Vikunja的PUBLICURL使用HTTP原版入口，完整界面启动时按当前应用来源选择API；HTTPS内嵌继续使用HTTPS同源API。对外分享/CalDAV链接如需优先HTTPS可将PUBLICURL调整为HTTPS入口并验收客户端。共享链接仍处于工作台网关保护范围，不自动匿名公开到互联网。
+项目配置使用原来的上游数据卷和数据库。Vikunja服务API Key需要上述资源的精确业务权限；新Key必须在受保护Secret中更新，旧Key保留以供配置回滚。认证凭据管理不作为业务表单字段暴露。邮件、外部通知和第三方账号导入须单独配置与验收。

@@ -35,10 +35,12 @@ export function formFields(kind, editing) {
     {key:'entityTypeId',label:'类型（物品或位置）',type:'select',catalog:'types',required:true},
     {key:'parentId',label:'所在位置',type:'select',catalog:'locations'},
     {key:'tagIds',label:'分类标签（可多选）',type:'multiple',catalog:'tags'},
+    {key:'quantity',label:'数量',type:'number',min:0,required:true},{key:'assetId',label:'资产编号（数字，可用短横线分组）',pattern:'[0-9-]*',max:15},{key:'insured',label:'已投保',type:'checkbox'},
     {key:'manufacturer',label:'品牌'}, {key:'modelNumber',label:'型号'}, {key:'serialNumber',label:'序列号'},
     {key:'purchaseDate',label:'购买日期',type:'date'},
     {key:'purchasePrice',label:'购买金额',type:'number',min:0,step:'0.01'},
     {key:'purchaseFrom',label:'购买商家'},
+    {key:'soldDate',label:'转售日期',type:'date'},{key:'soldPrice',label:'转售金额',type:'number',min:0,step:'0.01'},{key:'soldTo',label:'转售买家'},{key:'soldNotes',label:'转售备注',type:'textarea'},
     {key:'warrantyExpires',label:'保修到期日期',type:'date'},
     {key:'lifetimeWarranty',label:'终身保修',type:'checkbox'},
     {key:'archived',label:'已归档',type:'checkbox'},
@@ -53,6 +55,8 @@ export function formFields(kind, editing) {
     {key:'priority',label:'优先级',type:'select',numeric:true,required:true,options:[{value:0,label:'普通'},{value:1,label:'低'},{value:2,label:'中'},{value:3,label:'高'},{value:4,label:'紧急'},{value:5,label:'最高'}]},
     {key:'label_ids',label:'标签（可多选）',type:'multiple',catalog:'labels'},
     {key:'due_date',label:'截止时间',type:'datetime-local'},
+    {key:'start_date',label:'开始时间',type:'datetime-local'},{key:'end_date',label:'结束时间',type:'datetime-local'},
+    {key:'percent_done',label:'完成比例（0–1）',type:'number',min:0,maxNumber:1,step:'0.01',required:true},{key:'is_favorite',label:'收藏',type:'checkbox'},
     {key:'reminder',label:'提醒时间（留空时按截止时间）',type:'datetime-local'},
     {key:'repeat',label:'重复',type:'select',required:true,options:[{value:'none',label:'不重复'},{value:'daily',label:'每天'},{value:'weekly',label:'每周'},{value:'monthly',label:'每月'},{value:'yearly',label:'每年'}]},
     {key:'reminder_enabled',label:'启用提醒',type:'checkbox'},
@@ -71,13 +75,14 @@ export function normalizeForm(kind, row, catalog) {
   const result = Object.fromEntries(formFields(kind,Boolean(row)).map(f=>[f.key,f.type==='checkbox'?false:f.type==='multiple'?[]:'']))
   result.reminder_enabled=true
   if(kind === 'subscriptions') Object.assign(result,{price:'0',frequency:1,cycle:3,next_payment:today,auto_renew:true,currency_id:catalog.currencies?.find(x=>x.code==='CNY')?.id || catalog.currencies?.[0]?.id || ''})
-  if(kind === 'home-inventory') Object.assign(result,{entityTypeId:catalog.types?.find(x=>!x.isLocation)?.id || '',tagIds:[]})
-  if(kind === 'life-reminders') Object.assign(result,{project_id:catalog.projects?.[0]?.id || '',priority:0,repeat:'none'})
+  if(kind === 'home-inventory') Object.assign(result,{quantity:1,entityTypeId:catalog.types?.find(x=>!x.isLocation)?.id || '',tagIds:[]})
+  if(kind === 'life-reminders') Object.assign(result,{project_id:catalog.projects?.[0]?.id || '',priority:0,percent_done:0,repeat:'none'})
   if(row) for(const key of Object.keys(result)) if(row[key] !== undefined && row[key] !== null) result[key]=row[key]
   if(kind === 'subscriptions') { result.auto_renew=Boolean(Number(result.auto_renew));result.inactive=Boolean(Number(result.inactive));if(row)result.expected_revision=row.workbench_revision || '' }
   if(kind === 'home-inventory' && row) {
     result.entityTypeId=row.entityType?.id || row.entityTypeId || result.entityTypeId
     result.parentId=row.parent?.id || row.parentId || ''
+    result.soldDate=String(row.soldDate || '').slice(0,10);if(result.soldDate.startsWith('0001-'))result.soldDate=''
     result.purchaseDate=String(row.purchaseDate || '').slice(0,10)
     result.warrantyExpires=String(row.warrantyExpires || '').slice(0,10)
     result.tagIds=(row.tags || []).map(x=>x.id)
@@ -85,6 +90,7 @@ export function normalizeForm(kind, row, catalog) {
   }
   if(kind === 'life-reminders') {
     result.due_date=localDateTime(row?.due_date)
+    result.start_date=localDateTime(row?.start_date);result.end_date=localDateTime(row?.end_date)
     result.reminder=localDateTime(row?.reminders?.[0]?.reminder)
     result.repeat=row?.workbench_repeat || 'none'
     result.expected_updated=row?.updated || ''

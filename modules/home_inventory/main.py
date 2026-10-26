@@ -15,6 +15,7 @@ from fastapi.responses import Response
 from pydantic import Field
 from runtime.app import require_internal_service
 from life_common.app import create_app
+from life_common.files import attachment_type
 from life_common.core import Model, Upstream, check_revision, date_value, summary
 
 upstream = Upstream('homebox')
@@ -39,6 +40,13 @@ class Item(Model):
     warrantyDetails: str = Field(default='', max_length=4000)
     notes: str = Field(default='', max_length=4000)
     archived: bool = False
+    quantity: int = Field(default=1, ge=0, le=100000000)
+    assetId: str = Field(default='',max_length=15,pattern=r'^[0-9-]*$')
+    insured: bool = False
+    soldDate: date | None = None
+    soldPrice: Decimal | None = Field(default=None,ge=0,le=100000000,max_digits=12,decimal_places=2)
+    soldTo: str = Field(default='',max_length=255)
+    soldNotes: str = Field(default='',max_length=4000)
     tagIds: list[UUID] = Field(default_factory=list, max_length=30)
     expected_updated: str = Field(default='', max_length=80)
     reminder_enabled: bool = True
@@ -46,7 +54,8 @@ class Item(Model):
     def update_body(self):
         values = self.model_dump(mode='json', exclude={'expected_updated', 'reminder_enabled'})
         values['purchasePrice'] = float(self.purchasePrice) if self.purchasePrice is not None else None
-        for key in ['purchaseDate', 'warrantyExpires']:
+        values['soldPrice'] = float(self.soldPrice) if self.soldPrice is not None else None
+        for key in ['purchaseDate', 'warrantyExpires','soldDate']:
             values[key] = values[key] + 'T00:00:00Z' if values[key] else '0001-01-01T00:00:00Z'
         return values
 
@@ -123,7 +132,7 @@ def create(body: Item, idempotency_key: UUID = Header(), user=Depends(editor)):
         row = upstream.request('POST', '/entities', body=first | {'quantity': 1})
         # Persist the new ID before the second request so an interrupted create can be located.
         store.set_preference('pending-item:' + str(idempotency_key), {'id': row['id'], 'name': body.name})
-        result = upstream.request('PUT', '/entities/' + row['id'], body=payload | {'quantity': 1})
+        result = upstream.request('PUT', '/entities/' + row['id'], body=payload)
         store.set_preference('reminder:' + row['id'], body.reminder_enabled)
         store.set_preference('pending-item:' + str(idempotency_key), None)
         return result
@@ -164,18 +173,6 @@ def add_maintenance(item_id: UUID, body: Maintenance, idempotency_key: UUID = He
     return store.once(idempotency_key, f'item:{item_id}:maintenance', body.model_dump(mode='json'), user['username'],
                       lambda: upstream.request('POST', '/entities/' + str(item_id) + '/maintenance',
                                                body=body.model_dump(mode='json') | {'completedDate': str(body.completedDate) + 'T00:00:00Z'}))
-
-
-def attachment_type(content):
-    if content.startswith(b'%PDF-'):
-        return 'application/pdf', '.pdf'
-    if content.startswith(b'\x89PNG\r\n\x1a\n'):
-        return 'image/png', '.png'
-    if content.startswith(b'\xff\xd8\xff'):
-        return 'image/jpeg', '.jpg'
-    if content.startswith(b'RIFF') and content[8:12] == b'WEBP':
-        return 'image/webp', '.webp'
-    raise HTTPException(422, '仅支持PDF、PNG、JPEG和WebP附件')
 
 
 @app.post('/api/v1/items/{item_id}/attachments')
