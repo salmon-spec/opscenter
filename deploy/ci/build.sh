@@ -75,6 +75,7 @@ PY
   node -e 'const fs=require("node:fs");const p=JSON.parse(fs.readFileSync("package.json"));fs.writeFileSync("dist/release.json",JSON.stringify({version:p.version,git_commit:process.argv[1]},null,2))' "$sha"
 )
 docker build -q -t "opscenter/frontend:$tag" -f "$work/deploy/docker/frontend.Dockerfile" "$work"
+python3 "$work/deploy/ci/check_life_gateway.py" "$tag"
 
 images=("opscenter/backend:$tag" "opscenter/frontend:$tag")
 for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms; do
