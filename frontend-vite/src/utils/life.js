@@ -50,7 +50,7 @@ export function formFields(kind, editing) {
   return [
     {key:'title',label:'待办标题',required:true,max:250},
     {key:'project_id',label:'清单',type:'select',catalog:'projects',numeric:true,required:true},
-    {key:'priority',label:'优先级',type:'select',numeric:true,options:[{value:0,label:'普通'},{value:1,label:'低'},{value:2,label:'中'},{value:3,label:'高'},{value:4,label:'紧急'},{value:5,label:'最高'}]},
+    {key:'priority',label:'优先级',type:'select',numeric:true,required:true,options:[{value:0,label:'普通'},{value:1,label:'低'},{value:2,label:'中'},{value:3,label:'高'},{value:4,label:'紧急'},{value:5,label:'最高'}]},
     {key:'label_ids',label:'标签（可多选）',type:'multiple',catalog:'labels'},
     {key:'due_date',label:'截止时间',type:'datetime-local'},
     {key:'reminder',label:'提醒时间（留空时按截止时间）',type:'datetime-local'},

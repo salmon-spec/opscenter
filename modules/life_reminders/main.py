@@ -73,7 +73,11 @@ def list_tasks():
 
 @app.get('/api/v1/catalog')
 def catalogs():
-    return {'projects': upstream.get('/projects') or [], 'labels': upstream.get('/labels', params={'per_page': 100}) or []}
+    return {'projects': project_lists(), 'labels': upstream.get('/labels', params={'per_page': 100}) or []}
+
+
+def project_lists():
+    return [x for x in upstream.get('/projects') or [] if x['id'] > 0 and not x.get('is_archived')]
 
 
 class Project(Model):
@@ -180,7 +184,7 @@ def linked_task(body: LinkedTask, user=Depends(editor)):
         event = next(x for x in source_events(body.source) if str(x['id']) == body.source_id)
     except StopIteration:
         raise HTTPException(404, '来源事项不存在或已停用') from None
-    projects = upstream.get('/projects') or []
+    projects = project_lists()
     if not projects:
         raise HTTPException(422, '请先创建一个生活清单')
     key = uuid5(NAMESPACE_URL, f"opscenter:{body.source}:{body.source_id}:{event['date']}")

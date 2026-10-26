@@ -115,6 +115,7 @@ const detail = ref(null), maintenanceRows = ref([]), maintenanceForm = ref({name
 const reminders = ref([]), reminderState = ref({}), notification = ref({}), webhook = ref(''), externalEnabled = ref(false)
 const importOpen = ref(false), csvText = ref(''), importPreview = ref(null)
 let formKey = '', importKey = '', revision = 0
+const completionKeys = new Map()
 const fields = computed(() => formFields(kind.value, Boolean(editing.value)))
 const tabs = computed(() => [{key:'overview',name:'概览'},{key:'list',name:kind.value === 'life-reminders' ? '全部清单' : '全部记录'}, {key:'upcoming',name:kind.value === 'home-inventory' ? '即将过保' : '未来7天'}, ...(kind.value === 'life-reminders' ? [{key:'today',name:'今天'},{key:'reminders',name:'提醒记录'},{key:'settings',name:'通知设置'}] : [])])
 const stats = computed(() => {
@@ -143,7 +144,7 @@ function deliveryState(row) { return row.acknowledged ? '已知晓' : {pending:'
 function goSource(source) { router.push('/extensions/'+source) }
 function options(field) {
   const values = field.options || catalog.value[field.catalog] || []
-  return values.map(x=>typeof x === 'object' && 'value' in x ? x : {value:x.id,label:x.name || x.title || x.code})
+  return values.map(x=>typeof x === 'object' && 'value' in x ? x : {value:x.id,label:field.catalog==='types' && ['Item','Location'].includes(x.name) ? (x.isLocation ? '位置' : '物品') : x.name || x.title || x.code})
 }
 async function load() {
   const rev = ++revision; loading.value = true; error.value = ''
@@ -173,7 +174,7 @@ async function save() {
   try { const path=base.value+config.value.endpoint+(editing.value?'/'+editing.value.id:''); await api[editing.value?'put':'post'](path,payload(),{idempotencyKey:formKey,timeoutMs:45000}); formOpen.value=false; toast('已保存','ok'); await load() }
   catch(e){ formError.value=e.message+'。若提示结果待核对，请关闭并刷新确认。' } finally { busy.value=false }
 }
-async function complete(row) { busy.value=true;try { await api.post(base.value+`/tasks/${row.id}/completion`,{done:!row.done},{idempotencyKey:operationId(),timeoutMs:25000});await load() }catch(e){toast(e.message,'err')}finally{busy.value=false} }
+async function complete(row) { const action=JSON.stringify([row.id,row.due_date,!row.done]);if(!completionKeys.has(action))completionKeys.set(action,operationId());busy.value=true;try { await api.post(base.value+`/tasks/${row.id}/completion`,{done:!row.done},{idempotencyKey:completionKeys.get(action),timeoutMs:45000});completionKeys.delete(action);await load() }catch(e){toast(e.message,'err')}finally{busy.value=false} }
 async function addProject() { const title=window.prompt('清单名称');if(!title?.trim())return;try{await api.post(base.value+'/projects',{title},{idempotencyKey:operationId()});await load()}catch(e){toast(e.message,'err')} }
 async function addLabel() { const title=window.prompt('标签名称');if(!title?.trim())return;try{await api.post(base.value+'/labels',{title},{idempotencyKey:operationId()});await load()}catch(e){toast(e.message,'err')} }
 async function loadReminders() { const d=await api.get(base.value+'/reminders');reminders.value=d.items || [];reminderState.value=d.scheduler || {};notification.value=d.notification || {};externalEnabled.value=notification.value.enabled }
