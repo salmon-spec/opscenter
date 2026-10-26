@@ -1,4 +1,4 @@
 {
-  "version": "5.5.28",
-  "source": "CI regenerates the exact git_commit for each image"
+  "version": "5.5.29",
+  "source": "CI regenerates exact git_commit for production"
 }

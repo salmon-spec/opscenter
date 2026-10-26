@@ -1,6 +1,6 @@
 {
   "name": "opscenter-frontend",
-  "version": "5.5.28",
+  "version": "5.5.29",
   "private": true,
   "type": "module",
   "scripts": {

@@ -2,6 +2,10 @@
 import json
 import re
 import sys
+from pathlib import Path
+import runpy
+
+native = runpy.run_path(str(Path(__file__).with_name('life_native.py')))
 
 UPSTREAM_IMAGES = {
     'wallos': 'ghcr.io/ellite/wallos@sha256:8873c2328e745c7ca8ff0e0f5508215219ec5c02a3469c0d8049602be2a2bca3',
@@ -21,10 +25,14 @@ def manifests(tag):
         ('life-reminders', 'life_reminders', 'vikunja', 3456, '/api/v1', '2Gi'),
     ]:
         name = 'module-' + key
+        http, https = native['PORTS'][key]
         env = {'LIFE_MODULE': module, 'LIFE_UPSTREAM_URL': f'http://127.0.0.1:{port}' + prefix,
                'LIFE_UPSTREAM_TOKEN_FILE': '/run/life/upstream-token', 'MODULE_DATABASE_URL_FILE': '/run/life/db-url',
                'OPS_JWT_PUBLIC_KEY_FILE': '/run/life/jwt-public.pem', 'OPS_MODULE_INTERNAL_TOKEN_FILE': '/run/life/internal-token',
                'LIFE_CREDENTIAL_KEY_FILE': '/run/life/credential-key'}
+        env |= {'LIFE_NATIVE_HTTP_ORIGIN': f'http://10.66.66.13:{http}',
+                'LIFE_NATIVE_HTTPS_ORIGIN': f'https://10.66.66.13:{https}',
+                'LIFE_NATIVE_PARENTS': ' '.join(native['PARENTS']), 'LIFE_NATIVE_LOGIN_FILE': '/run/life/native-login'}
         if key == 'life-reminders':
             env |= {'LIFE_SUBSCRIPTIONS_URL': 'http://module-subscriptions:8080',
                     'LIFE_SUBSCRIPTIONS_TOKEN_FILE': '/run/life/subscriptions-token',
@@ -44,12 +52,13 @@ def manifests(tag):
         if upstream == 'wallos':
             mounts = [('/var/www/html/db', 'db'), ('/var/www/html/images/uploads/logos', 'logos')]
         elif upstream == 'homebox':
-            up_env |= {'HBOX_OPTIONS_ALLOW_REGISTRATION': 'false', 'HBOX_LOG_LEVEL': 'warn'}
+            up_env |= {'HBOX_OPTIONS_ALLOW_REGISTRATION': 'true', 'HBOX_OPTIONS_TRUST_PROXY': 'true', 'HBOX_LOG_LEVEL': 'warn'}
             secret_env = {'HBOX_AUTH_API_KEY_PEPPER': 'homebox-pepper'}
             mounts = [('/data', 'data')]
         else:
             up_env |= {'VIKUNJA_DATABASE_TYPE': 'sqlite', 'VIKUNJA_DATABASE_PATH': '/db/vikunja.db',
-                       'VIKUNJA_SERVICE_ENABLEREGISTRATION': 'false', 'VIKUNJA_SERVICE_PUBLICURL': 'https://10.66.66.13/v3/',
+                       'VIKUNJA_SERVICE_ENABLEREGISTRATION': 'true', 'VIKUNJA_SERVICE_PUBLICURL': f'http://10.66.66.13:{http}/',
+                       'VIKUNJA_CORS_ENABLE': 'false', 'VIKUNJA_SERVICE_TIMEZONE': 'Asia/Shanghai',
                        'VIKUNJA_MAILER_ENABLED': 'false'}
             secret_env = {'VIKUNJA_SERVICE_JWTSECRET': 'vikunja-jwt'}
             mounts = [('/db', 'db'), ('/app/vikunja/files', 'files')]
@@ -61,6 +70,15 @@ def manifests(tag):
               'readinessProbe': {'tcpSocket': {'port': port}, 'initialDelaySeconds': 8, 'periodSeconds': 10},
               'securityContext': {'allowPrivilegeEscalation': False}}
         init = []
+        proxy = {'name': 'native-gateway', 'image': 'opscenter/frontend:' + tag, 'imagePullPolicy': 'Never',
+                 'command': ['caddy', 'run', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'],
+                 'env': [{'name': 'XDG_CONFIG_HOME', 'value': '/tmp'}, {'name': 'XDG_DATA_HOME', 'value': '/tmp'}],
+                 'securityContext': {'runAsUser': 10001, 'runAsGroup': 10001, 'allowPrivilegeEscalation': False,
+                                     'readOnlyRootFilesystem': True, 'capabilities': {'drop': ['ALL']}},
+                 'resources': {'requests': {'cpu': '10m', 'memory': '32Mi'}, 'limits': {'cpu': '500m', 'memory': '128Mi'}},
+                 'volumeMounts': [{'name': 'native-config', 'mountPath': '/etc/caddy', 'readOnly': True},
+                                  {'name': 'native-tls', 'mountPath': '/run/native-tls', 'readOnly': True}, {'name': 'tmp', 'mountPath': '/tmp'}],
+                 'readinessProbe': {'tcpSocket': {'port': 8082}, 'periodSeconds': 10}}
         if upstream == 'vikunja':
             init = [{'name': 'prepare-data', 'image': UPSTREAM_IMAGES['wallos'],
                      'command': ['sh', '-ec', 'mkdir -p /work/db /work/files; chown 1000:1000 /work/db /work/files'],
@@ -73,18 +91,23 @@ def manifests(tag):
              'spec': {'replicas': 1, 'strategy': {'type': 'Recreate'}, 'selector': {'matchLabels': {'app': name}},
                       'template': {'metadata': {'labels': {'app': name}}, 'spec': {
                           'nodeSelector': {'kubernetes.io/hostname': 'k8s-worker-03'}, 'automountServiceAccountToken': False,
-                          'securityContext': {'fsGroup': 1000}, 'initContainers': init, 'containers': [adapter, up],
+                          'securityContext': {'fsGroup': 1000}, 'initContainers': init, 'containers': [adapter, up, proxy],
                           'volumes': [{'name': 'data', 'persistentVolumeClaim': {'claimName': name}},
-                                      {'name': 'secrets', 'secret': {'secretName': name, 'defaultMode': 292}}, {'name': 'tmp', 'emptyDir': {'sizeLimit': '128Mi'}}]}}}},
+                                      {'name': 'secrets', 'secret': {'secretName': name, 'defaultMode': 292}},
+                                      {'name': 'native-config', 'configMap': {'name': name + '-native'}},
+                                      {'name': 'native-tls', 'secret': {'secretName': 'life-native-tls', 'defaultMode': 292}},
+                                      {'name': 'tmp', 'emptyDir': {'sizeLimit': '128Mi'}}]}}}},
             {'apiVersion': 'v1', 'kind': 'Service', 'metadata': {'name': name, 'namespace': ns},
              'spec': {'selector': {'app': name}, 'ports': [{'name': 'http', 'port': 8080}]}},
             {'apiVersion': 'v1', 'kind': 'Service', 'metadata': {'name': name, 'namespace': 'opscenter'},
              'spec': {'type': 'ExternalName', 'externalName': name + '.' + ns + '.svc.cluster.local'}},
         ])
+        objects.extend(native['resources'](key, tag, port))
     objects += [
         {'apiVersion': 'networking.k8s.io/v1', 'kind': 'NetworkPolicy', 'metadata': {'name': 'life-boundary', 'namespace': ns}, 'spec': {
             'podSelector': {}, 'policyTypes': ['Ingress', 'Egress'],
-            'ingress': [{'from': [{'podSelector': {}}, {'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'opscenter'}}, 'podSelector': {'matchExpressions': [{'key': 'app', 'operator': 'In', 'values': ['web', 'backend']}]}}], 'ports': [{'protocol': 'TCP', 'port': 8080}]}],
+            'ingress': [{'from': [{'podSelector': {}}, {'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'opscenter'}}, 'podSelector': {'matchExpressions': [{'key': 'app', 'operator': 'In', 'values': ['web', 'backend']}]}}], 'ports': [{'protocol': 'TCP', 'port': 8080}]},
+                        {'ports': [{'protocol': 'TCP', 'port': 8082}, {'protocol': 'TCP', 'port': 8443}]}],
             'egress': [
                 {'to': [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'kube-system'}}}], 'ports': [{'protocol': 'UDP', 'port': 53}, {'protocol': 'TCP', 'port': 53}]},
                 {'to': [{'podSelector': {}}], 'ports': [{'protocol': 'TCP', 'port': 8080}]},

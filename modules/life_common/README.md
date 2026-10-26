@@ -2,7 +2,7 @@
 
 `subscriptions`、`home_inventory`、`life_reminders`各自部署，复用本目录的固定上游传输、工作台认证和幂等记录。业务数据分别由Wallos、Homebox、Vikunja拥有，适配元数据使用各自独立PostgreSQL逻辑库。
 
-前端为工作台原生`LifeWorkspace.vue`，入口由扩展注册控制。服务端Key不下发浏览器；仅服务器调用内部上游。初始本人使用，沿用当前固定管理员认证，不提供家庭成员独立登录。
+前端默认通过`LifeModule.vue`展示三个固定版本上游的完整界面；第二个页签保留原生`LifeWorkspace.vue`及聚合提醒。工作台API Key与登录令牌不下发上游界面；浏览器在独立来源使用各上游的原生会话。工作台入口沿用当前管理员身份。完整应用的用户/团队管理属于上游账号体系，不等同于工作台多用户权限。
 
 ## 构建
 
@@ -38,3 +38,11 @@ python deploy/k8s/life_modules.py <commit> > life-modules.json
 - [Vikunja v2.7.1](https://github.com/go-vikunja/vikunja/tree/v2.7.1)：AGPL-3.0，使用`/api/v1`官方API。
 
 本项目不复制修改这三个上游的业务源码；镜像保留上游声明。首次部署与升级仍应检查固定版本的许可、安全和兼容性。
+
+## 完整应用网关（0.2.0）
+
+HTTP端口18091/18092/18093，HTTPS端口18491/18492/18493，依次对应Wallos/Homebox/Vikunja。仅允许配置的工作台来源内嵌，60秒一次性启动凭证经POST交换，不放入URL。HttpOnly网关会话期限不超过原工作台JWT且最多8小时。原版会话独立于工作台；网关只向本上游转发其Cookie，写入需匹配应用来源。Caddy承载静态文件、流式下载和WebSocket，应用原版路径保持完整。
+
+模块Secret另需native-login JSON（原版username/password），命名空间另需life-native-tls服务器证书与私钥。凭据只保留服务端。管理员可在原版管理注册/账号；所有原版路径仍受工作台派生会话保护。HTTP用于既有VPN内HTTP工作台，HTTPS页面选择HTTPS应用入口；摄像头/剪贴板等浏览器安全上下文能力须HTTPS与客户端正常证书信任。外部邮件/通知/AI/SSO/第三方导入须配置各自服务与网络，不由界面接入自动启用。
+
+Vikunja的PUBLICURL使用HTTP原版入口，完整界面启动时按当前应用来源选择API；HTTPS内嵌继续使用HTTPS同源API。对外分享/CalDAV链接如需优先HTTPS可将PUBLICURL调整为HTTPS入口并验收客户端。共享链接仍处于工作台网关保护范围，不自动匿名公开到互联网。

@@ -2,16 +2,18 @@ from fastapi import Depends, FastAPI, HTTPException
 from runtime.auth import ModuleAuth, SessionMiddleware
 from runtime.app import require_internal_service
 from .core import Store, timestamp
+from .native import register_native
 
 
 def create_app(key, upstream):
-    app = FastAPI(title='OpsCenter ' + key, version='0.1.0')
+    app = FastAPI(title='OpsCenter ' + key, version='0.2.0')
     app.add_middleware(SessionMiddleware)
     store = Store()
     auth = ModuleAuth(Store)
     auth.register(app)
     app.state.store = store
     app.state.upstream = upstream
+    register_native(app, key, upstream)
 
     @app.on_event('startup')
     def startup():
@@ -34,6 +36,6 @@ def create_app(key, upstream):
 
     @app.get('/api/v1/module')
     def info():
-        return {'key': key, 'version': '0.1.0', 'capabilities': ['read', 'write'], 'collected_at': timestamp()}
+        return {'key': key, 'version': '0.2.0', 'capabilities': ['read', 'write', 'native-ui'], 'collected_at': timestamp()}
 
     return app
