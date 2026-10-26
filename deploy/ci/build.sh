@@ -50,7 +50,7 @@ if docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=512m 
   -w /opt/opscenter "opscenter/backend:$tag" \
   sh -ec 'pip install -q pytest pytest-asyncio aiohttp==3.13.3 apprise==2.0.1 websocket-client==1.8.0
     python -m pytest -q backend/tests agent/test_processes.py
-    for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms runtime extension_worker automation opencode_agent; do
+    for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms runtime extension_worker automation opencode_agent life_common; do
       PYTHONPATH="/opt/opscenter/modules/$module:/opt/opscenter/modules:/opt/opscenter/backend" python -m pytest -q "modules/$module"
     done' >"$test_log" 2>&1; then
   grep -E '[0-9]+ passed' "$test_log"
@@ -90,6 +90,15 @@ images+=("opscenter/module-automation:$tag" "opscenter/module-opencode-agent:$ta
 docker build -q --build-arg "BACKEND_IMAGE=opscenter/backend:$tag" \
   -t "opscenter/extension-worker:$tag" -f "$work/modules/extension_worker/Dockerfile" "$work"
 images+=("opscenter/extension-worker:$tag")
+
+for module in subscriptions home_inventory life_reminders; do
+  image="opscenter/module-${module//_/-}:$tag"
+  docker build -q --build-arg "BACKEND_IMAGE=opscenter/backend:$tag" --build-arg "MODULE_NAME=$module" \
+    -t "$image" -f "$work/modules/life_common/Dockerfile" "$work"
+  docker run --rm --security-opt apparmor=unconfined "$image" \
+    python -c 'import os,importlib;assert os.geteuid()==10001;importlib.import_module(os.environ["LIFE_MODULE"]+".main");print("IMAGE_CHECK life readable")'
+  images+=("$image")
+done
 
 # Use the image's own user: strict checkout permissions must not break runtime reads.
 docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=128m \

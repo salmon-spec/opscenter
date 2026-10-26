@@ -1,5 +1,4 @@
 {
-  "version": "5.5.26",
-  "build_id": "password-manager-embedded-20261025",
-  "source_state": "validated-index"
+  "version": "5.5.28",
+  "source": "CI regenerates the exact git_commit for each image"
 }

@@ -51,6 +51,11 @@ const routes = [
   { path: '/modules', name: 'ModuleManager', component: ModuleManager, meta: { title: '模块管理', hostScope: 'none', clusterScope: 'none' } },
   { path: '/extensions/middleware-console', redirect: '/' },
   { path: '/extensions/password-manager', name: 'PasswordManager', component: () => import('./views/PasswordManager.vue'), meta: { title: '密码管理', hostScope: 'none', clusterScope: 'none' } },
+  ...[
+    ['subscriptions', 'Subscriptions', '订阅与续费'],
+    ['home-inventory', 'HomeInventory', '家庭物品'],
+    ['life-reminders', 'LifeReminders', '生活待办'],
+  ].map(([key, name, title]) => ({ path: `/extensions/${key}`, name, component: () => import('./views/LifeWorkspace.vue'), props: { kind: key }, meta: { title, hostScope: 'none', clusterScope: 'none' } })),
   { path: '/extensions/:moduleKey', name: 'ExtensionHost', component: ExtensionHost, meta: { title: '扩展模块', hostScope: 'none', clusterScope: 'none' } },
   { path: '/data-services', redirect: '/' },
   { path: '/data-services/:pathMatch(.*)*', redirect: '/' },

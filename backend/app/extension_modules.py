@@ -35,6 +35,17 @@ router = APIRouter(prefix="/api/v2/modules", tags=["extension-modules"])
 MODULE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 
 BUILTIN_MODULES = {
+    **{
+        key: {'name': name, 'version': '0.1.0', 'description': description, 'icon': icon,
+              'entry_url': '/v3/#/extensions/' + key, 'runtime': 'native', 'isolation': 'module-api',
+              'capabilities': ['read', 'write'], 'permissions': [key + ':read', key + ':write'],
+              'manifest': {'readonly': False}, 'sort_order': order}
+        for key, name, description, icon, order in [
+            ('subscriptions', '订阅与续费', '管理周期费用、续费日期与取消提醒', 'SUB', 70),
+            ('home-inventory', '家庭物品', '记录物品位置、购买凭证、保修和维护', 'BOX', 80),
+            ('life-reminders', '生活待办', '管理生活清单、重复任务及统一到期提醒', 'TODO', 90),
+        ]
+    },
     "password-manager": {
         "name": "密码管理", "version": "0.2.0",
         "description": "在工作台中登录、解锁和使用个人密码库",
@@ -209,8 +220,8 @@ def seed_extension_modules() -> None:
             if row is None:
                 row = ExtensionModule(
                     key=key,
-                    running=key in {"electricity", "password-manager"},
-                    status="running" if key in {"electricity", "password-manager"} else "stopped",
+                    running=key in {"electricity", "password-manager", "subscriptions", "home-inventory", "life-reminders"},
+                    status="running" if key in {"electricity", "password-manager", "subscriptions", "home-inventory", "life-reminders"} else "stopped",
                 )
                 db.add(row)
                 changed = True
@@ -436,7 +447,7 @@ def check_module_health(module_key: str, user: object = Depends(require_operator
         elif module_key == "command-code-usage":
             _apply_command_code_config(row)
             result = _record_command_code_health(row, model_usage.status(force=True))
-        elif module_key in {"electricity", "opencode-agent", "automation"}:
+        elif module_key in {"electricity", "opencode-agent", "automation", "subscriptions", "home-inventory", "life-reminders"}:
             try:
                 response = requests.get(f"http://module-{module_key}:8080/health/ready", timeout=3)
                 available = response.status_code == 200

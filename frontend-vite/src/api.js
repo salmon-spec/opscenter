@@ -63,7 +63,7 @@ async function requestBlob(path, { query, signal, timeoutMs } = {}) {
   }
 }
 
-async function request(path, { method = 'GET', body, query, signal, timeoutMs } = {}) {
+async function request(path, { method = 'GET', body, query, signal, timeoutMs, idempotencyKey } = {}) {
   let url = API_BASE + (path.startsWith('/modules/') ? path : '/api/v2' + path)
   if (query) {
     const p = new URLSearchParams()
@@ -79,6 +79,7 @@ async function request(path, { method = 'GET', body, query, signal, timeoutMs } 
   else if (signal) signal.addEventListener('abort', abort, { once: true })
   const timer = timeoutController ? setTimeout(abort, timeoutMs) : null
   const opts = { method, headers: {}, signal: timeoutController?.signal || signal }
+  if (idempotencyKey) opts.headers['Idempotency-Key'] = idempotencyKey
   const token = getAccessToken()
   if (token) opts.headers.Authorization = `Bearer ${token}`
   if (body !== undefined) {
@@ -116,8 +117,8 @@ async function request(path, { method = 'GET', body, query, signal, timeoutMs } 
 export const api = {
   download: (path, query, options = {}) => requestBlob(path, { query, signal: options.signal, timeoutMs: options.timeoutMs }),
   get: (path, query, options = {}) => request(path, { query, signal: options.signal, timeoutMs: options.timeoutMs }),
-  post: (path, body, options = {}) => request(path, { method: 'POST', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
-  put: (path, body, options = {}) => request(path, { method: 'PUT', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
+  post: (path, body, options = {}) => request(path, { method: 'POST', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs, idempotencyKey: options.idempotencyKey }),
+  put: (path, body, options = {}) => request(path, { method: 'PUT', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs, idempotencyKey: options.idempotencyKey }),
   patch: (path, body, options = {}) => request(path, { method: 'PATCH', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
   del: (path, options = {}) => request(path, { method: 'DELETE', query: options.query, signal: options.signal, timeoutMs: options.timeoutMs }),
 }

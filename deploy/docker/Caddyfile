@@ -80,6 +80,27 @@
         rewrite * /api/v2{uri}
         reverse_proxy backend:9091
     }
+    handle_path /modules/subscriptions/* {
+        @lifePublic path /api/v1/*
+        @lifeInternal path /api/v1/internal/*
+        respond @lifeInternal 404
+        reverse_proxy @lifePublic module-subscriptions.opscenter-life.svc:8080
+        respond 404
+    }
+    handle_path /modules/home-inventory/* {
+        @homePublic path /api/v1/*
+        @homeInternal path /api/v1/internal/*
+        respond @homeInternal 404
+        reverse_proxy @homePublic module-home-inventory.opscenter-life.svc:8080
+        respond 404
+    }
+    handle_path /modules/life-reminders/* {
+        @remindersPublic path /api/v1/*
+        @remindersInternal path /api/v1/internal/*
+        respond @remindersInternal 404
+        reverse_proxy @remindersPublic module-life-reminders.opscenter-life.svc:8080
+        respond 404
+    }
     handle /modules/* {
         respond `{"detail":"业务模块网关尚未接入"}` 503
     }
