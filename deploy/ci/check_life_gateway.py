@@ -86,7 +86,12 @@ try:
         config = runpy.run_path(str(Path(__file__).resolve().parents[1]/'k8s/life_native.py'))['gateway'](8085)
         config = config.replace('127.0.0.1:', mock + ':')
         (root/'Caddyfile').write_text(config)
+        for file in root.iterdir():
+            file.chmod(0o644)
         docker('run', '-d', '--rm', '--security-opt', 'apparmor=unconfined', '--name', native_web,
+               '--user', '10001:10001', '--cap-drop=ALL', '--cap-add=NET_BIND_SERVICE',
+               '--security-opt', 'no-new-privileges', '--read-only', '--tmpfs', '/tmp',
+               '-e', 'XDG_CONFIG_HOME=/tmp', '-e', 'XDG_DATA_HOME=/tmp',
                '--network', network, '--network-alias', 'life-native-web',
                '-v', directory + ':/run/native-tls:ro', '-v', str(root/'Caddyfile') + ':/etc/caddy/Caddyfile:ro',
                'opscenter/frontend:' + tag)
