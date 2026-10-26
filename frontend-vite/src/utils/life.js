@@ -35,7 +35,7 @@ export function formFields(kind, editing) {
     {key:'entityTypeId',label:'类型（物品或位置）',type:'select',catalog:'types',required:true},
     {key:'parentId',label:'所在位置',type:'select',catalog:'locations'},
     {key:'tagIds',label:'分类标签（可多选）',type:'multiple',catalog:'tags'},
-    {key:'quantity',label:'数量',type:'number',min:0,required:true},{key:'assetId',label:'资产编号（数字，可用短横线分组）',pattern:'[0-9-]*',max:15},{key:'insured',label:'已投保',type:'checkbox'},
+    {key:'quantity',label:'数量',type:'number',min:0,step:'any',required:true},{key:'assetId',label:'资产编号（数字，可用短横线分组）',pattern:'[0-9-]*',max:15},{key:'insured',label:'已投保',type:'checkbox'},
     {key:'manufacturer',label:'品牌'}, {key:'modelNumber',label:'型号'}, {key:'serialNumber',label:'序列号'},
     {key:'purchaseDate',label:'购买日期',type:'date'},
     {key:'purchasePrice',label:'购买金额',type:'number',min:0,step:'0.01'},

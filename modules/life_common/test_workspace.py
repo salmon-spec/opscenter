@@ -84,6 +84,7 @@ def test_item_and_task_fields_reject_upstream_invalid_values():
     with pytest.raises(ValidationError):
         Task(title='事项',project_id=1,start_date='2026-10-27T01:00:00Z',end_date='2026-10-26T01:00:00Z')
     assert Item(name='家电',entityTypeId=uuid4(),quantity=3,assetId='000-123').update_body()['quantity']==3
+    assert Item(name='耗材',entityTypeId=uuid4(),quantity=1.5).update_body()['quantity']==1.5
 
 
 def test_readiness_checks_authenticated_api_and_fails_closed(monkeypatch):

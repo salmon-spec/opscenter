@@ -40,7 +40,7 @@ class Item(Model):
     warrantyDetails: str = Field(default='', max_length=4000)
     notes: str = Field(default='', max_length=4000)
     archived: bool = False
-    quantity: int = Field(default=1, ge=0, le=100000000)
+    quantity: float = Field(default=1, ge=0, le=100000000)
     assetId: str = Field(default='',max_length=15,pattern=r'^[0-9-]*$')
     insured: bool = False
     soldDate: date | None = None

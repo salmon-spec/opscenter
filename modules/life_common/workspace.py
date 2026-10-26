@@ -207,6 +207,8 @@ def register_workspace(app, upstream):
                     raise HTTPException(422,'已有成员不可替换，请新增对应成员后调整权限')
                 if upstream.name=='wallos':
                     form={k:int(v) if isinstance(v,bool) else v for k,v in values.items()}
+                    if key=='budget' and not form.get('budget_period_anchor_date'):
+                        form.pop('budget_period_anchor_date',None)
                     if not spec.get('singleton'):
                         form |= {'action':{'create':'add','update':'edit','delete':'delete'}[op],'id':item_id}
                     return upstream.request('POST',spec['write'],form=form)
