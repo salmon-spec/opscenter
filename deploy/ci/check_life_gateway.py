@@ -19,14 +19,20 @@ def docker(*args):
     return subprocess.check_output(['docker', *args], stderr=subprocess.STDOUT, timeout=45)
 
 
-server = '''from http.server import BaseHTTPRequestHandler,HTTPServer
-import json,threading
+server = '''from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer as HTTPServer
+import json,threading,base64,hashlib
 class Handler(BaseHTTPRequestHandler):
+ protocol_version='HTTP/1.1'
  def log_message(self,*args):pass
  def do_GET(self):
   if self.path=='/_ops/verify':
-   self.send_response(204 if self.headers.get('Cookie')=='test-gate=valid' else 401);self.send_header('X-Native-Cookie','native-session=private');self.end_headers();return
-  self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('X-Frame-Options','DENY');self.send_header('Set-Cookie','PHPSESSID=server; HttpOnly; Path=/');self.end_headers();self.wfile.write(json.dumps({'path':self.path,'cookie':self.headers.get('Cookie','')}).encode())
+   self.send_response(403 if self.headers.get('Upgrade') else 204 if self.headers.get('Cookie')=='test-gate=valid' else 401);self.send_header('X-Native-Cookie','native-session=private');self.send_header('Content-Length','0');self.end_headers();return
+  if self.headers.get('Upgrade','').lower()=='websocket':
+   assert self.headers.get('Cookie')=='native-session=private'
+   accept=base64.b64encode(hashlib.sha1((self.headers['Sec-WebSocket-Key']+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
+   self.send_response(101);self.send_header('Upgrade','websocket');self.send_header('Connection','Upgrade');self.send_header('Sec-WebSocket-Accept',accept);self.end_headers();self.wfile.flush();self.rfile.read(2);self.wfile.write(bytes([136,2,3,232]));self.wfile.flush();self.close_connection=True;return
+  body=json.dumps({'path':self.path,'cookie':self.headers.get('Cookie','')}).encode()
+  self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.send_header('X-Frame-Options','DENY');self.send_header('Set-Cookie','PHPSESSID=server; HttpOnly; Path=/');self.end_headers();self.wfile.write(body)
 threading.Thread(target=HTTPServer(('0.0.0.0',8085),Handler).serve_forever,daemon=True).start()
 HTTPServer(('0.0.0.0',8080),Handler).serve_forever()
 '''
@@ -47,7 +53,8 @@ for key in ['subscriptions','home-inventory','life-reminders']:
   r=s.get('http://life-web/modules/'+key+path,timeout=4);assert r.status_code==404,(key,path,r.status_code)
 print('9 life gateway route checks passed')
 '''
-native_client = '''import requests,time
+native_client = '''import requests,time,ssl
+from websockets.sync.client import connect
 s=requests.Session();s.trust_env=False
 for scheme,port in [('http',8082),('https',8443)]:
  base=scheme+'://life-native-web:'+str(port)
@@ -63,7 +70,9 @@ for scheme,port in [('http',8082),('https',8443)]:
   assert r.headers['Set-Cookie'].startswith(('tls_' if scheme=='https' else 'http_')+'PHPSESSID=')
   assert 'X-Frame-Options' not in r.headers
   assert 'frame-ancestors http://10.66.66.13:30088 https://10.66.66.13' in r.headers['Content-Security-Policy']
-print('8 native gateway route checks passed')
+ with connect(base.replace('http','ws',1)+'/ws',additional_headers={'Cookie':'test-gate=valid'},open_timeout=4,close_timeout=.2,**({'ssl':ssl.create_default_context(cafile='/run/test/tls.crt')} if scheme=='https' else {})) as ws:
+  assert ws.state.name=='OPEN'
+print('10 native gateway route checks passed')
 '''
 created = False
 try:

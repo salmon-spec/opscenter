@@ -24,6 +24,8 @@ def gateway(upstream_port):
         forward_auth 127.0.0.1:8080 {
             uri /_ops/verify
             copy_headers X-Native-Cookie
+            header_up -Upgrade
+            header_up -Connection
         }
         reverse_proxy 127.0.0.1:UPSTREAM {
             header_up Cookie {http.request.header.X-Native-Cookie}
