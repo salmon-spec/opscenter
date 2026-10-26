@@ -53,3 +53,32 @@ test('an old 401 cannot clear a newly issued login token', async () => {
   assert.equal(getAccessToken(), 'new')
   assert.deepEqual(events, [])
 })
+
+
+test('module registry actions and business gateways use their own routes', async () => {
+  const calls = []
+  globalThis.fetch = async (url, options) => {
+    calls.push([url, options.method || 'GET'])
+    return { ok: true, json: async () => ({}), blob: async () => new Blob(['ok']) }
+  }
+  await api.get('/modules', { running: true })
+  await api.get('/modules/subscriptions')
+  await api.post('/modules/subscriptions/stop')
+  await api.post('/modules/subscriptions/start')
+  await api.post('/modules/subscriptions/health')
+  await api.get('/modules/subscriptions/api/v1/subscriptions')
+  await api.get('/modules/oss-browser/objects')
+  await api.get('/modules/password-manager/status')
+  await api.download('/modules/home-inventory/api/v1/export')
+  assert.deepEqual(calls, [
+    ['/api/v2/modules?running=true', 'GET'],
+    ['/api/v2/modules/subscriptions', 'GET'],
+    ['/api/v2/modules/subscriptions/stop', 'POST'],
+    ['/api/v2/modules/subscriptions/start', 'POST'],
+    ['/api/v2/modules/subscriptions/health', 'POST'],
+    ['/modules/subscriptions/api/v1/subscriptions', 'GET'],
+    ['/modules/oss-browser/objects', 'GET'],
+    ['/modules/password-manager/status', 'GET'],
+    ['/modules/home-inventory/api/v1/export', 'GET'],
+  ])
+})

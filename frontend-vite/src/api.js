@@ -3,6 +3,9 @@
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 const TOKEN_KEY = 'ops-access-token'
 
+// Module lifecycle belongs to the core registry; business APIs keep their gateway paths.
+const apiUrl = (path) => API_BASE + (path.startsWith('/modules/') && !/^\/modules\/[^/]+(?:\/(?:start|stop|health))?$/.test(path) ? path : '/api/v2' + path)
+
 export const getAccessToken = () => localStorage.getItem(TOKEN_KEY) || ''
 export const setAccessToken = (token) => localStorage.setItem(TOKEN_KEY, token || '')
 export const clearAccessToken = () => localStorage.removeItem(TOKEN_KEY)
@@ -29,7 +32,7 @@ async function confirmSession(token) {
 }
 
 async function requestBlob(path, { query, signal, timeoutMs } = {}) {
-  let url = API_BASE + (path.startsWith('/modules/') ? path : '/api/v2' + path)
+  let url = apiUrl(path)
   if (query) {
     const p = new URLSearchParams()
     for (const [k, v] of Object.entries(query)) {
@@ -64,7 +67,7 @@ async function requestBlob(path, { query, signal, timeoutMs } = {}) {
 }
 
 async function request(path, { method = 'GET', body, query, signal, timeoutMs, idempotencyKey } = {}) {
-  let url = API_BASE + (path.startsWith('/modules/') ? path : '/api/v2' + path)
+  let url = apiUrl(path)
   if (query) {
     const p = new URLSearchParams()
     for (const [k, v] of Object.entries(query)) {
