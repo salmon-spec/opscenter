@@ -14,8 +14,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .engine import Semaphore
 from .store import Store, now, actor
+from .scripts import Scripts
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 HERE = Path(__file__).parent
 
 
@@ -70,6 +71,13 @@ class Run(Input):
 
 class Active(Input):
     active: bool
+
+
+class ScriptEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = Field(min_length=1, max_length=250)
+    content: str = Field(min_length=1, max_length=128000)
+    revision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 def create_app(data_dir=None, mode=None, engine=None):
@@ -205,6 +213,31 @@ def create_app(data_dir=None, mode=None, engine=None):
     def validate_template(body):
         for kind, key in (("inventories", "inventory_id"), ("repositories", "repository_id"), ("environments", "environment_id")):
             find(kind, getattr(body, key))
+
+    def scripts_for(item_id):
+        template = find("templates", item_id)
+        root = os.getenv("AUTOMATION_SCRIPTS_DIR", "")
+        repository_id = os.getenv("AUTOMATION_SCRIPTS_REPOSITORY_ID", "0")
+        if not root or template.get("repository_id") != int(repository_id):
+            raise HTTPException(409, "此模板使用外部仓库，请在其源仓库编辑；本地脚本仓库需由管理员配置")
+        return Scripts(root, repository_id), template
+
+    @app.get("/api/v1/templates/{item_id}/script")
+    def read_script(item_id: int, path: str | None = None):
+        scripts, template = scripts_for(item_id)
+        return {**scripts.read(path or template["playbook"]), "files": scripts.files()}
+
+    @app.post("/api/v1/templates/{item_id}/script")
+    def edit_script(item_id: int, body: ScriptEdit):
+        scripts, template = scripts_for(item_id)
+        if any(t.get("status") in {"waiting", "starting", "running", "stopping"} for t in items("tasks")):
+            raise HTTPException(409, "有作业正在排队或运行，请结束后再保存脚本")
+        if len(body.content.encode("utf-8")) > 128000:
+            raise HTTPException(413, "脚本超过 128 KB")
+        store.audit("save_script", f"{item_id}:{body.path}", "requested")
+        result = scripts.save(body.path, body.content, body.revision, actor.get())
+        store.audit("save_script", f"{item_id}:{body.path}", result["commit"])
+        return result
 
     @app.post("/api/v1/templates", status_code=201)
     def add_template(body: Template):

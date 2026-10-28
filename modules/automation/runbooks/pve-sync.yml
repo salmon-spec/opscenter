@@ -1,0 +1,15 @@
+---
+- name: PVE 虚拟机与主机管理同步
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: 核对并同步 PVE 虚拟机台账
+      ansible.builtin.command:
+        argv: "{{ ['python3', playbook_dir + '/sync_pve_hosts.py', '--config', '/run/pve-sync/config.json'] + ([] if ansible_check_mode else ['--apply']) }}"
+      check_mode: false
+      register: sync_result
+      changed_when: "not ansible_check_mode and 'DONE ' in sync_result.stdout"
+    - name: 显示同步结果
+      ansible.builtin.debug:
+        var: sync_result.stdout_lines

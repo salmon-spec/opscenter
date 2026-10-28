@@ -1,4 +1,4 @@
-# 自动化作业 · 0.2.0
+# 自动化作业 · 0.3.0
 
 独立运行的 OpsCenter 风格界面与 Semaphore API 网关；支持工作台统一登录与沙箱通信。
 
@@ -130,3 +130,33 @@ Semaphore 2.19.17 接受停止并将任务置为 stopped 后，已启动的 Ansi
 
 页面通过四个页签显示对应列表、搜索、数量和操作。生产以 `opscenter-automation-ui-20261023-r3` ConfigMap 覆盖静态目录，部署清单已包含此资源与挂载，基础镜像保持 0.2.0。下次重建镜像需包含当前 static/ 三文件，并在核对哈希后处理覆盖挂载。
 发布前模板、静态文件及回滚脚本位于 master `/home/ubuntu/opscenter-automation-ui-20261023/`，详见项目记忆的界面优化专题。
+
+
+## 0.3.0：脚本编辑与 PVE 主机台账同步
+
+任务模板列表新增“编辑脚本”。管理员可以编辑配置的本地 Git 作业仓库内 `.yml`、`.yaml`、`.py`、`.sh` 文件；外部仓库继续在源仓库管理。保存会检查内容版本、拒绝覆盖他人修改，并提交 Git。任务排队或运行期间禁止保存；脚本仓库与执行引擎共用持久卷，后续任务读取新提交。脚本正文保留缩进与尾部换行，单文件上限 128 KB。脚本语法与执行结果由作业运行验证。
+
+配置 `AUTOMATION_SCRIPTS_DIR` 为本地 Git 仓库绝对路径，`AUTOMATION_SCRIPTS_REPOSITORY_ID` 为该仓库在 Semaphore 中的 ID。网关需安装 Git 并具有仓库写权限。模板详情的脚本接口为 `GET/POST /api/v1/templates/{id}/script`，POST 字段为 `path`、`content`、`revision`（读取时返回的 SHA256）。仓库只存脚本，不存访问凭据。脚本由管理员维护，拥有执行环境已配置的权限。
+
+### 同步作业
+
+- `runbooks/pve_inventory.py`：安装到 PVE 的只读采集器，交叉核对集群清单与所有在线节点的 QEMU 列表，读取配置中的 CPU、内存与 cloud-init IPv4。以宿主 machine-id 的摘要标识来源。节点离线、读取失败、清单变化时退出失败。
+- `runbooks/sync_pve_hosts.py`：通过严格校验 SSH 主机密钥的专用受限密钥读取清单，经现有主机 API 同步；默认预览，加 `--apply` 才写入。
+- `runbooks/pve-sync.yml`：运行该 Python 脚本的 Ansible 作业入口；检查模式仅预览，执行模式实际同步。使用容器 localhost 清单，不在虚拟机内执行升级命令。
+
+同步按 `pve-source:<来源>` 和 `pve-vmid:<VMID>` 标签识别托管记录；首次可在配置中用主机 UUID→VMID 明确绑定历史记录。未绑定的现存主机仅在管理地址唯一匹配时接管；冲突会停止。新增记录补名称、IP、资源信息与来源标签；无静态 IPv4 时登记 `.invalid` 占位并标明“待补管理IP”，不猜测可连接地址。既有名称、管理连接配置、凭据、K3s 映射及人工备注保留，资源信息写在 `[PVE sync]` 行。
+
+已删除虚拟机的记录通过现有归档 API 从主机管理移除，历史与磁盘保留。关机虚拟机仍保留，PVE 模板不新增为主机。宿主、云主机及其他来源不会因未出现在当前 PVE 清单中被移除。清单为空默认停止，确实删除最后一台虚拟机时须显式使用 `--allow-empty`。API 写入不自动重试，失败时日志显示已完成的操作，修复后再次运行核对。
+
+运行示例：
+
+```sh
+python3 sync_pve_hosts.py --config /run/pve-sync/config.json
+python3 sync_pve_hosts.py --config /run/pve-sync/config.json --apply
+```
+
+配置 JSON 包含 `source_id`、`pve_ssh`、`known_hosts`、`ssh_key`、`opscenter_url`、`username_file`、`password_file`、`legacy_vmids`；凭据字段均为只读文件路径。对外工作台地址必须 HTTPS，容器内部 `http://web` 使用已限制的网络路径。PVE 的 SSH 公钥必须设置 `restrict` 与强制命令，只运行独立安装的采集器，不能使用作业密钥执行其他命令。
+
+生产 0.3.0 使用镜像内静态文件，并取消旧 UI ConfigMap 覆盖。初始化仅补入不存在的脚本，重建不会覆盖编辑后的内容。网络仅新增到指定 PVE 的 TCP/22、内部 web TCP/80 和集群 DNS 的出站。仅引擎挂载工作台登录凭据与 PVE 只读密钥；网关不挂载这些凭据。未指定周期时只创建手动作业，不启用定时计划。
+
+验证：`python -m pytest modules/automation/test_main.py modules/automation/test_scripts.py -q`；部署后须验证检查/执行/幂等、脚本保存及重建持久化、匿名鉴权，并保留当前部署和两端数据库备份。

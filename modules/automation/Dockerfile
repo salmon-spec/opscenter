@@ -2,7 +2,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 AUTOMATION_DATA_DIR=/data
 WORKDIR /app
 COPY automation/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home automation && mkdir /data && chown 10001:10001 /data
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/* && pip install --no-cache-dir -r requirements.txt && useradd --uid 10001 --create-home automation && mkdir /data && chown 10001:10001 /data
 COPY --chown=10001:10001 automation /app/modules/automation
 COPY --chown=10001:10001 runtime /app/runtime
 USER 10001:10001

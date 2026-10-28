@@ -72,7 +72,7 @@ function render() {
   if(tab==='tasks')list=list.filter(x=>!$('#status-filter').value||x.status===$('#status-filter').value).sort((a,b)=>b.id-a.id);
   $('#result-count').textContent = `共 ${list.length} ${ {templates:'个模板',tasks:'条执行记录',inventories:'个清单',schedules:'个计划'}[tab]}`;
   if(tab==='templates') {
-    rows=list.map(t=>{const last=[...state.tasks].sort((a,b)=>b.id-a.id).find(r=>r.template_id===t.id);return `<tr><td><button class="op-link op-name au-name" data-template="${t.id}">${escapeHtml(t.name)}</button><div class="op-secondary">${escapeHtml(t.description || t.playbook)}</div></td><td>${escapeHtml(t.app || 'ansible')}</td><td>${escapeHtml(nameOf('inventories',t.inventory_id))}</td><td>${last?statusBadge(last.status):'<span class="op-small">未执行</span>'}</td><td><div class="op-row-actions"><button class="op-link" data-run="${t.id}" ${t.app!=='ansible'?'disabled':''}>运行</button><button class="op-link" data-template="${t.id}">详情</button></div></td></tr>`}).join('');
+    rows=list.map(t=>{const last=[...state.tasks].sort((a,b)=>b.id-a.id).find(r=>r.template_id===t.id);return `<tr><td><button class="op-link op-name au-name" data-template="${t.id}">${escapeHtml(t.name)}</button><div class="op-secondary">${escapeHtml(t.description || t.playbook)}</div></td><td>${escapeHtml(t.app || 'ansible')}</td><td>${escapeHtml(nameOf('inventories',t.inventory_id))}</td><td>${last?statusBadge(last.status):'<span class="op-small">未执行</span>'}</td><td><div class="op-row-actions"><button class="op-link" data-run="${t.id}" ${t.app!=='ansible'?'disabled':''}>运行</button><button class="op-link" data-script="${t.id}">编辑脚本</button><button class="op-link" data-template="${t.id}">详情</button></div></td></tr>`}).join('');
     $('#content').innerHTML=table(['模板名称','类型','执行范围','最近执行','操作'],rows);
   } else if(tab==='tasks') $('#content').innerHTML=table(['任务','状态','开始时间','耗时','操作'],taskRows(list));
   else if(tab==='inventories') $('#content').innerHTML=table(['清单名称','格式','SSH 凭据','操作'],list.map(i=>`<tr><td class="op-name">${escapeHtml(i.name)}</td><td>${escapeHtml(i.type)}</td><td>${escapeHtml(nameOf('keys',i.ssh_key_id))}</td><td><button class="op-link" data-inventory="${i.id}">查看清单</button></td></tr>`).join(''));
@@ -83,6 +83,10 @@ function templateForm(item) {
   if(!state.inventories.length||!state.repositories.length||!state.environments.length){open('准备模板资源','需要主机清单、仓库与变量环境','<p class="op-note">请先在 Semaphore 项目配置仓库、变量环境和 SSH 凭据，并在本模块建立清单。配置完成后刷新。</p>');return;}
   const t=item||{};
   open(item?'编辑模板':'新建模板','Ansible 作业',`<form data-form="template" data-id="${t.id||''}">${field('模板名称',input('name',t.name,'required maxlength="100"'))}${field('描述',input('description',t.description,'maxlength="500"'))}${field('作业仓库',select('repository_id',state.repositories,t.repository_id))}${field('Playbook 路径',input('playbook',t.playbook,'required maxlength="250" placeholder="playbooks/host-health.yml"'))}${field('目标主机清单',select('inventory_id',state.inventories,t.inventory_id))}${field('变量环境',select('environment_id',state.environments,t.environment_id))}${actions()}</form>`);
+}
+async function scriptForm(id, path) {
+  const script=await api(`templates/${id}/script`+(path?'?path='+encodeURIComponent(path):''));
+  open('编辑作业脚本',nameOf('templates',id),`<form data-form="script" data-id="${id}"><label>脚本文件<select class="op-field" id="script-file" data-template-id="${id}">${script.files.map(p=>`<option value="${escapeHtml(p)}" ${p===script.path?'selected':''}>${escapeHtml(p)}</option>`).join('')}</select></label><input type="hidden" name="path" value="${escapeHtml(script.path)}"><input type="hidden" name="revision" value="${script.revision}">${field('脚本正文',`<textarea class="op-field au-code" name="content" rows="22" required maxlength="128000" spellcheck="false">${escapeHtml(script.content)}</textarea>`)}<p class="op-note">保存后生成 Git 版本，后续作业使用新版本。凭据请放在受保护文件中。</p>${actions('保存脚本')}</form>`);
 }
 function runForm(id) { const t=lookup('templates',id);open('运行作业',t.name,`<form data-form="run"><input name="template_id" type="hidden" value="${id}"><div class="op-kv"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>作业脚本</span><code>${escapeHtml(t.playbook)}</code><span>数据源</span><span>${state.mode==='demo'?'本地演示':'真实 Semaphore 项目'}</span></div>${field('执行说明',input('message','','maxlength="300" placeholder="填写本次操作原因"'))}<label class="au-check"><input name="dry_run" type="checkbox" checked>检查模式（Ansible --check）</label><p class="op-note">${state.mode==='demo'?'此模式仅保存模拟记录，不执行脚本。':'检查模式仍会连接真实主机，部分 playbook 的特殊任务可能执行实际动作；请确认脚本可信。'}</p>${actions(state.mode==='demo'?'模拟运行':'提交执行')}</form>`); }
 function inventoryForm() { if(!state.keys.length){open('先配置 SSH 凭据','Semaphore 项目配置','<p>请先在 Semaphore 项目中创建 SSH 凭据。模块只引用凭据 ID，不接收或展示私钥。</p>');return;}
@@ -101,6 +105,7 @@ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b
   if(b.dataset.tab){tab=b.dataset.tab;$('#search').value='';$('#notice').textContent='';render();return;}
   if(b.dataset.action==='create'){templateForm();return;}
   if(b.id==='add-resource'){tab==='inventories'?inventoryForm():scheduleForm();return;}
+  if(b.dataset.script){await scriptForm(Number(b.dataset.script));return;}
   if(b.dataset.run){runForm(Number(b.dataset.run));return;}
   if(b.dataset.template){const t=lookup('templates',Number(b.dataset.template));open(t.name,'模板详情',`<div class="op-kv"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>脚本</span><code>${escapeHtml(t.playbook)}</code><span>仓库</span><span>${escapeHtml(nameOf('repositories',t.repository_id))}</span><span>变量环境</span><span>${escapeHtml(nameOf('environments',t.environment_id))}</span></div><p>${escapeHtml(t.description)}</p><div class="op-drawer-actions"><button class="op-button" data-edit="${t.id}" ${t.app!=='ansible'?'disabled':''}>编辑模板</button><button class="op-button primary" data-run="${t.id}" ${t.app!=='ansible'?'disabled':''}>运行作业</button></div>`);return;}
   if(b.dataset.edit){templateForm(lookup('templates',Number(b.dataset.edit)));return;}
@@ -116,6 +121,7 @@ root.addEventListener('submit',async e=>{e.preventDefault();const f=e.target;
   for(const key of ['template_id','inventory_id','repository_id','environment_id','ssh_key_id'])if(key in data)data[key]=Number(data[key]);
   const type=f.dataset.form;
   if(type==='template'){data.app='ansible';await mutate('templates'+(f.dataset.id?'/'+f.dataset.id:''),f.dataset.id?'PUT':'POST',data);}
+  if(type==='script')await mutate(`templates/${f.dataset.id}/script`,'POST',data);
   if(type==='inventory')await mutate('inventories','POST',data);
   if(type==='schedule')await mutate('schedules','POST',{...data,active:false,type:''});
   if(type==='run'){data.dry_run=f.elements.dry_run.checked;await mutate('tasks','POST',data);}
@@ -147,3 +153,5 @@ if (embedded) {
   parent.postMessage({type:'ops-module-ready'}, '*');
   window.addEventListener('pagehide', () => { clearInterval(handshake); for (const request of requests.values()) clearTimeout(request.timeout); });
 }
+
+root.addEventListener('change',async e=>{if(e.target.id!=='script-file')return;const picker=e.target;try{await scriptForm(Number(picker.dataset.templateId),picker.value);}catch(error){$('#drawer-error').textContent=error.message;}});

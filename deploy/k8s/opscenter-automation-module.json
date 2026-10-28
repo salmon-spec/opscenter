@@ -4,16 +4,19 @@
   "items": [
     {
       "apiVersion": "v1",
-      "kind": "ConfigMap",
-      "metadata": {
-        "name": "opscenter-automation-ui-20261023-r3",
-        "namespace": "opscenter"
+      "data": {
+        "failure.yml": "- hosts: all\n  gather_facts: false\n  tasks:\n    - name: Expected acceptance failure\n      ansible.builtin.fail:\n        msg: AUTOMATION_EXPECTED_FAILURE\n",
+        "pve-sync.yml": "---\n- name: PVE 虚拟机与主机管理同步\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: 核对并同步 PVE 虚拟机台账\n      ansible.builtin.command:\n        argv: \"{{ ['python3', playbook_dir + '/sync_pve_hosts.py', '--config', '/run/pve-sync/config.json'] + ([] if ansible_check_mode else ['--apply']) }}\"\n      check_mode: false\n      register: sync_result\n      changed_when: \"not ansible_check_mode and 'DONE ' in sync_result.stdout\"\n    - name: 显示同步结果\n      ansible.builtin.debug:\n        var: sync_result.stdout_lines\n",
+        "ssh.conf": "Host *\n  StrictHostKeyChecking yes\n  UserKnownHostsFile /etc/semaphore/known_hosts\n",
+        "stop.yml": "- hosts: all\n  gather_facts: false\n  tasks:\n    - name: Wait before writing isolated marker\n      ansible.builtin.shell: sleep 20; echo STOP_FAILED > /tmp/automation-stop-marker\n      changed_when: false\n",
+        "success.yml": "- hosts: all\n  gather_facts: false\n  tasks:\n    - name: Validate isolated execution\n      ansible.builtin.assert:\n        that: 2 + 2 == 4\n    - name: Report acceptance\n      ansible.builtin.debug:\n        msg: AUTOMATION_REAL_EXECUTION_OK\n",
+        "sync_pve_hosts.py": "#!/usr/bin/env python3\n\"\"\"Reconcile one trusted PVE inventory with OpsCenter; default is preview.\"\"\"\nimport argparse\nimport ipaddress\nimport json\nimport re\nimport subprocess\nimport time\nimport uuid\nfrom pathlib import Path\nfrom urllib.error import HTTPError\nfrom urllib.parse import urlsplit\nfrom urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler\n\nFIELDS = (\"name\", \"host\", \"ssh_port\", \"tags\", \"remark\", \"lan_ip\", \"wireguard_ip\",\n          \"preferred_management_channel\", \"management_address_override\", \"cluster_id\",\n          \"kubernetes_node_name\", \"node_role\", \"runtime_type\")\n\n\nclass NoRedirect(HTTPRedirectHandler):\n    def redirect_request(self, *args):\n        return None\n\n\ndef request(base, path, token=None, payload=None, method=None):\n    headers = {\"Content-Type\": \"application/json\"}\n    if token:\n        headers[\"Authorization\"] = \"Bearer \" + token\n    req = Request(base + path, data=json.dumps(payload).encode() if payload is not None else None,\n                  headers=headers, method=method)\n    try:\n        with build_opener(ProxyHandler({}), NoRedirect()).open(req, timeout=15) as response:\n            raw = response.read(4 * 1024 * 1024 + 1)\n            if len(raw) > 4 * 1024 * 1024:\n                raise ValueError(\"API response too large\")\n            return json.loads(raw)\n    except HTTPError as error:\n        raise RuntimeError(f\"OpsCenter API HTTP {error.code}; no automatic write retry\") from None\n\n\ndef plan(snapshot, hosts, config, allow_empty=False):\n    if (snapshot.get(\"complete\") is not True or snapshot.get(\"source_id\") != config[\"source_id\"]\n            or not 0 <= time.time() - snapshot.get(\"collected_at\", 0) < 180):\n        raise ValueError(\"PVE inventory incomplete, expired or from the wrong source\")\n    vms = snapshot[\"vms\"]\n    if not isinstance(vms, list) or (not vms and not allow_empty):\n        raise ValueError(\"Empty PVE inventory requires explicit --allow-empty\")\n    ids = [v[\"vmid\"] for v in vms]\n    if any(type(n) is not int or n < 100 for n in ids) or len(ids) != len(set(ids)):\n        raise ValueError(\"Invalid or duplicate PVE VMID\")\n    source_tag = \"pve-source:\" + config[\"source_id\"]\n    legacy = config.get(\"legacy_vmids\", {})\n    indexed = {}\n    for host in hosts:\n        tags = host.get(\"tags\") or []\n        if source_tag in tags:\n            matches = [t for t in tags if re.fullmatch(r\"pve-vmid:\\d+\", t)]\n            if len(matches) != 1:\n                raise ValueError(\"Invalid PVE host identity\")\n            vmid = int(matches[0].split(\":\")[1])\n        elif host[\"id\"] in legacy:\n            vmid = int(legacy[host[\"id\"]])\n        else:\n            continue\n        if vmid in indexed or host.get(\"is_local\") or host.get(\"agent_type\") == \"local\":\n            raise ValueError(\"Ambiguous PVE mapping or protected local host\")\n        indexed[vmid] = host\n    actions, claimed = [], {h[\"id\"] for h in indexed.values()}\n    for vm in vms:\n        if vm.get(\"template\"):\n            continue  # Templates stay in the presence set so conversion never causes removal.\n        vmid = vm[\"vmid\"]\n        ips = [str(ipaddress.IPv4Address(ip)) for ip in vm[\"ips\"]]\n        current = indexed.get(vmid)\n        if current is None:\n            matches = [h for h in hosts if h[\"id\"] not in claimed and set(ips).intersection(\n                {h.get(\"host\"), h.get(\"lan_ip\"), h.get(\"wireguard_ip\")})]\n            if len(matches) > 1 or any(any(t.startswith(\"pve-source:\") for t in h.get(\"tags\", [])) for h in matches):\n                raise ValueError(\"IP matches multiple hosts or another PVE source\")\n            current = matches[0] if matches else None\n        if current:\n            if current.get(\"is_local\") or current.get(\"agent_type\") == \"local\":\n                raise ValueError(\"Protected local host matched a guest IP\")\n            claimed.add(current[\"id\"])\n            values = {key: current[key] for key in FIELDS if current.get(key) is not None}\n        else:\n            address = ips[0] if ips else f\"pve-{config['source_id']}-vm{vmid}.invalid\"\n            values = {\"name\": vm[\"name\"][:50], \"host\": address, \"lan_ip\": ips[0] if ips else \"\",\n                      \"ssh_port\": 22, \"tags\": [], \"remark\": \"\"}\n        tags = [t for t in values.get(\"tags\", []) if not t.startswith(\"pve-vmid:\")]\n        values[\"tags\"] = list(dict.fromkeys([*tags, source_tag, f\"pve-vmid:{vmid}\"]))\n        note = f\"[PVE sync] VM{vmid} / {vm['name']} / {vm['cpus']} vCPU / {vm['memory_mib']} MiB\"\n        if not ips and values[\"host\"].endswith(\".invalid\"):\n            note += \" / 待补管理IP\"\n        remark = re.sub(r\"(?:\\n)?\\[PVE sync\\][^\\n]*\", \"\", values.get(\"remark\", \"\"))\n        values[\"remark\"] = (remark + \"\\n\" + note).strip()\n        if len(values[\"remark\"]) > 500 or len(values[\"tags\"]) > 30:\n            raise ValueError(\"Host notes or tags would exceed the supported limit\")\n        host_id = current[\"id\"] if current else str(uuid.uuid4())\n        if not current or any(values[k] != current.get(k) for k in values):\n            actions.append({\"action\": \"update\" if current else \"create\", \"vmid\": vmid,\n                            \"id\": host_id, \"values\": values})\n    for vmid, host in indexed.items():\n        if vmid not in ids:\n            actions.append({\"action\": \"archive\", \"vmid\": vmid, \"id\": host[\"id\"]})\n    return actions\n\n\ndef main():\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument(\"--config\", required=True)\n    parser.add_argument(\"--apply\", action=\"store_true\")\n    parser.add_argument(\"--allow-empty\", action=\"store_true\")\n    args = parser.parse_args()\n    config = json.loads(Path(args.config).read_text())\n    base = config[\"opscenter_url\"].rstrip(\"/\")\n    url = urlsplit(base)\n    if url.scheme != \"https\" and not (url.scheme == \"http\" and url.hostname in {\"web\", \"localhost\", \"127.0.0.1\"}):\n        raise ValueError(\"OpsCenter requires HTTPS, or the internal web service\")\n    if url.username or url.password or url.query or url.fragment:\n        raise ValueError(\"Invalid OpsCenter URL\")\n    raw = subprocess.check_output([\"ssh\", \"-F\", \"/dev/null\", \"-T\", \"-o\", \"BatchMode=yes\",\n        \"-o\", \"StrictHostKeyChecking=yes\", \"-o\", \"ConnectTimeout=10\", \"-o\", \"IdentitiesOnly=yes\",\n        \"-o\", \"UserKnownHostsFile=\" + config[\"known_hosts\"], \"-i\", config[\"ssh_key\"],\n        config[\"pve_ssh\"]], timeout=120, stderr=subprocess.PIPE)\n    if len(raw) > 4 * 1024 * 1024:\n        raise ValueError(\"PVE inventory too large\")\n    snapshot = json.loads(raw)\n    login = {\"username\": Path(config[\"username_file\"]).read_text().strip(),\n             \"password\": Path(config[\"password_file\"]).read_text().strip()}\n    token = request(base, \"/api/v2/auth/login\", payload=login)[\"access_token\"]\n    result = request(base, \"/modules/host-inventory/api/v1/hosts\", token)\n    if result.get(\"status\") not in {\"ok\", \"degraded\"} or not isinstance(result.get(\"items\"), list):\n        raise ValueError(\"Host inventory unavailable; no changes applied\")\n    actions = plan(snapshot, result[\"items\"], config, args.allow_empty)\n    print(json.dumps({\"mode\": \"apply\" if args.apply else \"preview\", \"pve_vms\": len(snapshot[\"vms\"]),\n        \"actions\": [{k: v for k, v in a.items() if k != \"values\"} for a in actions]}, ensure_ascii=False), flush=True)\n    if not args.apply:\n        return\n    for action in actions:\n        host_id = action[\"id\"]\n        prefix = \"/modules/host-inventory/api/v1/hosts\"\n        if action[\"action\"] == \"archive\":\n            request(base, prefix + f\"/{host_id}/archive\", token, {}, \"POST\")\n        elif action[\"action\"] == \"create\":\n            request(base, prefix, token, {**action[\"values\"], \"registration_id\": host_id}, \"POST\")\n        else:\n            request(base, prefix + f\"/{host_id}\", token, action[\"values\"], \"PUT\")\n        print(f\"DONE {action['action']} VM{action['vmid']} {host_id}\", flush=True)\n    after = request(base, \"/modules/host-inventory/api/v1/hosts\", token)\n    if after.get(\"status\") not in {\"ok\", \"degraded\"} or plan(snapshot, after[\"items\"], config, args.allow_empty):\n        raise RuntimeError(\"Post-sync verification failed; inspect completed actions before retry\")\n    print(\"SYNC_OK: host inventory matches PVE\", flush=True)\n\n\nif __name__ == \"__main__\":\n    try:\n        main()\n    except Exception as error:\n        # Avoid leaking credentials or response bodies into the job log.\n        raise SystemExit(\"SYNC_FAILED: \" + type(error).__name__ + \"; inspect inventory and configuration\")\n"
       },
       "immutable": true,
-      "data": {
-        "index.html": "<!doctype html>\n<html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>自动化作业 · OpsCenter 0.2.0</title><link rel=\"stylesheet\" href=\"../static/app.css\"><script src=\"../static/app.js\" defer></script></head>\n<body><div id=\"ops-automation-preview\">\n<section class=\"au-login\" id=\"login\"><form id=\"login-form\"><span class=\"op-tag\">AUTOMATION</span><h1>自动化作业</h1><p>独立管理任务模板、主机清单与执行记录。</p><label>模块访问令牌<input class=\"op-field\" name=\"token\" type=\"password\" autocomplete=\"current-password\" required aria-describedby=\"token-help\"></label><p class=\"op-small\" id=\"token-help\">首次启动后，从本模块数据目录的 admin-token 文件读取。</p><button class=\"op-button primary\" type=\"submit\">进入模块</button><p id=\"login-error\" role=\"alert\"></p></form><div class=\"au-login-aside\"><h2>让重复操作<br>成为标准作业。</h2><p>主机健康巡检</p><p>Agent 版本核对</p><p>备份完整性校验</p><small>Semaphore 执行引擎 · OpsCenter 界面</small></div></section>\n<main id=\"application\" class=\"op-main\" hidden>\n<div class=\"op-navigation\"><div class=\"op-tabs\" role=\"tablist\" aria-label=\"作业页面\"><button class=\"op-tab\" id=\"tab-templates\" data-tab=\"templates\" role=\"tab\" aria-controls=\"content\" aria-selected=\"true\">任务模板</button><button class=\"op-tab\" id=\"tab-tasks\" data-tab=\"tasks\" role=\"tab\" aria-controls=\"content\" aria-selected=\"false\">执行历史</button><button class=\"op-tab\" id=\"tab-inventories\" data-tab=\"inventories\" role=\"tab\" aria-controls=\"content\" aria-selected=\"false\">主机清单</button><button class=\"op-tab\" id=\"tab-schedules\" data-tab=\"schedules\" role=\"tab\" aria-controls=\"content\" aria-selected=\"false\">定时计划</button></div></div>\n<div id=\"mode-banner\" class=\"au-banner\" role=\"status\" hidden></div><p id=\"page-error\" role=\"alert\" hidden></p>\n<div class=\"op-toolbar\"><input id=\"search\" class=\"op-field op-search\" type=\"search\" aria-label=\"搜索当前页面\" placeholder=\"搜索模板名称或脚本\"><select id=\"status-filter\" class=\"op-field\" aria-label=\"执行状态\" hidden><option value=\"\">全部状态</option><option value=\"success\">成功</option><option value=\"error\">失败</option><option value=\"running\">运行中</option><option value=\"waiting\">等待中</option><option value=\"stopped\">引擎已停止</option></select><span class=\"op-spacer\"></span><span class=\"op-small\" id=\"result-count\">正在加载…</span><button class=\"op-button\" data-action=\"refresh\">刷新</button><button class=\"op-button\" data-action=\"logout\">退出</button><button class=\"op-button primary\" data-action=\"create\" hidden>＋ 新建模板</button><button class=\"op-button primary\" id=\"add-resource\" hidden></button></div>\n<section id=\"content\" role=\"tabpanel\" aria-labelledby=\"tab-templates\"></section><p id=\"notice\" class=\"op-message\" role=\"status\" aria-live=\"polite\"></p><footer class=\"op-footer\"><span id=\"last-sync\">等待同步</span></footer></main>\n<dialog id=\"drawer\" class=\"au-dialog\" aria-labelledby=\"drawer-title\"><div class=\"op-drawer-head\"><div><h2 id=\"drawer-title\"></h2><p id=\"drawer-subtitle\" class=\"op-small\"></p></div><button class=\"op-button\" data-action=\"close\" aria-label=\"关闭详情\">×</button></div><div id=\"drawer-body\"></div><p id=\"drawer-error\" role=\"alert\"></p></dialog>\n</div></body></html>\n",
-        "app.js": "'use strict';\nconst root = document.getElementById('ops-automation-preview');\nconst $ = selector => root.querySelector(selector);\nconst escapeHtml = value => String(value ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c]));\nconst embedded = parent !== window, requests = new Map();\nlet nonce = '', ready = false, sequence = 0;\nlet token = embedded ? '' : sessionStorage.getItem('automation-token') || '', state = null, tab = 'templates', loading = false, mutating = false, logTaskId = null;\nconst statusLabels = {success:'成功', error:'失败', failed:'失败', running:'运行中', waiting:'等待中', starting:'启动中', stopping:'停止中', stopped:'引擎已停止'};\nconst activeStatuses = ['running', 'waiting', 'starting', 'stopping'];\nconst date = value => value ? new Date(value).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai', hour12:false}) : '—';\nconst lookup = (kind, id) => state[kind].find(x => x.id === id);\nconst nameOf = (kind, id) => lookup(kind, id)?.name || `#${id}`;\nconst statusBadge = status => `<span class=\"op-status ${['error','failed'].includes(status)?'failed':activeStatuses.includes(status)?'running':''}\">${escapeHtml(statusLabels[status] || status)}</span>`;\nconst field = (label, control) => `<label>${label}${control}</label>`;\nconst input = (name, value = '', attributes = '') => `<input class=\"op-field\" name=\"${name}\" value=\"${escapeHtml(value)}\" ${attributes}>`;\nfunction select(name, rows, selected) { return `<select class=\"op-field\" name=\"${name}\" required>${rows.map(r => `<option value=\"${r.id}\" ${r.id === selected ? 'selected' : ''}>${escapeHtml(r.name)}</option>`).join('')}</select>`; }\nfunction actions(text = '保存') { return `<div class=\"op-drawer-actions\"><button class=\"op-button\" type=\"button\" data-action=\"close\">取消</button><button class=\"op-button primary\" type=\"submit\">${text}</button></div>`; }\nasync function api(path, method = 'GET', body) {\n  if (embedded) {\n    if (!ready) throw new Error('正在连接运维工作台');\n    const id = 'automation-' + (++sequence);\n    return new Promise((resolve, reject) => {\n      const timeout = setTimeout(() => { requests.delete(id); reject(new Error('请求超时，请刷新核对执行结果')); }, 35000);\n      requests.set(id, {resolve, reject, timeout});\n      // shortcut: the existing host bridge supports GET/POST; edit endpoints also accept POST.\n      parent.postMessage({type:'ops-module-api-request', nonce, id, path:'/modules/automation/api/v1/' + path, method:method === 'PUT' ? 'POST' : method, body, timeoutMs:30000}, '*');\n    });\n  }\n  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 30000);\n  try {\n    const response = await fetch('/api/v1/' + path, {method, headers:{Authorization:'Bearer ' + token, ...(body !== undefined ? {'Content-Type':'application/json'} : {})}, body:body === undefined ? undefined : JSON.stringify(body), signal:controller.signal, credentials:'omit'});\n    const data = await response.json();\n    if (response.status === 401) { logout(); throw new Error('登录已失效，请重新输入模块令牌。'); }\n    if (!response.ok) throw new Error(data.detail || '请求失败');\n    return data;\n  } catch (error) {\n    if (error.name === 'AbortError') throw new Error('请求超时，操作结果可能已生效。请刷新核对，勿重复提交。');\n    throw error;\n  } finally { clearTimeout(timer); }\n}\nfunction logout() { token = ''; state = null; sessionStorage.removeItem('automation-token'); $('#application').hidden = true; $('#login').hidden = false; if ($('#drawer').open) $('#drawer').close(); }\nasync function refresh() {\n  if (loading) return;\n  loading = true; root.querySelectorAll('[data-action=refresh]').forEach(b => b.disabled = true);\n  const requestedToken = token;\n  try {\n    const data = await api('state');\n    if (token !== requestedToken) return;\n    state = data;\n    $('#login').hidden = true; $('#application').hidden = false; $('#page-error').hidden = true;\n    $('#last-sync').textContent = '最近同步 ' + date(data.collected_at) + ' · 北京时间'; render();\n    if ($('#drawer').open && logTaskId !== null) await updateLog();\n  } catch (error) {\n    const el = state || embedded ? $('#page-error') : $('#login-error'); el.textContent = error.message; el.hidden = false;\n    if (state) $('#last-sync').textContent = '刷新失败 · 当前保留上次成功数据';\n    throw error;\n  } finally { loading = false; root.querySelectorAll('[data-action=refresh]').forEach(b => b.disabled = false); }\n}\nfunction table(headers, rows) { return `<div class=\"op-panel\"><div class=\"op-table-wrap\"><table><thead><tr>${headers.map(x=>`<th>${x}</th>`).join('')}</tr></thead><tbody>${rows || `<tr><td colspan=\"${headers.length}\" class=\"op-empty\">暂无记录</td></tr>`}</tbody></table></div></div>`; }\nfunction taskRows(tasks) { return tasks.map(t => `<tr><td><span class=\"op-name\">${escapeHtml(nameOf('templates',t.template_id))}</span><div class=\"op-secondary\">#${t.id} · ${t.dry_run === true ? '检查模式' : t.dry_run === false ? '执行模式' : '模式未提供'}</div></td><td>${statusBadge(t.status)}</td><td>${escapeHtml(date(t.created))}</td><td>${t.start && t.end ? Math.max(0,Math.round((new Date(t.end)-new Date(t.start))/1000))+' 秒':'—'}</td><td><button class=\"op-link\" data-log=\"${t.id}\">查看日志</button>${activeStatuses.includes(t.status)?`<button class=\"op-link\" data-stop=\"${t.id}\">停止</button>`:''}</td></tr>`).join(''); }\nfunction render() {\n  if (!state) return;\n  $('#mode-banner').hidden = state.mode !== 'demo';\n  $('#mode-banner').textContent = '演示模式 · 运行仅生成模拟记录，定时计划不会实际触发。';\n  $('[data-action=create]').hidden = tab !== 'templates';\n  $('#search').placeholder = {templates:'搜索模板名称或脚本',tasks:'搜索任务名称或状态',inventories:'搜索清单名称',schedules:'搜索计划名称'}[tab];\n  root.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===tab);if(b.getAttribute('role')==='tab')b.setAttribute('aria-selected',String(b.dataset.tab===tab));});\n  $('#content').setAttribute('aria-labelledby','tab-'+tab); $('#status-filter').hidden = tab !== 'tasks';\n  const add = $('#add-resource'); add.hidden = !['inventories','schedules'].includes(tab); add.textContent = tab==='inventories'?'＋ 新建主机清单':'＋ 新建计划';\n  const query = $('#search').value.toLowerCase(); let rows, list = [...state[tab]];\n  list = list.filter(x => [x.name,x.description,x.playbook,x.status,x.template_id && nameOf('templates',x.template_id)].filter(Boolean).join(' ').toLowerCase().includes(query));\n  if(tab==='tasks')list=list.filter(x=>!$('#status-filter').value||x.status===$('#status-filter').value).sort((a,b)=>b.id-a.id);\n  $('#result-count').textContent = `共 ${list.length} ${ {templates:'个模板',tasks:'条执行记录',inventories:'个清单',schedules:'个计划'}[tab]}`;\n  if(tab==='templates') {\n    rows=list.map(t=>{const last=[...state.tasks].sort((a,b)=>b.id-a.id).find(r=>r.template_id===t.id);return `<tr><td><button class=\"op-link op-name au-name\" data-template=\"${t.id}\">${escapeHtml(t.name)}</button><div class=\"op-secondary\">${escapeHtml(t.description || t.playbook)}</div></td><td>${escapeHtml(t.app || 'ansible')}</td><td>${escapeHtml(nameOf('inventories',t.inventory_id))}</td><td>${last?statusBadge(last.status):'<span class=\"op-small\">未执行</span>'}</td><td><div class=\"op-row-actions\"><button class=\"op-link\" data-run=\"${t.id}\" ${t.app!=='ansible'?'disabled':''}>运行</button><button class=\"op-link\" data-template=\"${t.id}\">详情</button></div></td></tr>`}).join('');\n    $('#content').innerHTML=table(['模板名称','类型','执行范围','最近执行','操作'],rows);\n  } else if(tab==='tasks') $('#content').innerHTML=table(['任务','状态','开始时间','耗时','操作'],taskRows(list));\n  else if(tab==='inventories') $('#content').innerHTML=table(['清单名称','格式','SSH 凭据','操作'],list.map(i=>`<tr><td class=\"op-name\">${escapeHtml(i.name)}</td><td>${escapeHtml(i.type)}</td><td>${escapeHtml(nameOf('keys',i.ssh_key_id))}</td><td><button class=\"op-link\" data-inventory=\"${i.id}\">查看清单</button></td></tr>`).join(''));\n  else $('#content').innerHTML=table(['计划名称','作业模板','Cron','状态','操作'],list.map(s=>`<tr><td class=\"op-name\">${escapeHtml(s.name)}</td><td>${escapeHtml(nameOf('templates',s.template_id))}</td><td><code>${escapeHtml(s.cron_format)}</code></td><td>${s.active?'已启用':'已暂停'}</td><td><button class=\"op-link\" data-schedule=\"${s.id}\">${s.active?'暂停':'启用'}</button></td></tr>`).join(''));\n}\nfunction open(title,subtitle,body) { logTaskId=null;$('#drawer-title').textContent=title;$('#drawer-subtitle').textContent=subtitle;$('#drawer-body').innerHTML=body;$('#drawer-error').textContent='';if(!$('#drawer').open)$('#drawer').showModal(); }\nfunction templateForm(item) {\n  if(!state.inventories.length||!state.repositories.length||!state.environments.length){open('准备模板资源','需要主机清单、仓库与变量环境','<p class=\"op-note\">请先在 Semaphore 项目配置仓库、变量环境和 SSH 凭据，并在本模块建立清单。配置完成后刷新。</p>');return;}\n  const t=item||{};\n  open(item?'编辑模板':'新建模板','Ansible 作业',`<form data-form=\"template\" data-id=\"${t.id||''}\">${field('模板名称',input('name',t.name,'required maxlength=\"100\"'))}${field('描述',input('description',t.description,'maxlength=\"500\"'))}${field('作业仓库',select('repository_id',state.repositories,t.repository_id))}${field('Playbook 路径',input('playbook',t.playbook,'required maxlength=\"250\" placeholder=\"playbooks/host-health.yml\"'))}${field('目标主机清单',select('inventory_id',state.inventories,t.inventory_id))}${field('变量环境',select('environment_id',state.environments,t.environment_id))}${actions()}</form>`);\n}\nfunction runForm(id) { const t=lookup('templates',id);open('运行作业',t.name,`<form data-form=\"run\"><input name=\"template_id\" type=\"hidden\" value=\"${id}\"><div class=\"op-kv\"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>作业脚本</span><code>${escapeHtml(t.playbook)}</code><span>数据源</span><span>${state.mode==='demo'?'本地演示':'真实 Semaphore 项目'}</span></div>${field('执行说明',input('message','','maxlength=\"300\" placeholder=\"填写本次操作原因\"'))}<label class=\"au-check\"><input name=\"dry_run\" type=\"checkbox\" checked>检查模式（Ansible --check）</label><p class=\"op-note\">${state.mode==='demo'?'此模式仅保存模拟记录，不执行脚本。':'检查模式仍会连接真实主机，部分 playbook 的特殊任务可能执行实际动作；请确认脚本可信。'}</p>${actions(state.mode==='demo'?'模拟运行':'提交执行')}</form>`); }\nfunction inventoryForm() { if(!state.keys.length){open('先配置 SSH 凭据','Semaphore 项目配置','<p>请先在 Semaphore 项目中创建 SSH 凭据。模块只引用凭据 ID，不接收或展示私钥。</p>');return;}\n  open('新建主机清单','使用独立执行凭据',`<form data-form=\"inventory\">${field('清单名称',input('name','','required maxlength=\"100\"'))}${field('格式','<select class=\"op-field\" name=\"type\"><option value=\"static\">INI 静态清单</option><option value=\"static-yaml\">YAML 静态清单</option></select>')}${field('SSH 凭据',select('ssh_key_id',state.keys))}${field('清单内容','<textarea class=\"op-field\" name=\"inventory\" rows=\"8\" required maxlength=\"32000\" placeholder=\"[servers]&#10;host1 ansible_host=192.0.2.10\"></textarea>')}<p class=\"op-note\">密码和私钥通过 Semaphore 凭据管理，不要写入清单。</p>${actions()}</form>`);\n}\nfunction scheduleForm() { if(!state.templates.length){templateForm();return;}\n  open('新建定时计划','调度由 Semaphore 执行',`<form data-form=\"schedule\">${field('计划名称',input('name','','required maxlength=\"100\"'))}${field('作业模板',select('template_id',state.templates.filter(t=>t.app==='ansible')))}${field('Cron 表达式',input('cron_format','0 9 * * *','required maxlength=\"120\"'))}<p class=\"op-note\">五段 Cron；真实执行时区以 Semaphore 服务配置为准，请将该服务配置为 Asia/Shanghai。</p><p class=\"op-note\">新计划默认暂停。${state.mode==='demo'?'本地演示不会定时执行。':''}</p>${actions('保存为暂停')}</form>`);\n}\nasync function updateLog(){const requestedId=logTaskId;const result=await api(`tasks/${requestedId}/output`);if(logTaskId===requestedId&&$('#log-output'))$('#log-output').textContent=result.lines.join('\\n')||'暂无输出';}\nasync function mutate(path,method,body){if(mutating)return;mutating=true;$('#drawer').querySelectorAll('button').forEach(b=>b.disabled=true);try{const result=await api(path,method,body);$('#drawer').close();$('#notice').textContent=result?.execution_may_continue?'停止请求已受理；目标上已启动的命令可能继续执行，请检查目标状态。':'操作已提交。';await refresh();}catch(error){const target=$('#drawer').open?$('#drawer-error'):$('#notice');target.textContent=error.message;}finally{mutating=false;$('#drawer').querySelectorAll('button').forEach(b=>b.disabled=false);}}\nroot.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||b.disabled)return;try{\n  if(b.dataset.action==='close'){$('#drawer').close();return;}\n  if(b.dataset.action==='logout'){logout();return;}\n  if(b.dataset.action==='refresh'){await refresh();return;}\n  if(!state)return;\n  if(b.dataset.tab){tab=b.dataset.tab;$('#search').value='';$('#notice').textContent='';render();return;}\n  if(b.dataset.action==='create'){templateForm();return;}\n  if(b.id==='add-resource'){tab==='inventories'?inventoryForm():scheduleForm();return;}\n  if(b.dataset.run){runForm(Number(b.dataset.run));return;}\n  if(b.dataset.template){const t=lookup('templates',Number(b.dataset.template));open(t.name,'模板详情',`<div class=\"op-kv\"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>脚本</span><code>${escapeHtml(t.playbook)}</code><span>仓库</span><span>${escapeHtml(nameOf('repositories',t.repository_id))}</span><span>变量环境</span><span>${escapeHtml(nameOf('environments',t.environment_id))}</span></div><p>${escapeHtml(t.description)}</p><div class=\"op-drawer-actions\"><button class=\"op-button\" data-edit=\"${t.id}\" ${t.app!=='ansible'?'disabled':''}>编辑模板</button><button class=\"op-button primary\" data-run=\"${t.id}\" ${t.app!=='ansible'?'disabled':''}>运行作业</button></div>`);return;}\n  if(b.dataset.edit){templateForm(lookup('templates',Number(b.dataset.edit)));return;}\n  if(b.dataset.inventory){const i=lookup('inventories',Number(b.dataset.inventory));open(i.name,'主机清单 · '+i.type,'<pre class=\"op-log\" id=\"inventory-text\"></pre>');$('#inventory-text').textContent=i.inventory||'此清单由 Semaphore 动态解析。';return;}\n  if(b.dataset.log){const id=Number(b.dataset.log),t=lookup('tasks',id);open(`执行 #${id}`,nameOf('templates',t.template_id),`<div class=\"op-kv\"><span>状态</span><span>${statusBadge(t.status)}</span><span>创建时间</span><span>${escapeHtml(date(t.created))}</span><span>执行说明</span><span>${escapeHtml(t.message)}</span></div><pre class=\"op-log\" id=\"log-output\">正在读取日志…</pre><p class=\"op-note\">${t.status==='stopped'?'引擎已停止调度；目标上已启动的命令仍可能执行，请核对目标状态。':'日志可能含敏感运维数据，请限制访问范围。'}</p>`);logTaskId=id;await updateLog();return;}\n  if(b.dataset.stop){const id=Number(b.dataset.stop);open('停止作业',`执行 #${id}`,`<form data-form=\"stop\" data-id=\"${id}\"><p>将请求 Semaphore 停止任务。目标上已经启动的命令可能继续执行，已有变更不会自动回滚；请随后核对目标状态。</p>${actions('请求停止')}</form>`);return;}\n  if(b.dataset.schedule){const s=lookup('schedules',Number(b.dataset.schedule));open(s.active?'暂停计划':'启用计划',s.name,`<form data-form=\"active\" data-id=\"${s.id}\" data-active=\"${!s.active}\"><p>${s.active?'暂停后将不再产生新的定时任务。':state.mode==='demo'?'演示计划仅保存启用状态，不触发执行。':'启用后会按 Semaphore 服务时区自动执行，可能修改目标主机。'}</p>${actions('确认'+(s.active?'暂停':'启用'))}</form>`);}\n}catch(error){($('#drawer').open?$('#drawer-error'):$('#notice')).textContent=error.message;}});\nroot.addEventListener('submit',async e=>{e.preventDefault();const f=e.target;\n  if(f.id==='login-form'){if(loading)return;token=f.elements.token.value.trim();$('#login-error').textContent='';try{await refresh();sessionStorage.setItem('automation-token',token);f.reset();}catch{}return;}\n  if(!f.dataset.form||mutating)return;\n  const data=Object.fromEntries(new FormData(f));\n  for(const key of ['template_id','inventory_id','repository_id','environment_id','ssh_key_id'])if(key in data)data[key]=Number(data[key]);\n  const type=f.dataset.form;\n  if(type==='template'){data.app='ansible';await mutate('templates'+(f.dataset.id?'/'+f.dataset.id:''),f.dataset.id?'PUT':'POST',data);}\n  if(type==='inventory')await mutate('inventories','POST',data);\n  if(type==='schedule')await mutate('schedules','POST',{...data,active:false,type:''});\n  if(type==='run'){data.dry_run=f.elements.dry_run.checked;await mutate('tasks','POST',data);}\n  if(type==='stop')await mutate(`tasks/${f.dataset.id}/stop`,'POST',{});\n  if(type==='active')await mutate(`schedules/${f.dataset.id}/active`,'PUT',{active:f.dataset.active==='true'});\n});\n$('#drawer').addEventListener('close',()=>{logTaskId=null;});\n$('#search').addEventListener('input',render);$('#status-filter').addEventListener('change',render);\nsetInterval(()=>{if(!document.hidden&&state&&!loading&&!mutating&&(tab==='tasks'||logTaskId!==null||state.tasks.some(t=>activeStatuses.includes(t.status))))refresh().catch(()=>{});},5000);\nif(token)refresh().catch(()=>{});\nif (embedded) {\n  $('#login').hidden = true;\n  $('#application').hidden = false;\n  root.querySelectorAll('[data-action=logout]').forEach(b => b.hidden = true);\n  window.addEventListener('message', event => {\n    if (event.source !== parent) return;\n    const data = event.data || {};\n    if (data.type === 'ops-module-info' && data.module?.key === 'automation') {\n      nonce = data.nonce;\n      if (!ready) { ready = true; refresh().catch(() => {}); }\n    } else if (data.type === 'ops-module-api-response' && data.nonce === nonce) {\n      const request = requests.get(data.id);\n      if (!request) return;\n      requests.delete(data.id); clearTimeout(request.timeout);\n      data.ok ? request.resolve(data.data) : request.reject(new Error(data.data?.message || '模块请求失败'));\n    }\n  });\n  const handshake = setInterval(() => { if (ready) clearInterval(handshake); else parent.postMessage({type:'ops-module-ready'}, '*'); }, 500);\n  parent.postMessage({type:'ops-module-ready'}, '*');\n  window.addEventListener('pagehide', () => { clearInterval(handshake); for (const request of requests.values()) clearTimeout(request.timeout); });\n}\n",
-        "app.css": "body{margin:0;background:#f4f6fa}\n#ops-automation-preview{--op-panel:#fff;--op-text:#1f2937;--op-muted:#6b7280;--op-border:#e5e9f0;--op-blue:#2563eb;--op-green:#16a34a;--op-red:#dc2626;font:14px/1.5 -apple-system,\"Segoe UI\",\"PingFang SC\",\"Microsoft YaHei\",sans-serif;color:var(--op-text);color-scheme:light}\n#ops-automation-preview *{box-sizing:border-box}\n#ops-automation-preview [hidden]{display:none!important}\n#ops-automation-preview button,#ops-automation-preview input,#ops-automation-preview select{font:inherit}\n#ops-automation-preview button{cursor:pointer}\n#ops-automation-preview button:disabled{opacity:.5;cursor:not-allowed}\n#ops-automation-preview button:focus-visible,#ops-automation-preview input:focus-visible,#ops-automation-preview select:focus-visible{outline:2px solid var(--op-blue);outline-offset:3px}\n#ops-automation-preview .op-main{padding:16px 24px 20px;background:var(--op-panel);min-height:100vh;min-width:0}\n#ops-automation-preview h2{font-size:20px;line-height:1.4;margin:0;font-weight:600}\n#ops-automation-preview p{margin:6px 0}\n#ops-automation-preview .op-small{font-size:12px;color:var(--op-muted);white-space:nowrap}\n#ops-automation-preview .op-spacer{flex:1}\n#ops-automation-preview .op-navigation{display:flex;align-items:center;gap:20px;border-bottom:1px solid var(--op-border);margin-bottom:20px}\n#ops-automation-preview .op-tabs{display:flex;align-self:stretch;flex:1;gap:28px;min-width:0;overflow-x:auto}\n#ops-automation-preview .op-tab{border:0;border-bottom:2px solid transparent;background:none;padding:12px 0;color:var(--op-muted);white-space:nowrap}\n#ops-automation-preview .op-tab[aria-selected=true]{border-bottom-color:var(--op-blue);color:var(--op-blue);font-weight:600}\n#ops-automation-preview .au-actions{display:flex;gap:8px;flex-shrink:0;padding-bottom:4px}\n#ops-automation-preview .op-button{border:1px solid var(--op-border);background:var(--op-panel);border-radius:8px;padding:7px 14px;color:var(--op-text);font-size:13px;white-space:nowrap}\n#ops-automation-preview .op-button:hover{border-color:var(--op-blue);color:var(--op-blue)}\n#ops-automation-preview .op-button.primary{background:var(--op-blue);color:#fff;border-color:var(--op-blue)}\n#ops-automation-preview .op-button.primary:hover{background:#1d4ed8}\n#ops-automation-preview .op-link{border:0;background:none;color:var(--op-blue);padding:4px 5px;white-space:nowrap;font-size:13px}\n#ops-automation-preview .op-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px}\n#ops-automation-preview .op-field{border:1px solid var(--op-border);border-radius:8px;background:var(--op-panel);color:var(--op-text);padding:8px 12px;font-size:13px;max-width:100%;min-width:0}\n#ops-automation-preview .op-search{width:240px}\n#ops-automation-preview .op-panel{background:var(--op-panel);border:1px solid var(--op-border);border-radius:8px;overflow:hidden}\n#ops-automation-preview .op-table-wrap{overflow-x:auto}\n#ops-automation-preview table{border-collapse:collapse;width:100%;font-size:13px;text-align:left}\n#ops-automation-preview th{background:#f8fafc;color:var(--op-muted);font-weight:500;padding:12px 16px;white-space:nowrap}\n#ops-automation-preview td{padding:14px 16px;border-top:1px solid var(--op-border);vertical-align:middle}\n#ops-automation-preview tbody tr:hover{background:#fafbfe}\n#ops-automation-preview .op-name{font-size:13px;font-weight:500;white-space:nowrap}\n#ops-automation-preview .au-name{padding-left:0;color:var(--op-text)}\n#ops-automation-preview .op-secondary{font-size:12px;color:var(--op-muted);margin-top:3px}\n#ops-automation-preview .op-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;color:var(--op-green)}\n#ops-automation-preview .op-status:before{content:\"\";width:6px;height:6px;border-radius:50%;background:currentColor}\n#ops-automation-preview .op-status.failed{color:var(--op-red)}\n#ops-automation-preview .op-status.running{color:var(--op-blue)}\n#ops-automation-preview .op-row-actions{display:flex;gap:8px}\n#ops-automation-preview .op-empty{padding:48px 16px;text-align:center;color:var(--op-muted)}\n#ops-automation-preview .op-footer{margin-top:14px;font-size:12px;color:var(--op-muted)}\n#ops-automation-preview .op-message{font-size:13px;color:var(--op-blue)}\n#ops-automation-preview .op-message:empty{display:none}\n#ops-automation-preview .au-banner{border:1px solid #dbeafe;background:#eff6ff;padding:10px 14px;border-radius:8px;margin-bottom:16px;color:#1e40af;font-size:13px}\n#ops-automation-preview #page-error,#ops-automation-preview #drawer-error,#ops-automation-preview #login-error{color:var(--op-red);font-size:13px;margin-bottom:16px}\n#ops-automation-preview .au-dialog{position:fixed;inset:0 0 0 auto;margin:0;border:0;border-left:1px solid var(--op-border);width:min(540px,100%);max-width:100%;height:100dvh;max-height:100dvh;background:var(--op-panel);color:var(--op-text);padding:24px;overflow-y:auto}\n#ops-automation-preview .au-dialog::backdrop{background:#0f1b2d66}\n#ops-automation-preview .op-drawer-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;border-bottom:1px solid var(--op-border);padding-bottom:18px;margin-bottom:18px}\n#ops-automation-preview .au-dialog label{display:block;margin:17px 0;font-size:13px}\n#ops-automation-preview .au-dialog label>.op-field{display:block;width:100%;margin-top:7px}\n#ops-automation-preview .au-check{display:flex!important;gap:8px;align-items:center}\n#ops-automation-preview .op-kv{display:grid;grid-template-columns:90px minmax(0,1fr);gap:12px;font-size:13px;margin-bottom:20px;overflow-wrap:anywhere}\n#ops-automation-preview .op-kv span:nth-child(odd){color:var(--op-muted)}\n#ops-automation-preview .op-kv code{word-break:break-all}\n#ops-automation-preview .op-log{background:#0f1b2d;color:#dbe6f5;padding:16px;font:12px/1.8 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:8px;min-height:200px}\n#ops-automation-preview .op-note{margin:12px 0;color:var(--op-muted);font-size:12px}\n#ops-automation-preview .op-drawer-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:24px}\n#ops-automation-preview textarea{resize:vertical;font:13px/1.6 Consolas,monospace}\n#ops-automation-preview .op-tag{font-size:11px;color:var(--op-muted)}\n#ops-automation-preview .au-login{display:grid;grid-template-columns:1fr 1fr;max-width:900px;margin:90px auto;background:#fff;border:1px solid var(--op-border);border-radius:10px;overflow:hidden}\n#ops-automation-preview .au-login form{padding:40px}\n#ops-automation-preview .au-login h1{font-size:26px;margin:20px 0 12px}\n#ops-automation-preview .au-login p{color:var(--op-muted);margin:12px 0 22px}\n#ops-automation-preview .au-login label{display:block;margin-top:28px}\n#ops-automation-preview .au-login input{display:block;width:100%;margin-top:8px}\n#ops-automation-preview .au-login-aside{background:#eff6ff;padding:60px 40px;color:#344c71}\n#ops-automation-preview .au-login-aside h2{font-size:28px;margin-bottom:32px}\n#ops-automation-preview .au-login-aside small{display:block;margin-top:40px;font-size:12px}\n@media(max-width:760px){#ops-automation-preview .op-main{padding:8px 16px 16px}#ops-automation-preview .op-navigation{gap:14px;margin-bottom:16px}#ops-automation-preview .op-tabs{gap:12px;justify-content:space-between}#ops-automation-preview .op-tab{font-size:13px}#ops-automation-preview .op-toolbar{gap:10px}#ops-automation-preview .op-search{width:100%}#ops-automation-preview td,#ops-automation-preview th{padding:12px}#ops-automation-preview .au-dialog{padding:20px}#ops-automation-preview .au-login{display:block;margin:24px 16px}#ops-automation-preview .au-login-aside{display:none}#ops-automation-preview .au-login form{padding:28px 22px}}\n@media(pointer:coarse){#ops-automation-preview button,#ops-automation-preview input,#ops-automation-preview select{min-height:44px}#ops-automation-preview input,#ops-automation-preview select{font-size:16px}}\n"
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "opscenter-automation-runbooks-20261028",
+        "namespace": "opscenter"
       }
     },
     {
@@ -43,77 +46,31 @@
         "namespace": "opscenter"
       },
       "spec": {
+        "progressDeadlineSeconds": 600,
         "replicas": 1,
-        "strategy": {
-          "type": "Recreate"
-        },
+        "revisionHistoryLimit": 10,
         "selector": {
           "matchLabels": {
             "app": "module-automation"
           }
         },
+        "strategy": {
+          "type": "Recreate"
+        },
         "template": {
           "metadata": {
+            "annotations": {
+              "kubectl.kubernetes.io/restartedAt": "2026-10-23T02:40:02Z",
+              "opscenter.image-release": "ba0c65b3462bea1da4ac5122f01d4aef7d66369b",
+              "opscenter.io/automation-release": "0.3.0-pve-sync-20261028",
+              "opscenter.io/automation-ui": "20261023-r3"
+            },
             "labels": {
               "app": "module-automation"
-            },
-            "annotations": {
-              "opscenter.io/automation-ui": "20261023-r3"
             }
           },
           "spec": {
             "automountServiceAccountToken": false,
-            "nodeSelector": {
-              "kubernetes.io/hostname": "k8s-worker-02"
-            },
-            "securityContext": {
-              "fsGroup": 10001,
-              "fsGroupChangePolicy": "OnRootMismatch"
-            },
-            "initContainers": [
-              {
-                "name": "prepare-data",
-                "image": "semaphoreui/semaphore:v2.19.17",
-                "imagePullPolicy": "Never",
-                "securityContext": {
-                  "runAsNonRoot": true,
-                  "runAsUser": 1001,
-                  "runAsGroup": 10001,
-                  "allowPrivilegeEscalation": false,
-                  "capabilities": {
-                    "drop": [
-                      "ALL"
-                    ]
-                  }
-                },
-                "command": [
-                  "sh",
-                  "-ec",
-                  "umask 0007; mkdir -p /state/gateway /state/engine /state/config /state/runbooks; chmod 0770 /state/*; cp /runbooks/*.yml /state/runbooks/; cd /state/runbooks; if [ ! -d .git ]; then git init -b main; git config user.name 'OpsCenter acceptance'; git config user.email automation@localhost; git add .; git commit -m 'Add isolated acceptance playbooks'; fi"
-                ],
-                "volumeMounts": [
-                  {
-                    "name": "data",
-                    "mountPath": "/state"
-                  },
-                  {
-                    "name": "runbooks",
-                    "mountPath": "/runbooks",
-                    "readOnly": true
-                  }
-                ],
-                "resources": {
-                  "requests": {
-                    "cpu": "50m",
-                    "memory": "64Mi"
-                  },
-                  "limits": {
-                    "cpu": "250m",
-                    "memory": "256Mi"
-                  }
-                }
-              }
-            ],
             "containers": [
               {
                 "env": [
@@ -145,13 +102,21 @@
                     "name": "OPS_ADMIN_USER",
                     "valueFrom": {
                       "secretKeyRef": {
-                        "name": "opscenter-env",
-                        "key": "OPS_ADMIN_USER"
+                        "key": "OPS_ADMIN_USER",
+                        "name": "opscenter-env"
                       }
                     }
+                  },
+                  {
+                    "name": "AUTOMATION_SCRIPTS_DIR",
+                    "value": "/run/validation-runbooks"
+                  },
+                  {
+                    "name": "AUTOMATION_SCRIPTS_REPOSITORY_ID",
+                    "value": "1"
                   }
                 ],
-                "image": "opscenter/module-automation:0.2.0-20261023",
+                "image": "opscenter/module-automation:0.3.0-pve-sync-20261028",
                 "imagePullPolicy": "Never",
                 "livenessProbe": {
                   "failureThreshold": 3,
@@ -184,13 +149,13 @@
                   "timeoutSeconds": 5
                 },
                 "resources": {
-                  "requests": {
-                    "cpu": "50m",
-                    "memory": "64Mi"
-                  },
                   "limits": {
                     "cpu": "250m",
                     "memory": "256Mi"
+                  },
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "64Mi"
                   }
                 },
                 "securityContext": {
@@ -219,54 +184,30 @@
                 "terminationMessagePolicy": "File",
                 "volumeMounts": [
                   {
-                    "name": "data",
                     "mountPath": "/data",
+                    "name": "data",
                     "subPath": "gateway"
                   },
                   {
-                    "name": "engine-secret",
                     "mountPath": "/run/secrets/engine-token",
-                    "subPath": "engine-token",
-                    "readOnly": true
+                    "name": "engine-secret",
+                    "readOnly": true,
+                    "subPath": "engine-token"
                   },
                   {
-                    "name": "jwt-public",
                     "mountPath": "/run/secrets/jwt-public.pem",
-                    "subPath": "jwt-public.pem",
-                    "readOnly": true
+                    "name": "jwt-public",
+                    "readOnly": true,
+                    "subPath": "jwt-public.pem"
                   },
                   {
-                    "name": "automation-ui",
-                    "mountPath": "/app/modules/automation/static",
-                    "readOnly": true
+                    "mountPath": "/run/validation-runbooks",
+                    "name": "data",
+                    "subPath": "runbooks"
                   }
                 ]
               },
               {
-                "name": "engine",
-                "image": "semaphoreui/semaphore:v2.19.17",
-                "imagePullPolicy": "Never",
-                "securityContext": {
-                  "runAsNonRoot": true,
-                  "runAsUser": 1001,
-                  "runAsGroup": 10001,
-                  "allowPrivilegeEscalation": false,
-                  "capabilities": {
-                    "drop": [
-                      "ALL"
-                    ]
-                  }
-                },
-                "resources": {
-                  "requests": {
-                    "cpu": "100m",
-                    "memory": "128Mi"
-                  },
-                  "limits": {
-                    "cpu": "750m",
-                    "memory": "768Mi"
-                  }
-                },
                 "env": [
                   {
                     "name": "SEMAPHORE_DB_DIALECT",
@@ -305,37 +246,9 @@
                     "value": "Asia/Shanghai"
                   }
                 ],
-                "volumeMounts": [
-                  {
-                    "name": "data",
-                    "mountPath": "/etc/semaphore",
-                    "subPath": "config",
-                    "readOnly": false
-                  },
-                  {
-                    "name": "data",
-                    "mountPath": "/var/lib/semaphore",
-                    "subPath": "engine",
-                    "readOnly": false
-                  },
-                  {
-                    "name": "data",
-                    "mountPath": "/run/validation-runbooks",
-                    "subPath": "runbooks",
-                    "readOnly": true
-                  },
-                  {
-                    "name": "engine-secret",
-                    "mountPath": "/run/secrets",
-                    "readOnly": true
-                  },
-                  {
-                    "name": "runbooks",
-                    "mountPath": "/etc/ssh/ssh_config.d/semaphore.conf",
-                    "subPath": "ssh.conf",
-                    "readOnly": true
-                  }
-                ],
+                "image": "semaphoreui/semaphore:v2.19.17",
+                "imagePullPolicy": "Never",
+                "name": "engine",
                 "readinessProbe": {
                   "exec": {
                     "command": [
@@ -345,11 +258,132 @@
                       "http://127.0.0.1:3000/api/ping"
                     ]
                   },
+                  "failureThreshold": 3,
                   "periodSeconds": 10,
+                  "successThreshold": 1,
                   "timeoutSeconds": 5
-                }
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "750m",
+                    "memory": "768Mi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "128Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsGroup": 10001,
+                  "runAsNonRoot": true,
+                  "runAsUser": 1001
+                },
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File",
+                "volumeMounts": [
+                  {
+                    "mountPath": "/etc/semaphore",
+                    "name": "data",
+                    "subPath": "config"
+                  },
+                  {
+                    "mountPath": "/var/lib/semaphore",
+                    "name": "data",
+                    "subPath": "engine"
+                  },
+                  {
+                    "mountPath": "/run/validation-runbooks",
+                    "name": "data",
+                    "readOnly": true,
+                    "subPath": "runbooks"
+                  },
+                  {
+                    "mountPath": "/run/secrets",
+                    "name": "engine-secret",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/etc/ssh/ssh_config.d/semaphore.conf",
+                    "name": "runbooks",
+                    "readOnly": true,
+                    "subPath": "ssh.conf"
+                  },
+                  {
+                    "mountPath": "/run/pve-sync",
+                    "name": "pve-sync",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/run/opscenter-login",
+                    "name": "opscenter-login",
+                    "readOnly": true
+                  }
+                ]
               }
             ],
+            "dnsPolicy": "ClusterFirst",
+            "initContainers": [
+              {
+                "command": [
+                  "sh",
+                  "-ec",
+                  "umask 0007; mkdir -p /state/gateway /state/engine /state/config /state/runbooks; chmod 0770 /state/*; for f in /runbooks/*.yml /runbooks/*.py; do [ -f \"$f\" ] || continue; n=${f##*/}; [ -e \"/state/runbooks/$n\" ] || cp \"$f\" \"/state/runbooks/$n\"; done; cd /state/runbooks; [ -d .git ] || git init -b main; git add -- '*.yml' '*.py'; if ! git diff --cached --quiet; then git -c user.name=OpsCenter -c user.email=automation@localhost commit -m 'Add PVE inventory sync runbook'; fi; chmod -R g+rwX /state/runbooks"
+                ],
+                "image": "semaphoreui/semaphore:v2.19.17",
+                "imagePullPolicy": "Never",
+                "name": "prepare-data",
+                "resources": {
+                  "limits": {
+                    "cpu": "250m",
+                    "memory": "256Mi"
+                  },
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "64Mi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "runAsGroup": 10001,
+                  "runAsNonRoot": true,
+                  "runAsUser": 1001
+                },
+                "terminationMessagePath": "/dev/termination-log",
+                "terminationMessagePolicy": "File",
+                "volumeMounts": [
+                  {
+                    "mountPath": "/state",
+                    "name": "data"
+                  },
+                  {
+                    "mountPath": "/runbooks",
+                    "name": "runbooks",
+                    "readOnly": true
+                  }
+                ]
+              }
+            ],
+            "nodeSelector": {
+              "kubernetes.io/hostname": "k8s-worker-02"
+            },
+            "restartPolicy": "Always",
+            "schedulerName": "default-scheduler",
+            "securityContext": {
+              "fsGroup": 10001,
+              "fsGroupChangePolicy": "OnRootMismatch"
+            },
+            "terminationGracePeriodSeconds": 30,
             "volumes": [
               {
                 "name": "data",
@@ -360,34 +394,52 @@
               {
                 "name": "engine-secret",
                 "secret": {
-                  "secretName": "opscenter-automation-engine",
-                  "defaultMode": 288
+                  "defaultMode": 288,
+                  "secretName": "opscenter-automation-engine"
                 }
               },
               {
-                "name": "runbooks",
                 "configMap": {
-                  "name": "opscenter-automation-runbooks-20261023"
-                }
+                  "defaultMode": 420,
+                  "name": "opscenter-automation-runbooks-20261028"
+                },
+                "name": "runbooks"
               },
               {
                 "name": "jwt-public",
                 "secret": {
-                  "secretName": "opscenter-jwt-keypair",
                   "defaultMode": 288,
                   "items": [
                     {
                       "key": "jwt-public.pem",
                       "path": "jwt-public.pem"
                     }
-                  ]
+                  ],
+                  "secretName": "opscenter-jwt-keypair"
                 }
               },
               {
-                "name": "automation-ui",
-                "configMap": {
-                  "name": "opscenter-automation-ui-20261023-r3",
-                  "defaultMode": 420
+                "name": "pve-sync",
+                "secret": {
+                  "defaultMode": 288,
+                  "secretName": "opscenter-pve-sync"
+                }
+              },
+              {
+                "name": "opscenter-login",
+                "secret": {
+                  "defaultMode": 288,
+                  "items": [
+                    {
+                      "key": "OPS_ADMIN_USER",
+                      "path": "username"
+                    },
+                    {
+                      "key": "OPS_ADMIN_PASSWORD",
+                      "path": "password"
+                    }
+                  ],
+                  "secretName": "opscenter-env"
                 }
               }
             ]
@@ -423,16 +475,66 @@
         "namespace": "opscenter"
       },
       "spec": {
-        "podSelector": {
-          "matchLabels": {
-            "app": "module-automation"
+        "egress": [
+          {
+            "ports": [
+              {
+                "port": 22,
+                "protocol": "TCP"
+              }
+            ],
+            "to": [
+              {
+                "ipBlock": {
+                  "cidr": "192.168.1.151/32"
+                }
+              }
+            ]
+          },
+          {
+            "ports": [
+              {
+                "port": 80,
+                "protocol": "TCP"
+              }
+            ],
+            "to": [
+              {
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "web"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "ports": [
+              {
+                "port": 53,
+                "protocol": "UDP"
+              },
+              {
+                "port": 53,
+                "protocol": "TCP"
+              }
+            ],
+            "to": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "kube-system"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "k8s-app": "kube-dns"
+                  }
+                }
+              }
+            ]
           }
-        },
-        "policyTypes": [
-          "Ingress",
-          "Egress"
         ],
-        "egress": [],
         "ingress": [
           {
             "from": [
@@ -453,11 +555,20 @@
             ],
             "ports": [
               {
-                "protocol": "TCP",
-                "port": 8080
+                "port": 8080,
+                "protocol": "TCP"
               }
             ]
           }
+        ],
+        "podSelector": {
+          "matchLabels": {
+            "app": "module-automation"
+          }
+        },
+        "policyTypes": [
+          "Ingress",
+          "Egress"
         ]
       }
     }
