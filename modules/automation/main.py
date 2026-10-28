@@ -20,7 +20,7 @@ from .store import Store, now, actor
 from .scripts import Scripts
 from .parameters import Parameter, definitions, read_parameters, resolve_parameters
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 HERE = Path(__file__).parent
 
 

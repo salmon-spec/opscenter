@@ -68,7 +68,7 @@ function render() {
   root.querySelectorAll('[data-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.tab===tab);if(b.getAttribute('role')==='tab')b.setAttribute('aria-selected',String(b.dataset.tab===tab));});
   $('#content').setAttribute('aria-labelledby','tab-'+tab); $('#status-filter').hidden = tab !== 'tasks';
   const add = $('#add-resource'); add.hidden = !['inventories','schedules'].includes(tab); add.textContent = tab==='inventories'?'＋ 新建主机清单':'＋ 新建计划';
-  renderOverview();$('#task-filters').hidden=tab!=='tasks';
+  renderTemplateFilter();$('#task-filters').hidden=tab!=='tasks';
   const query = $('#search').value.toLowerCase(); let rows, list = [...state[tab]];
   list = list.filter(x => [x.name,x.description,x.playbook,x.status,x.template_id && nameOf('templates',x.template_id)].filter(Boolean).join(' ').toLowerCase().includes(query));
   if(tab==='tasks'){const hours=Number($('#time-filter').value),template=$('#template-filter').value;list=list.filter(x=>(!$('#status-filter').value||x.status===$('#status-filter').value||($('#status-filter').value==='running'&&activeStatuses.includes(x.status))||($('#status-filter').value==='error'&&x.status==='failed'))&&(!template||String(x.template_id)===template)&&(!hours||Date.now()-Date.parse(x.created)<=hours*3600000)).sort((a,b)=>b.id-a.id);}
@@ -134,10 +134,7 @@ function inventoryForm() { if(!state.keys.length){open('先配置 SSH 凭据','S
 function scheduleForm() { if(!state.templates.length){templateForm();return;}
   open('新建定时计划','调度由 Semaphore 执行',`<form data-form="schedule">${field('计划名称',input('name','','required maxlength="100"'))}${field('作业模板',select('template_id',state.templates.filter(t=>t.app==='ansible')))}${field('Cron 表达式',input('cron_format','0 9 * * *','required maxlength="120"'))}<p class="op-note">五段 Cron；真实执行时区以 Semaphore 服务配置为准，请将该服务配置为 Asia/Shanghai。</p><p class="op-note">新计划默认暂停。${state.mode==='demo'?'本地演示不会定时执行。':''}</p>${actions('保存为暂停')}</form>`);
 }
-function renderOverview(){
-  const active=state.tasks.filter(t=>activeStatuses.includes(t.status)).length;
-  const cards=[['进行中',active,'running'],['近期成功',state.tasks.filter(t=>t.status==='success').length,'success'],['近期失败',state.tasks.filter(t=>['error','failed'].includes(t.status)).length,'error']];
-  $('#overview').innerHTML=cards.map(([label,value,status])=>`<button class="au-stat" data-overview-status="${status}"><span>${label}</span><strong>${value}</strong><small>查看执行记录 →</small></button>`).join('');
+function renderTemplateFilter(){
   const chosen=$('#template-filter').value;$('#template-filter').innerHTML='<option value="">全部模板</option>'+state.templates.map(t=>`<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');$('#template-filter').value=chosen;
 }
 function renderLog(){
@@ -175,7 +172,6 @@ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b
   if(b.dataset.tab){tab=b.dataset.tab;$('#search').value='';$('#notice').textContent='';render();return;}
   if(b.dataset.action==='create'){templateForm();return;}
   if(b.id==='add-resource'){tab==='inventories'?inventoryForm():scheduleForm();return;}
-  if(b.dataset.overviewStatus){tab='tasks';$('#status-filter').value=b.dataset.overviewStatus;$('#search').value='';render();return;}
   if(b.dataset.history){tab='tasks';$('#template-filter').value=b.dataset.history;$('#status-filter').value='';$('#search').value='';render();return;}
   if(b.dataset.action==='copy-log'){await copyLog();return;}
   if(b.dataset.action==='download-log'){await downloadLog();return;}

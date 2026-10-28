@@ -64,7 +64,7 @@
             "annotations": {
               "kubectl.kubernetes.io/restartedAt": "2026-10-23T02:40:02Z",
               "opscenter.image-release": "ba0c65b3462bea1da4ac5122f01d4aef7d66369b",
-              "opscenter.io/automation-release": "0.5.0-editor-20261028",
+              "opscenter.io/automation-release": "0.5.1-tabs-20261028",
               "opscenter.io/automation-ui": "20261023-r3"
             },
             "labels": {
@@ -126,7 +126,7 @@
                     "value": "182.92.223.237:51820"
                   }
                 ],
-                "image": "opscenter/module-automation:0.5.0-editor-20261028",
+                "image": "opscenter/module-automation:0.5.1-tabs-20261028",
                 "imagePullPolicy": "Never",
                 "livenessProbe": {
                   "failureThreshold": 3,

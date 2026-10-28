@@ -73,11 +73,6 @@ body{margin:0;background:#f4f6fa}
 #ops-automation-preview .au-code{font-family:Consolas,monospace;tab-size:4;white-space:pre;overflow:auto;min-height:360px;line-height:1.55}
 
 /* Script workspace and execution views share the workbench visual scale. */
-#ops-automation-preview .au-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:6px 0 22px}
-#ops-automation-preview .au-stat{border:1px solid var(--op-border);border-radius:12px;background:linear-gradient(135deg,#fff,#f8fbff);padding:18px;text-align:left;color:var(--op-text);display:grid;gap:8px}
-#ops-automation-preview .au-stat span{font-size:13px;color:var(--op-muted)}
-#ops-automation-preview .au-stat strong{font-size:26px;font-weight:650}
-#ops-automation-preview .au-stat small{font-size:11px;color:var(--op-blue)}
 #ops-automation-preview .au-editor,#ops-automation-preview .au-log-view{inset:3vh auto auto 50%;transform:translateX(-50%);width:min(1240px,96vw);height:94dvh;max-height:94dvh;border:1px solid var(--op-border);border-radius:14px;padding:22px;box-shadow:0 24px 70px #0f172a33}
 #ops-automation-preview .au-editor-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);gap:22px;align-items:start}
 #ops-automation-preview .au-editor-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -98,4 +93,3 @@ body{margin:0;background:#f4f6fa}
 #ops-automation-preview .au-log-view .op-log{height:60dvh;overflow:auto;white-space:pre;overflow-wrap:normal}
 #ops-automation-preview .au-dialog label[hidden]{display:none!important}
 @media(max-width:900px){#ops-automation-preview .au-editor-grid{grid-template-columns:1fr}#ops-automation-preview .au-code-pane{position:static}#ops-automation-preview .au-code-pane textarea{height:36dvh;min-height:220px}#ops-automation-preview .au-editor,#ops-automation-preview .au-log-view{inset:0;transform:none;width:100%;height:100dvh;max-height:100dvh;border-radius:0;padding:16px}}
-@media(max-width:520px){#ops-automation-preview .au-overview{gap:8px}#ops-automation-preview .au-stat{padding:12px}#ops-automation-preview .au-stat strong{font-size:22px}#ops-automation-preview .au-stat small{display:none}}
