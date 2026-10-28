@@ -333,7 +333,7 @@
                 "command": [
                   "sh",
                   "-ec",
-                  "umask 0007; mkdir -p /state/gateway /state/engine /state/config /state/runbooks; chmod 0770 /state/*; for f in /runbooks/*.yml /runbooks/*.py; do [ -f \"$f\" ] || continue; n=${f##*/}; [ -e \"/state/runbooks/$n\" ] || cp \"$f\" \"/state/runbooks/$n\"; done; cd /state/runbooks; [ -d .git ] || git init -b main; git add -- '*.yml' '*.py'; if ! git diff --cached --quiet; then git -c user.name=OpsCenter -c user.email=automation@localhost commit -m 'Add PVE inventory sync runbook'; fi; chmod -R g+rwX /state/runbooks"
+                  "umask 0007; mkdir -p /state/gateway /state/engine /state/config /state/runbooks; export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=/state/runbooks; find /state/runbooks -user 10001 -exec chmod g+rwX {} +; for f in /runbooks/*.yml /runbooks/*.py; do [ -f \"$f\" ] || continue; n=${f##*/}; [ -e \"/state/runbooks/$n\" ] || cp \"$f\" \"/state/runbooks/$n\"; done; cd /state/runbooks; [ -d .git ] || git init -b main; git config core.sharedRepository group; git add -- '*.yml' '*.py'; if ! git diff --cached --quiet; then git -c user.name=OpsCenter -c user.email=automation@localhost commit -m 'Add PVE inventory sync runbook'; fi"
                 ],
                 "image": "semaphoreui/semaphore:v2.19.17",
                 "imagePullPolicy": "Never",
@@ -357,7 +357,7 @@
                   },
                   "runAsGroup": 10001,
                   "runAsNonRoot": true,
-                  "runAsUser": 1001
+                  "runAsUser": 10001
                 },
                 "terminationMessagePath": "/dev/termination-log",
                 "terminationMessagePolicy": "File",
