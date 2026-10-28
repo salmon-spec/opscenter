@@ -117,8 +117,8 @@ function runParameter(p,hosts){
   if(p.type==='boolean')control=`<input type="checkbox" ${attributes} ${p.default===true?'checked':''}>`;
   else if(p.type==='host'||p.type==='choice'){
     const rows=[{id:'',name:'请选择'},...(p.type==='host'?hosts:p.options.map(v=>({id:v,name:v})))];
-    control=select(p.name,rows,p.default).replace(' required',p.required?' required':'').replace('<select ',`<select ${attributes} `);
-  }else control=input(p.name,p.default,`${attributes} ${p.type==='number'?'type="number" step="any"':'maxlength="4000"'}`);
+    control=select('parameter-'+p.name,rows,p.default).replace(' required',p.required?' required':'').replace('<select ',`<select ${attributes} `);
+  }else control=input('parameter-'+p.name,p.default,`${attributes} ${p.type==='number'?'type="number" step="any"':'maxlength="4000"'}`);
   return field(escapeHtml(p.label)+(p.required?' *':''),control)+(p.description?`<p class="op-note">${escapeHtml(p.description)}</p>`:'');
 }
 async function runForm(id){
@@ -240,6 +240,6 @@ root.addEventListener('change',async e=>{if(e.target.id!=='script-file')return;c
 root.addEventListener('input',e=>{if(e.target.closest('form[data-form=script]'))updateEditor();if(e.target.id==='log-search')renderLog();});
 root.addEventListener('change',e=>{if(e.target.matches('[data-field=type]')){const values=readParameterRows();$('#parameter-list').innerHTML=values.map(parameterRow).join('');updateEditor();}});
 $('#drawer').addEventListener('cancel',e=>{if(editorDirty()){e.preventDefault();closeDrawer();}});
-$('#drawer').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'&&editorBaseline){e.preventDefault();$('form[data-form=script]').requestSubmit();}if(e.key==='Tab'&&e.target.matches('textarea.au-code')){e.preventDefault();const el=e.target;el.setRangeText('    ',el.selectionStart,el.selectionEnd,'end');updateEditor();}});
+$('#drawer').addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='s'&&editorBaseline){e.preventDefault();$('form[data-form=script]').requestSubmit();}if(e.key==='Tab'&&!e.shiftKey&&e.target.matches('textarea.au-code')){e.preventDefault();const el=e.target;el.setRangeText('    ',el.selectionStart,el.selectionEnd,'end');updateEditor();}});
 
 $('#template-filter').addEventListener('change',render);$('#time-filter').addEventListener('change',render);
