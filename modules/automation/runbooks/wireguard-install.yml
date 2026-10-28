@@ -1,3 +1,4 @@
+# opscenter-parameters: [{"name":"server_id","label":"目标主机","type":"host","default":"","required":true,"description":"选择要安装或核验WireGuard的主机","options":[]},{"name":"hub_id","label":"WireGuard Hub","type":"host","default":"c61ce536-a1ca-412b-a32b-956c309e1349","required":true,"description":"","options":[]},{"name":"interface","label":"接口名称","type":"text","default":"wg0","required":true,"description":"","options":[]},{"name":"pool","label":"自动分配地址池","type":"text","default":"10.66.66.0/24","required":true,"description":"","options":[]},{"name":"endpoint","label":"Hub Endpoint","type":"text","default":"182.92.223.237:51820","required":false,"description":"公网域名或IPv4:端口","options":[]}]
 ---
 - name: 主机 WireGuard 安装与自动分配地址
   hosts: localhost

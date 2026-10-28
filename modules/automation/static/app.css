@@ -71,3 +71,31 @@ body{margin:0;background:#f4f6fa}
 @media(pointer:coarse){#ops-automation-preview button,#ops-automation-preview input,#ops-automation-preview select{min-height:44px}#ops-automation-preview input,#ops-automation-preview select{font-size:16px}}
 
 #ops-automation-preview .au-code{font-family:Consolas,monospace;tab-size:4;white-space:pre;overflow:auto;min-height:360px;line-height:1.55}
+
+/* Script workspace and execution views share the workbench visual scale. */
+#ops-automation-preview .au-overview{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:6px 0 22px}
+#ops-automation-preview .au-stat{border:1px solid var(--op-border);border-radius:12px;background:linear-gradient(135deg,#fff,#f8fbff);padding:18px;text-align:left;color:var(--op-text);display:grid;gap:8px}
+#ops-automation-preview .au-stat span{font-size:13px;color:var(--op-muted)}
+#ops-automation-preview .au-stat strong{font-size:26px;font-weight:650}
+#ops-automation-preview .au-stat small{font-size:11px;color:var(--op-blue)}
+#ops-automation-preview .au-editor,#ops-automation-preview .au-log-view{inset:3vh auto auto 50%;transform:translateX(-50%);width:min(1240px,96vw);height:94dvh;max-height:94dvh;border:1px solid var(--op-border);border-radius:14px;padding:22px;box-shadow:0 24px 70px #0f172a33}
+#ops-automation-preview .au-editor-grid{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(300px,1fr);gap:22px;align-items:start}
+#ops-automation-preview .au-editor-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+#ops-automation-preview .au-editor-toolbar label{margin:0;flex:1;min-width:180px}
+#ops-automation-preview .au-code-pane{min-width:0;position:sticky;top:0}
+#ops-automation-preview .au-code-pane textarea{width:100%;height:58dvh;resize:vertical;background:#101c30;color:#dbeafe;padding:16px;font-size:13px;line-height:1.65;border-color:#263651}
+#ops-automation-preview h3{font-size:14px;margin:18px 0 12px}
+#ops-automation-preview .au-param{border:1px solid var(--op-border);border-radius:10px;padding:12px 14px;margin:12px 0;background:#fbfcfe}
+#ops-automation-preview .au-param-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#ops-automation-preview .au-param-head h3{margin:10px 0}
+#ops-automation-preview .au-param-head b{font-size:12px;color:var(--op-muted)}
+#ops-automation-preview .au-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+#ops-automation-preview .au-param label{margin:10px 0;font-size:12px}
+#ops-automation-preview .au-check{display:flex!important;align-items:center;gap:8px}
+#ops-automation-preview .au-editor .op-drawer-actions{position:sticky;bottom:-22px;background:#fff;border-top:1px solid var(--op-border);padding:16px 0;margin-top:14px}
+#ops-automation-preview .au-log-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+#ops-automation-preview .au-log-toolbar label{margin:8px 0}
+#ops-automation-preview .au-log-view .op-log{height:60dvh;overflow:auto;white-space:pre;overflow-wrap:normal}
+#ops-automation-preview .au-dialog label[hidden]{display:none!important}
+@media(max-width:900px){#ops-automation-preview .au-editor-grid{grid-template-columns:1fr}#ops-automation-preview .au-code-pane{position:static}#ops-automation-preview .au-code-pane textarea{height:36dvh;min-height:220px}#ops-automation-preview .au-editor,#ops-automation-preview .au-log-view{inset:0;transform:none;width:100%;height:100dvh;max-height:100dvh;border-radius:0;padding:16px}}
+@media(max-width:520px){#ops-automation-preview .au-overview{gap:8px}#ops-automation-preview .au-stat{padding:12px}#ops-automation-preview .au-stat strong{font-size:22px}#ops-automation-preview .au-stat small{display:none}}

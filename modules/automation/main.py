@@ -9,7 +9,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 import httpx
@@ -18,8 +18,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .engine import Semaphore
 from .store import Store, now, actor
 from .scripts import Scripts
+from .parameters import Parameter, definitions, read_parameters, resolve_parameters
 
-VERSION = "0.4.1"
+VERSION = "0.5.0"
 HERE = Path(__file__).parent
 
 
@@ -89,6 +90,8 @@ class ScriptEdit(BaseModel):
     path: str = Field(min_length=1, max_length=250)
     content: str = Field(min_length=1, max_length=128000)
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    parameters: list[Parameter] | None = Field(default=None, max_length=32)
+    parameters_revision: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
 
 
 def create_app(data_dir=None, mode=None, engine=None):
@@ -250,7 +253,22 @@ def create_app(data_dir=None, mode=None, engine=None):
     @app.get("/api/v1/templates/{item_id}/script")
     def read_script(item_id: int, path: str | None = None):
         scripts, template = scripts_for(item_id)
-        return {**scripts.read(path or template["playbook"]), "files": scripts.files()}
+        result = {**scripts.read(path or template["playbook"]), "files": scripts.files()}
+        primary = scripts.read(template['playbook'])
+        try: result['parameters'] = read_parameters(primary['content'])
+        except HTTPException as error:
+            result.update(parameters=[], parameters_error=error.detail)
+        return {**result, 'parameters_revision': primary['revision']}
+
+    def template_parameters(template):
+        root = os.getenv('AUTOMATION_SCRIPTS_DIR', '')
+        if not root or template.get('repository_id') != int(os.getenv('AUTOMATION_SCRIPTS_REPOSITORY_ID', '0')):
+            return []
+        return read_parameters(Scripts(root, template['repository_id']).read(template['playbook'])['content'])
+
+    @app.get('/api/v1/templates/{item_id}/parameters')
+    def get_parameters(item_id: int):
+        return {'parameters': template_parameters(find('templates', item_id))}
 
     @app.post("/api/v1/templates/{item_id}/script")
     def edit_script(item_id: int, body: ScriptEdit):
@@ -260,7 +278,12 @@ def create_app(data_dir=None, mode=None, engine=None):
         if len(body.content.encode("utf-8")) > 128000:
             raise HTTPException(413, "脚本超过 128 KB")
         store.audit("save_script", f"{item_id}:{body.path}", "requested")
-        result = scripts.save(body.path, body.content, body.revision, actor.get())
+        edit = None
+        if body.parameters is not None:
+            if not body.parameters_revision: raise HTTPException(422, '缺少参数版本，请重新打开编辑')
+            values = definitions([p.model_dump() for p in body.parameters])
+            edit = (template['playbook'], values, body.parameters_revision)
+        result = scripts.save(body.path, body.content, body.revision, actor.get(), edit)
         store.audit("save_script", f"{item_id}:{body.path}", result["commit"])
         return result
 
@@ -304,9 +327,11 @@ def create_app(data_dir=None, mode=None, engine=None):
         template = find("templates", body.template_id)
         if template.get("app") != "ansible":
             raise HTTPException(409, "首版只运行 Ansible 模板")
+        values = body.model_dump()
+        values['parameters'] = resolve_parameters(template_parameters(template), body.parameters)
         if mode == "semaphore":
-            return save("tasks", body.model_dump())
-        result = save("tasks", {**body.model_dump(), "status": "success", "created": now(), "start": now(), "end": now()})
+            return save("tasks", values)
+        result = save("tasks", {**values, "status": "success", "created": now(), "start": now(), "end": now()})
         store.save("output", {"lines": ["[DEMO] " + template["name"], "本地演示：未执行脚本，未连接主机。",
                                        "dry_run=" + str(body.dry_run), "演示记录已持久化。"]}, result["id"])
         return result
@@ -337,6 +362,12 @@ def create_app(data_dir=None, mode=None, engine=None):
         if not isinstance(data, list):
             raise HTTPException(502, "Semaphore 日志格式不兼容")
         return {"lines": [str(row.get("output", "")) for row in data if isinstance(row, dict)]}
+
+    @app.get('/api/v1/tasks/{item_id}/output.txt')
+    def download_output(item_id: int):
+        lines = output(item_id)['lines']
+        value = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', '\n'.join(lines))
+        return PlainTextResponse(value, headers={'Content-Disposition': f'attachment; filename="automation-{item_id}.log"'})
 
     app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
     return app
