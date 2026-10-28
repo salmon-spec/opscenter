@@ -48,7 +48,8 @@ if docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=512m 
   -e DATABASE_URL=sqlite:////tmp/opscenter-ci.db \
   -v "$work:/opt/opscenter:ro" \
   -w /opt/opscenter "opscenter/backend:$tag" \
-  sh -ec 'pip install -q pytest pytest-asyncio aiohttp==3.13.3 apprise==2.0.1 websocket-client==1.8.0
+  sh -ec 'apt-get update -qq && apt-get install -y -qq --no-install-recommends git
+    pip install -q pytest pytest-asyncio aiohttp==3.13.3 apprise==2.0.1 websocket-client==1.8.0
     python -m pytest -q backend/tests agent/test_processes.py
     for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms runtime extension_worker automation opencode_agent life_common; do
       PYTHONPATH="/opt/opscenter/modules/$module:/opt/opscenter/modules:/opt/opscenter/backend" python -m pytest -q "modules/$module"
