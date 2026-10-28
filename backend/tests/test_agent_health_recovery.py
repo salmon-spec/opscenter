@@ -7,6 +7,12 @@ from types import SimpleNamespace
 
 from app import main
 from app import agent_manager
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_wireguard_probe(monkeypatch):
+    monkeypatch.setattr(main, 'discover_wireguard', lambda *_: None)
 
 
 class _Query:

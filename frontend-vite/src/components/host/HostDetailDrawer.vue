@@ -17,6 +17,7 @@
         <div class="detail-body">
           <div v-if="ovLoading && !overview" class="loading"><span class="spinner"></span>加载中…</div>
 
+          <HostWireGuard v-if="section === 'wireguard'" :host-id="hostId" />
           <section v-show="section === 'basic'">
             <div v-if="server" class="info-grid">
               <div class="info-item"><span class="muted">名称</span><b>{{ server.name }}</b></div>
@@ -169,6 +170,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import HostWireGuard from './HostWireGuard.vue'
 import echarts from '../../utils/echarts'
 import { api, fmtBytes, fmtTime, toast } from '../../api'
 import { useHostContext } from '../../hostContext'
@@ -221,6 +223,7 @@ const sections = [
   { id: 'services', label: '服务情况' },
   { id: 'k3s', label: 'K3s 情况' },
   { id: 'connectivity', label: '连接诊断' },
+  { id: 'wireguard', label: 'WireGuard' },
   { id: 'agent', label: 'Agent' },
   { id: 'alerts', label: '最近告警' },
 ]

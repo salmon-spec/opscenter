@@ -61,7 +61,7 @@ BUILTIN_MODULES = {
         "capabilities": ["vault:open", "health:read"], "permissions": ["password-manager:read"],
         "manifest": {"readonly": True}, "sort_order": 60,
     },
-    "automation": {'name': '自动化作业', 'version': '0.3.1', 'description': '管理 Semaphore 作业模板、主机清单、执行日志与定时计划', 'icon': 'AT', 'entry_url': '/modules/automation/ui/', 'runtime': 'iframe', 'isolation': 'sandboxed-iframe', 'capabilities': ['templates', 'tasks', 'inventories', 'schedules'], 'permissions': ['automation:admin'], 'manifest': {'api_prefixes': ['/modules/automation/api/v1/'], 'sandbox': ['allow-scripts', 'allow-forms'], 'readonly': False}, 'sort_order': 50},
+    "automation": {'name': '自动化作业', 'version': '0.4.0', 'description': '管理 Semaphore 作业模板、主机清单、执行日志与定时计划', 'icon': 'AT', 'entry_url': '/modules/automation/ui/', 'runtime': 'iframe', 'isolation': 'sandboxed-iframe', 'capabilities': ['templates', 'tasks', 'inventories', 'schedules'], 'permissions': ['automation:admin'], 'manifest': {'api_prefixes': ['/modules/automation/api/v1/'], 'sandbox': ['allow-scripts', 'allow-forms'], 'readonly': False}, 'sort_order': 50},
     "opencode-agent": {
         "name": "OpenCode Agent",
         "version": "0.2.0",

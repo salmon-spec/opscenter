@@ -1,0 +1,17 @@
+---
+- name: 主机 WireGuard 安装与自动分配地址
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: 安装并核验 WireGuard 隧道
+      ansible.builtin.command:
+        argv: [python3, "{{ playbook_dir }}/install_wireguard.py", --config, /run/pve-sync/config.json]
+        stdin: "{{ {'server_id': server_id, 'hub_id': hub_id, 'interface': interface | default('wg0'), 'pool': pool | default('10.66.66.0/24'), 'endpoint': endpoint | default(''), 'dry_run': ansible_check_mode} | to_json }}"
+      check_mode: false
+      register: wg_result
+      changed_when: >-
+        not ansible_check_mode and (wg_result.stdout.split(' ', 1)[1] | from_json).get('changed', false)
+    - name: 显示地址及隧道验证结果
+      ansible.builtin.debug:
+        var: wg_result.stdout_lines

@@ -1,4 +1,4 @@
-# 自动化作业 · 0.3.1
+# 自动化作业 · 0.4.0
 
 独立运行的 OpsCenter 风格界面与 Semaphore API 网关；支持工作台统一登录与沙箱通信。
 
@@ -162,10 +162,12 @@ python3 sync_pve_hosts.py --config /run/pve-sync/config.json --apply
 验证：`python -m pytest modules/automation/test_main.py modules/automation/test_scripts.py -q`；部署后须验证检查/执行/幂等、脚本保存及重建持久化、匿名鉴权，并保留当前部署和两端数据库备份。
 
 
-## 0.3.1：新增虚拟机自动接入监控
+## 0.4.0：新增虚拟机自动接入监控
 
 同步执行模式会为运行中的受管PVE虚拟机安装或修复Agent，并等待后台任务完成、认证指标可读。已运行Agent只检查监控数据，不重复安装；检查模式保留只读预览。失败在作业及主机任务中明确显示，下次执行可重试。
 
 主机管理新增默认自动安装Agent，状态由“部署中”变为“运行中/在线”或具体失败。PVE同步登记缺少SSH凭据的虚拟机时，核心通过可信PVE核对来源、VMID、cloud-init静态IP、管理用户与公钥，复用匹配的已存加密密钥，再经QEMU Guest Agent取得SSH主机公钥并严格验证连接；密码/私钥不经过同步脚本。需Linux/systemd、可用QEMU Guest Agent、cloud-init公钥有对应管理密钥及免密sudo。
 
 PVE安装 `deploy/pve/opscenter-agent-forward.py` 到 `/usr/local/sbin/opscenter-agent-forward`，并配置 `k8s-vm-forward.service` 的ExecStartPost。此脚本持久化管理目标，限制六集群节点到对应客户机的TCP22/19100及已建立的返回连接。已有防火墙策略保留。接入完成后使用原30秒采集循环保存历史并推送主机/监控模块。
+
+运行表单支持 JSON extra vars。WireGuard 作业提供目标主机、Hub、接口、自动地址池和 Endpoint 参数；默认只读检查，正式运行通过握手和连通性校验后回填主机 WG IP。安装脚本及 YAML 均可在页面编辑。详见 docs/releases/automation-0.4.0.md。

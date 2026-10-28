@@ -1,6 +1,8 @@
 """Independent automation module. Semaphore owns execution, credentials and schedules."""
 import hmac
+import json
 import os
+import re
 import secrets
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -10,13 +12,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+import httpx
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .engine import Semaphore
 from .store import Store, now, actor
 from .scripts import Scripts
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 HERE = Path(__file__).parent
 
 
@@ -67,6 +70,14 @@ class Run(Input):
     template_id: int = Field(gt=0)
     dry_run: bool = True
     message: str = Field(default="", max_length=300)
+    parameters: dict[str, str | int | float | bool] = Field(default_factory=dict)
+
+    @field_validator('parameters')
+    @classmethod
+    def valid_parameters(cls, value):
+        if len(value) > 32 or len(json.dumps(value)) > 16000 or any(not re.fullmatch(r'[a-zA-Z][a-zA-Z0-9_]{0,63}', key) for key in value):
+            raise ValueError('参数使用简单名称及标量值，最多32项/16KB')
+        return value
 
 
 class Active(Input):
@@ -192,6 +203,20 @@ def create_app(data_dir=None, mode=None, engine=None):
     def state():
         return {"mode": mode, "version": VERSION, "collected_at": now(),
                 **{kind: items(kind) for kind in ("templates", "tasks", "inventories", "schedules", "repositories", "environments", "keys")}}
+
+    @app.get('/api/v1/hosts')
+    def managed_hosts(request: Request):
+        if mode == 'demo':
+            return {'items': []}
+        try:
+            with httpx.Client(trust_env=False, timeout=12) as client:
+                result = client.get('http://module-host-inventory:8080/api/v1/hosts', headers={'Authorization': request.headers.get('authorization', '')})
+                result.raise_for_status()
+                rows = result.json()['items']
+                return {'items': [{key: row.get(key, '') for key in ('id', 'name', 'host', 'wireguard_ip')} for row in rows if row.get('enabled', True)],
+                        'defaults': {'hub_id': os.getenv('AUTOMATION_WG_HUB_ID', ''), 'endpoint': os.getenv('AUTOMATION_WG_ENDPOINT', '')}}
+        except (httpx.HTTPError, ValueError, TypeError):
+            raise HTTPException(502, '主机清单读取失败，请稍后重试') from None
 
     @app.get("/api/v1/summary")
     def summary():

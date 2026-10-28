@@ -79,6 +79,9 @@ class Semaphore:
         payload = {**value, "project_id": self.project_id}
         if kind == "tasks":
             payload["params"] = {"dry_run": payload.pop("dry_run")}
+            parameters = payload.pop('parameters', {})
+            if parameters:
+                payload['environment'] = json.dumps(parameters, ensure_ascii=False)
         if item_id is not None:
             payload["id"] = item_id
         response = self.request("PUT" if item_id is not None else "POST",

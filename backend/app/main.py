@@ -18,6 +18,7 @@ from app.discovery import discover_docker_services, parse_nginx_config
 from app.ssh_manager import get_ssh_client, ssh_exec, discover_remote_docker_services, collect_remote_metrics, get_remote_containers, test_ssh_connection
 from app.agent_manager import deploy_agent, check_agent_status, fetch_agent_metrics, fetch_agent_system_summary, uninstall_agent, fetch_agent_services, trigger_agent_scan, get_agent_version, resolve_agent_host, resolve_management_hosts, fetch_from_agent
 from app.host_inventory_bridge import publish_host_inventory_telemetry, active_host_ids
+from app.wireguard import discover as discover_wireguard, router as wireguard_router
 from app.ssh_terminal import create_session, get_session, remove_session, get_active_count, RECONNECT_GRACE
 from app.log_scanner import log_scan_loop, run_log_scan
 from app.backup_scanner import backup_check_loop, run_backup_check, seed_backup_rule
@@ -334,6 +335,7 @@ app.include_router(log_center_router)
 app.include_router(alloy_manager_router)
 app.include_router(k8s_monitor_router)
 app.include_router(server_details_router)
+app.include_router(wireguard_router)
 # v5.0.0 数据服务（Redis/MQ/Kafka/ZK/Nacos/MinIO/MongoDB 纳管 + 只读浏览）
 app.include_router(data_services_router)
 # v5.2.3 数据服务连接配置（加密保存，保存后热生效）
@@ -437,6 +439,9 @@ def _run_agent_health_check():
             # scanner also updates hosts and used to deadlock with this loop's
             # previous all-host commit.
             db.commit()
+            if local_srv.agent_status == 'running':
+                discover_wireguard(local_srv)
+                db.commit()
             publish_host_inventory_telemetry(local_srv)
 
         remote_servers = db.query(Server).filter(Server.agent_type != "local").order_by(Server.id).all()
@@ -458,6 +463,7 @@ def _run_agent_health_check():
                     if probe:
                         srv.agent_status = "running"
                         srv.last_seen = datetime.utcnow()
+                        discover_wireguard(srv)
                     else:
                         srv.agent_status = "error"
                 elif new_status in ("stopped", "installed_stopped"):

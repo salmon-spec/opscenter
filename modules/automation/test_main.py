@@ -128,6 +128,24 @@ def test_timeout_never_retries(tmp_path):
     assert len(calls) == 1
 
 
+def test_parameters_reach_ansible_environment_without_shell_args(tmp_path):
+    captured = []
+    def handler(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(201, json={'id': 4, 'template_id': 1, 'status': 'waiting'})
+    parameters = {'server_id': 'host-uuid', 'message': 'value with spaces; $(touch /tmp/unsafe)', 'count': 3}
+    make_engine(tmp_path, handler).save('tasks', {'template_id': 1, 'dry_run': True, 'parameters': parameters})
+    assert json.loads(captured[0]['environment']) == parameters
+    assert captured[0]['params']['dry_run'] is True
+    assert 'arguments' not in captured[0] and 'parameters' not in captured[0]
+
+
+def test_run_parameters_are_bounded_scalars(client):
+    assert client.post('/api/v1/tasks', json={'template_id': 1, 'parameters': {'version': '1.0', 'count': 2}}).status_code == 201
+    for parameters in ({'bad-key': 1}, {'nested': {'a': 1}}, {'long': 'a'*16001}):
+        assert client.post('/api/v1/tasks', json={'template_id': 1, 'parameters': parameters}).status_code == 422
+
+
 def test_live_mode_preserves_hidden_template_and_schedule_fields(tmp_path, monkeypatch):
     monkeypatch.delenv("AUTOMATION_TOKEN_FILE", raising=False)
     requests = []

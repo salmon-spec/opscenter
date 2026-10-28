@@ -88,7 +88,16 @@ async function scriptForm(id, path) {
   const script=await api(`templates/${id}/script`+(path?'?path='+encodeURIComponent(path):''));
   open('编辑作业脚本',nameOf('templates',id),`<form data-form="script" data-id="${id}"><label>脚本文件<select class="op-field" id="script-file" data-template-id="${id}">${script.files.map(p=>`<option value="${escapeHtml(p)}" ${p===script.path?'selected':''}>${escapeHtml(p)}</option>`).join('')}</select></label><input type="hidden" name="path" value="${escapeHtml(script.path)}"><input type="hidden" name="revision" value="${script.revision}">${field('脚本正文',`<textarea class="op-field au-code" name="content" rows="22" required maxlength="128000" spellcheck="false">${escapeHtml(script.content)}</textarea>`)}<p class="op-note">保存后生成 Git 版本，后续作业使用新版本。凭据请放在受保护文件中。</p>${actions('保存脚本')}</form>`);
 }
-function runForm(id) { const t=lookup('templates',id);open('运行作业',t.name,`<form data-form="run"><input name="template_id" type="hidden" value="${id}"><div class="op-kv"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>作业脚本</span><code>${escapeHtml(t.playbook)}</code><span>数据源</span><span>${state.mode==='demo'?'本地演示':'真实 Semaphore 项目'}</span></div>${field('执行说明',input('message','','maxlength="300" placeholder="填写本次操作原因"'))}<label class="au-check"><input name="dry_run" type="checkbox" checked>检查模式（Ansible --check）</label><p class="op-note">${state.mode==='demo'?'此模式仅保存模拟记录，不执行脚本。':'检查模式仍会连接真实主机，部分 playbook 的特殊任务可能执行实际动作；请确认脚本可信。'}</p>${actions(state.mode==='demo'?'模拟运行':'提交执行')}</form>`); }
+async function runForm(id) {
+  const t=lookup('templates',id), wg=t.playbook==='wireguard-install.yml';
+  let controls=field('运行参数（JSON 对象）','<textarea class="op-field" name="parameters" rows="5" spellcheck="false" placeholder="{&quot;version&quot;:&quot;1.0&quot;}">{}</textarea>')+'<p class="op-note">参数作为 Ansible extra vars 传入；请勿填写密码、私钥或令牌。</p>';
+  if(wg){
+    const result=await api('hosts'), hosts=result.items.map(h=>({id:h.id,name:h.name+' · '+h.host})), defaults=result.defaults||{};
+    if(!hosts.length)throw new Error('暂无可管理的主机');
+    controls=field('目标主机',select('server_id',hosts))+field('WireGuard Hub',select('hub_id',hosts,defaults.hub_id))+field('接口名称',input('interface','wg0','required pattern="[a-zA-Z0-9_=+.-]{1,15}"'))+field('自动分配地址池',input('pool','10.66.66.0/24','required'))+field('Hub Endpoint',input('endpoint',defaults.endpoint||'','placeholder="公网域名或IP:51820"'))+'<p class="op-note">自动避开 Hub Peer 与主机台账已用地址。保留已有隧道配置，握手及连通性通过才判成功。</p>';
+  }
+  open('运行作业',t.name,`<form data-form="run" data-wg="${wg}"><input name="template_id" type="hidden" value="${id}"><div class="op-kv"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>作业脚本</span><code>${escapeHtml(t.playbook)}</code></div>${controls}${field('执行说明',input('message','','maxlength="300" placeholder="填写本次操作原因"'))}<label class="au-check"><input name="dry_run" type="checkbox" checked>检查模式${wg?'（仅预览 WireGuard 分配方案）':'（Ansible --check）'}</label><p class="op-note">${state.mode==='demo'?'演示模式不执行脚本。':'检查模式仍会连接真实主机；执行前请核对目标及脚本。'}</p>${actions(state.mode==='demo'?'模拟运行':'提交执行')}</form>`);
+}
 function inventoryForm() { if(!state.keys.length){open('先配置 SSH 凭据','Semaphore 项目配置','<p>请先在 Semaphore 项目中创建 SSH 凭据。模块只引用凭据 ID，不接收或展示私钥。</p>');return;}
   open('新建主机清单','使用独立执行凭据',`<form data-form="inventory">${field('清单名称',input('name','','required maxlength="100"'))}${field('格式','<select class="op-field" name="type"><option value="static">INI 静态清单</option><option value="static-yaml">YAML 静态清单</option></select>')}${field('SSH 凭据',select('ssh_key_id',state.keys))}${field('清单内容','<textarea class="op-field" name="inventory" rows="8" required maxlength="32000" placeholder="[servers]&#10;host1 ansible_host=192.0.2.10"></textarea>')}<p class="op-note">密码和私钥通过 Semaphore 凭据管理，不要写入清单。</p>${actions()}</form>`);
 }
@@ -106,7 +115,7 @@ root.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b
   if(b.dataset.action==='create'){templateForm();return;}
   if(b.id==='add-resource'){tab==='inventories'?inventoryForm():scheduleForm();return;}
   if(b.dataset.script){await scriptForm(Number(b.dataset.script));return;}
-  if(b.dataset.run){runForm(Number(b.dataset.run));return;}
+  if(b.dataset.run){await runForm(Number(b.dataset.run));return;}
   if(b.dataset.template){const t=lookup('templates',Number(b.dataset.template));open(t.name,'模板详情',`<div class="op-kv"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>脚本</span><code>${escapeHtml(t.playbook)}</code><span>仓库</span><span>${escapeHtml(nameOf('repositories',t.repository_id))}</span><span>变量环境</span><span>${escapeHtml(nameOf('environments',t.environment_id))}</span></div><p>${escapeHtml(t.description)}</p><div class="op-drawer-actions"><button class="op-button" data-edit="${t.id}" ${t.app!=='ansible'?'disabled':''}>编辑模板</button><button class="op-button primary" data-run="${t.id}" ${t.app!=='ansible'?'disabled':''}>运行作业</button></div>`);return;}
   if(b.dataset.edit){templateForm(lookup('templates',Number(b.dataset.edit)));return;}
   if(b.dataset.inventory){const i=lookup('inventories',Number(b.dataset.inventory));open(i.name,'主机清单 · '+i.type,'<pre class="op-log" id="inventory-text"></pre>');$('#inventory-text').textContent=i.inventory||'此清单由 Semaphore 动态解析。';return;}
@@ -124,7 +133,19 @@ root.addEventListener('submit',async e=>{e.preventDefault();const f=e.target;
   if(type==='script')await mutate(`templates/${f.dataset.id}/script`,'POST',data);
   if(type==='inventory')await mutate('inventories','POST',data);
   if(type==='schedule')await mutate('schedules','POST',{...data,active:false,type:''});
-  if(type==='run'){data.dry_run=f.elements.dry_run.checked;await mutate('tasks','POST',data);}
+  if(type==='run'){
+    try{
+      if(f.dataset.wg==='true'){
+        data.parameters=Object.fromEntries(['server_id','hub_id','interface','pool','endpoint'].map(key=>[key,data[key]]));
+        for(const key of Object.keys(data.parameters))delete data[key];
+        if(data.parameters.server_id===data.parameters.hub_id)throw new Error('目标主机不能是 Hub 本身');
+      }else{
+        data.parameters=JSON.parse(data.parameters);
+        if(!data.parameters||Array.isArray(data.parameters)||typeof data.parameters!=='object')throw new Error('参数须为 JSON 对象');
+      }
+      data.dry_run=f.elements.dry_run.checked;await mutate('tasks','POST',data);
+    }catch(error){$('#drawer-error').textContent=error.message;}
+  }
   if(type==='stop')await mutate(`tasks/${f.dataset.id}/stop`,'POST',{});
   if(type==='active')await mutate(`schedules/${f.dataset.id}/active`,'PUT',{active:f.dataset.active==='true'});
 });
