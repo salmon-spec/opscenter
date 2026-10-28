@@ -1575,7 +1575,6 @@ def create_server(data: ServerCreate, background_tasks: BackgroundTasks):
         result = {"id": server_id, "name": srv.name, "host": srv.host, "agent_status": srv.agent_status}
         publish_host_inventory_telemetry(srv)
     if data.auto_deploy_agent and not data.is_local:
-        AGENT_TASKS.start(server_id, kind="agent_deploy")
         _dispatch_agent_deploy(background_tasks, server_id)
     return result
 

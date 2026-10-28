@@ -40,7 +40,7 @@ def setup():
 
 
 def _create_server(name="H", host="10.0.0.5", **fields):
-    payload = {"name": name, "host": host}
+    payload = {"name": name, "host": host, "auto_deploy_agent": False}
     payload.update(fields)
     r = client.post("/api/v2/servers", json=payload)
     assert r.status_code == 201, r.text
