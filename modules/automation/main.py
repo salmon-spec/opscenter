@@ -16,7 +16,7 @@ from .engine import Semaphore
 from .store import Store, now, actor
 from .scripts import Scripts
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 HERE = Path(__file__).parent
 
 

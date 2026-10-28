@@ -210,7 +210,7 @@ class ServerCreate(BaseModel):
     tags: List[str] = Field(default_factory=list)
     is_local: bool = False
     remark: Optional[str] = None
-    auto_deploy_agent: bool = False
+    auto_deploy_agent: bool = True
     # 双通道地址与 K3s 节点映射（需求基线 §7.3）
     lan_ip: Optional[str] = None
     wireguard_ip: Optional[str] = None
@@ -1474,6 +1474,12 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 AGENT_TASKS.finish(server_id, success=False, error="server deleted during deploy")
                 return
             db.expunge(srv)
+        if not srv.ssh_key and not password and srv.agent_type != "local":
+            from app.pve_guest import prepare_guest_access
+            prepare_guest_access(server_id)
+            with get_db() as db:
+                srv = db.query(Server).filter(Server.id == uuid.UUID(server_id)).one()
+                db.expunge(srv)
         if srv.agent_type == "local" and not CONTAINERIZED:
             from app.agent_manager import upgrade_local_agent
             result = upgrade_local_agent()
@@ -1483,6 +1489,13 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 result["agent_token"] = srv.agent_token or ""
         else:
             result = deploy_agent(srv, password=password)
+        if result.get("success"):
+            srv.agent_port = result.get("agent_port", 19100)
+            srv.agent_token = result.get("agent_token", "")
+            srv.agent_version = result.get("agent_version", get_agent_version())
+            sample = _fetch_monitoring_sample(srv)
+            if not sample or not any(sample.get(k) is not None for k in ("cpu_percent", "memory_percent", "disk_percent")):
+                result = {**result, "success": False, "message": "Agent 已启动，但监控接口未返回有效指标，请检查网络连接"}
         with get_db() as db:
             row = db.query(Server).filter(Server.id == uuid.UUID(server_id)).first()
             if not row:
@@ -1493,10 +1506,14 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_port = result.get("agent_port", 19100)
                 row.agent_token = result.get("agent_token", "")
                 row.agent_version = result.get("agent_version", "2.6.3")
+                row.status = ServerStatus.online.value
+                row.last_seen = datetime.utcnow()
+                row.last_error = ""
             else:
                 row.agent_status = "error"
                 row.last_error = result.get("message", "Agent 部署失败")[-1000:]
             db.commit()
+            publish_host_inventory_telemetry(row)
         AGENT_TASKS.finish(
             server_id, success=bool(result.get("success")),
             message=result.get("message") or ("Agent 已就绪" if result.get("success") else ""),
@@ -1509,6 +1526,7 @@ def _deploy_agent_background(server_id: str, password: Optional[str] = None):
                 row.agent_status = "error"
                 row.last_error = str(exc)[-1000:]
                 db.commit()
+                publish_host_inventory_telemetry(row)
         AGENT_TASKS.finish(server_id, success=False, error=str(exc))
 
 
@@ -1528,7 +1546,7 @@ def _fetch_monitoring_sample(server, host=None):
 
 
 @app.post("/api/v2/servers", status_code=201)
-def create_server(data: ServerCreate):
+def create_server(data: ServerCreate, background_tasks: BackgroundTasks):
     with get_db() as db:
         duplicate = db.query(Server).filter(Server.host == data.host.strip(), Server.ssh_port == data.ssh_port).first()
         if duplicate:
@@ -1543,7 +1561,7 @@ def create_server(data: ServerCreate):
             ssh_user=data.ssh_user, ssh_key=ssh_key_val,
             tags=data.tags, is_local=data.is_local, remark=data.remark,
             agent_type="local" if data.is_local else "remote",
-            agent_status="not_deployed",
+            agent_status="deploying" if data.auto_deploy_agent and not data.is_local else "not_deployed",
             lan_ip=data.lan_ip, wireguard_ip=data.wireguard_ip,
             preferred_management_channel=data.preferred_management_channel or "auto",
             management_address_override=data.management_address_override,
@@ -1556,6 +1574,9 @@ def create_server(data: ServerCreate):
         server_id = str(srv.id)
         result = {"id": server_id, "name": srv.name, "host": srv.host, "agent_status": srv.agent_status}
         publish_host_inventory_telemetry(srv)
+    if data.auto_deploy_agent and not data.is_local:
+        AGENT_TASKS.start(server_id, kind="agent_deploy")
+        _dispatch_agent_deploy(background_tasks, server_id)
     return result
 
 @app.get("/api/v2/servers/{server_id}")
@@ -3602,7 +3623,8 @@ def upgrade_agent_async(server_id: str, background_tasks: BackgroundTasks,
         server = db.query(Server).filter(Server.id == server_uuid).first()
         if not server:
             raise HTTPException(404, "Server not found")
-        if (server.agent_type != "local" or CONTAINERIZED) and not server.ssh_key:
+        from app.pve_guest import guest_identity
+        if (server.agent_type != "local" or CONTAINERIZED) and not server.ssh_key and not guest_identity(server):
             raise HTTPException(400, "主机未配置 SSH 凭证，无法升级 Agent")
         server.agent_status = "deploying"
         db.commit()

@@ -7,6 +7,7 @@ from fastapi import HTTPException
 
 from .scripts import Scripts
 from .runbooks.sync_pve_hosts import plan
+from .runbooks import sync_pve_hosts
 from .test_main import client
 
 
@@ -81,3 +82,26 @@ def test_sync_add_update_remove_and_idempotence():
     assert not any(a["action"] == "archive" and a["vmid"] == 110 for a in plan(converted, after, config))
     with pytest.raises(ValueError):
         plan(snapshot, [*hosts, {**hosts[2], "id": "duplicate"}], config)
+
+
+def test_sync_installs_missing_agents_and_checks_metrics(monkeypatch):
+    seen = []
+    def request(base, path, token, payload=None, method=None):
+        seen.append(path)
+        if path.endswith('/upgrade-agent'):
+            return {'accepted': True}
+        if path.endswith('/upgrade/status'):
+            return {'task': {'status': 'success'}, 'agent_status': 'running'}
+        return {'metrics': {'cpu': 0, 'memory': 10}}
+    monkeypatch.setattr(sync_pve_hosts, 'request', request)
+    snapshot = {'source_id': 'test', 'vms': [{'vmid': 119, 'status': 'running'}]}
+    hosts = [{'id': 'guest', 'tags': ['pve-source:test', 'pve-vmid:119'], 'agent_status': 'not_deployed'}]
+    sync_pve_hosts.ensure_agents('http://web', 'test', snapshot, hosts)
+    assert seen == ['/api/v2/servers/guest/upgrade-agent', '/api/v2/servers/guest/agent/upgrade/status', '/api/v2/servers/guest/agent-metrics']
+    hosts[0]['agent_status'] = 'running'
+    seen.clear()
+    sync_pve_hosts.ensure_agents('http://web', 'test', snapshot, hosts)
+    assert seen == ['/api/v2/servers/guest/agent-metrics']
+    monkeypatch.setattr(sync_pve_hosts, 'request', lambda *a, **k: {'metrics': {}})
+    with pytest.raises(RuntimeError):
+        sync_pve_hosts.ensure_agents('http://web', 'test', snapshot, hosts)

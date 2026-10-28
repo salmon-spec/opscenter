@@ -150,7 +150,35 @@ def main():
     after = request(base, "/modules/host-inventory/api/v1/hosts", token)
     if after.get("status") not in {"ok", "degraded"} or plan(snapshot, after["items"], config, args.allow_empty):
         raise RuntimeError("Post-sync verification failed; inspect completed actions before retry")
+    ensure_agents(base, token, snapshot, after["items"])
     print("SYNC_OK: host inventory matches PVE", flush=True)
+
+
+def ensure_agents(base, token, snapshot, hosts):
+    source_tag = "pve-source:" + snapshot["source_id"]
+    running = {f"pve-vmid:{v['vmid']}" for v in snapshot["vms"] if v["status"] == "running" and not v.get("template")}
+    for host in hosts:
+        tags = set(host.get("tags") or [])
+        if source_tag not in tags or not tags.intersection(running):
+            continue
+        server_id = host["id"]
+        if host.get("agent_status") != "running":
+            if host.get("agent_status") != "deploying":
+                request(base, f"/api/v2/servers/{server_id}/upgrade-agent", token, {}, "POST")
+            deadline = time.monotonic() + 240
+            while True:
+                status = request(base, f"/api/v2/servers/{server_id}/agent/upgrade/status", token)
+                task_status = (status.get("task") or {}).get("status")
+                if task_status == "success" and status.get("agent_status") == "running":
+                    break
+                if task_status == "failed" or time.monotonic() >= deadline:
+                    print(f"AGENT_FAILED {server_id}: check the host Agent task", flush=True)
+                    raise RuntimeError("Agent installation failed or timed out")
+                time.sleep(2)
+        metrics = request(base, f"/api/v2/servers/{server_id}/agent-metrics", token)
+        if not any((metrics.get("metrics") or {}).get(key) is not None for key in ("cpu", "memory", "disk")):
+            raise RuntimeError("Agent monitoring metrics unavailable")
+        print(f"AGENT_OK {server_id}: authenticated monitoring metrics received", flush=True)
 
 
 if __name__ == "__main__":

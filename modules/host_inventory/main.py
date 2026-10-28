@@ -17,7 +17,7 @@ from storage import HostInventoryStore
 
 app = create_module_app(
     key="host-inventory",
-    version="0.2.8",
+    version="0.2.9",
     summary_provider=summary_provider,
     findings_provider=findings_provider,
     capabilities=["summary:read", "findings:read", "hosts:read", "hosts:create", "hosts:update", "hosts:archive"],
@@ -29,6 +29,7 @@ auth.register(app)
 
 class HostCreate(BaseModel):
     registration_id: uuid.UUID | None = None
+    auto_deploy_agent: bool = True
     ssh_user: str | None = Field(None, min_length=1, max_length=50)
     ssh_password: str | None = Field(None, max_length=1000)
     ssh_key: str | None = Field(None, max_length=16000)
@@ -132,7 +133,7 @@ def log_coverage():
 
 @app.post("/api/v1/hosts", status_code=201)
 def create_host(payload: HostCreate, request: Request, user=Depends(app.state.require_editor)):
-    data = payload.model_dump(exclude={"registration_id", "ssh_user", "ssh_password", "ssh_key"})
+    data = payload.model_dump(exclude={"registration_id", "auto_deploy_agent", "ssh_user", "ssh_password", "ssh_key"})
     if any(ord(char) < 32 for value in (data["name"], data["host"]) for char in value):
         raise HTTPException(400, "主机名称或地址包含无效字符")
     data["tags"] = [tag.strip()[:80] for tag in data["tags"] if tag.strip()]
@@ -144,7 +145,7 @@ def create_host(payload: HostCreate, request: Request, user=Depends(app.state.re
 
 @app.put("/api/v1/hosts/{host_id}")
 def update_host(host_id: uuid.UUID, payload: HostCreate, request: Request, user=Depends(app.state.require_editor)):
-    data = payload.model_dump(exclude={"registration_id", "ssh_user", "ssh_password", "ssh_key"})
+    data = payload.model_dump(exclude={"registration_id", "auto_deploy_agent", "ssh_user", "ssh_password", "ssh_key"})
     if any(ord(char) < 32 for value in (data["name"], data["host"]) for char in value):
         raise HTTPException(400, "主机名称或地址包含无效字符")
     data["tags"] = [tag.strip()[:80] for tag in data["tags"] if tag.strip()]

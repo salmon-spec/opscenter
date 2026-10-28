@@ -20,7 +20,7 @@ def test_source_sync_excludes_disabled_historical_hosts(monkeypatch):
 
 
 def test_module_version_matches_release():
-    assert TestClient(app).get("/api/v1/version").json()["version"] == "0.2.8"
+    assert TestClient(app).get("/api/v1/version").json()["version"] == "0.2.9"
 
 
 def test_internal_asset_ids_and_log_coverage_are_token_scoped(monkeypatch, tmp_path):

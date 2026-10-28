@@ -32,6 +32,7 @@ def test_registration_reuses_uuid_for_core_create_and_retry_update(monkeypatch):
     assert [call[0] for call in calls] == ['GET', 'POST', 'GET', 'PUT']
     assert calls[1][2]['id'] == 'stable-id' and calls[-1][1].endswith('/stable-id')
     assert state['lan_ip'] == '192.168.1.2'
+    assert calls[1][2]['auto_deploy_agent'] is True
 
 
 def test_registration_failure_stops_asset_write(monkeypatch):

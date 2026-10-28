@@ -134,6 +134,7 @@ async function save() {
       toast('主机信息已更新', 'ok')
     } else {
       await api.post('/modules/host-inventory/api/v1/hosts', {
+        auto_deploy_agent: true,
         registration_id: registrationId,
         ssh_user: form.ssh_user || undefined,
         ssh_password: form.auth_type === 'password' ? form.ssh_password || undefined : undefined,
@@ -146,7 +147,7 @@ async function save() {
         kubernetes_node_name: form.kubernetes_node_name, node_role: form.node_role,
         runtime_type: form.runtime_type, cluster_id: form.cluster_id,
       })
-      toast('主机管理资料已登记；请继续安装或检查 Agent', 'ok')
+      toast('主机已添加，正在自动安装 Agent', 'ok')
     }
     emit('saved')
   } catch (error) {
