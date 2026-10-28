@@ -149,8 +149,8 @@ function renderLog(){
 async function updateLog(){const requestedId=logTaskId,result=await api(`tasks/${requestedId}/output`);if(logTaskId===requestedId&&$('#log-output')){logLines=result.lines.map(v=>v.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,''));renderLog();}}
 async function copyLog(){
   const value=logLines.join('\n');
-  if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(value);
-  else{const area=document.createElement('textarea');area.value=value;$('#drawer').appendChild(area);area.select();const copied=document.execCommand('copy');area.remove();if(!copied)throw new Error('浏览器未允许复制，请使用下载日志');}
+  if(navigator.clipboard&&window.isSecureContext){try{await navigator.clipboard.writeText(value);$('#log-feedback').textContent='日志已复制';return;}catch{}}
+  const area=document.createElement('textarea');area.value=value;$('#drawer').appendChild(area);area.select();const copied=document.execCommand('copy');area.remove();if(!copied)throw new Error('浏览器未允许复制，请使用下载日志');
   $('#log-feedback').textContent='日志已复制';
 }
 async function downloadLog(){

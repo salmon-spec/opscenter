@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 function workspace() {
-  const element = { addEventListener() {} };
+  const element = { addEventListener() {}, appendChild() {} };
   const root = { querySelector: () => element, addEventListener() {} };
   const window = {};
   const context = vm.createContext({ window, parent: window, document: { getElementById: () => root },
@@ -30,4 +30,17 @@ test('custom option labels and values remain text in generated parameter control
   assert.ok(!html.includes('<img'));
   assert.ok(html.includes('&lt;unsafe&gt;'));
   assert.ok(html.includes('&quot;&gt;&lt;img'));
+});
+
+test('log copying falls back when the secure clipboard API is unavailable in the frame', async () => {
+  const context = workspace();
+  let copied = false;
+  context.window.isSecureContext = true;
+  context.navigator = { clipboard: { writeText: async () => { throw new Error('frame policy'); } } };
+  context.document.createElement = () => ({ select() {}, remove() {} });
+  context.document.execCommand = (command) => { copied = command === 'copy'; return copied; };
+  vm.runInContext('logLines = ["verified log"]', context);
+  await vm.runInContext('copyLog()', context);
+  assert.equal(copied, true);
+  assert.equal(vm.runInContext("$('#log-feedback').textContent", context), '日志已复制');
 });
