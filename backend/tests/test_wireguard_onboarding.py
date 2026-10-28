@@ -48,7 +48,7 @@ def test_remote_config_parser_never_returns_secrets(monkeypatch):
 def test_dry_run_has_no_mutations_and_closes_connections(monkeypatch):
     from contextlib import contextmanager
     import uuid
-    target = SimpleNamespace(id=uuid.uuid4(), enabled=True, host='192.168.1.164', wireguard_ip='')
+    target = SimpleNamespace(id=uuid.uuid4(), enabled=True, host='192.168.1.164', wireguard_ip='', tags=[])
     hub = SimpleNamespace(id=uuid.uuid4(), enabled=True, host='10.66.66.1', wireguard_ip='10.66.66.1')
     monkeypatch.setattr(wg, 'active_host_ids', lambda: {str(target.id), str(hub.id)})
     @contextmanager
@@ -65,3 +65,17 @@ def test_dry_run_has_no_mutations_and_closes_connections(monkeypatch):
     result=wg.provision(wg.Install(server_id=target.id, hub_id=hub.id, endpoint='vpn.example.com:51820'), ipaddress.ip_network('10.66.66.0/24'))
     assert result['status']=='planned' and result['address']=='10.66.66.2'
     assert calls==['inspect','inspect'] and len(closed)==2
+
+
+def test_pve_wireguard_rules_are_exact_and_reject_private_endpoint(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+    if sys.platform == 'win32': monkeypatch.setitem(sys.modules, 'fcntl', SimpleNamespace())
+    path = Path(__file__).resolve().parents[2] / 'deploy/pve/opscenter-agent-forward.py'
+    spec = importlib.util.spec_from_file_location('wg_forward', path)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    rules = module.wg_rules(119, '192.168.1.164', '182.92.223.237', 51820)
+    assert len(rules) == 2
+    assert rules[0][:8] == ['-s','192.168.1.164','-d','182.92.223.237','-p','udp','--dport','51820']
+    assert 'ESTABLISHED' in rules[1]
+    with pytest.raises(ValueError): module.wg_rules(119, '192.168.1.164', '127.0.0.1', 51820)

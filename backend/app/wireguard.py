@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import re
 import shlex
+import hashlib
+import socket
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +18,8 @@ from app.database import engine, get_db
 from app.models import Server
 from app.agent_manager import fetch_agent_wireguard, fetch_from_agent
 from app.ssh_manager import get_ssh_client
+from app.ssh_manager import ssh_exec
+from app.pve_guest import guest_identity, guest_address
 from app.host_inventory_bridge import publish_host_inventory_telemetry, active_host_ids
 
 router = APIRouter(prefix='/api/v2', tags=['wireguard'], dependencies=[Depends(require_configured_operator)])
@@ -133,6 +137,7 @@ def provision(data, network):
         if not hub_addresses: raise ValueError('地址池不包含 Hub 接口地址')
         endpoint = data.endpoint or (f"{hs['endpoint_candidates'][0]}:{hs['listen_port']}" if hs['endpoint_candidates'] else '')
         if not endpoint: raise ValueError('无法识别 Hub 公网 Endpoint，请在页面填写')
+        prepare_pve_network(target, rows, endpoint, data.dry_run)
         existing = [str(ipaddress.ip_interface(a).ip) for a in ts['addresses'] if ipaddress.ip_interface(a).ip in network]
         if ts['configured'] or ts['running']:
             if not existing or not any(p.get('PublicKey') == hs['public_key'] for p in ts['peers']):
@@ -156,3 +161,34 @@ def provision(data, network):
         return {**result, 'status': 'connected', 'changed': bool(ts.get('changed')), 'interfaces': live['addresses']}
     finally:
         for client in clients: client.close()
+
+
+def prepare_pve_network(target, rows, endpoint, dry_run):
+    identity = guest_identity(target)
+    if not identity: return
+    pve = next((r for r in rows if r.enabled and r.agent_type == 'local'), None)
+    if not pve: raise ValueError('PVE 管理主机不可用，无法核对隧道转发')
+    client = get_ssh_client(pve)
+    if not client: raise ValueError('PVE SSH 连接失败')
+    try:
+        def call(command):
+            out, _, rc = ssh_exec(client, command, timeout=30)
+            if rc: raise ValueError('PVE 隧道转发检查失败，请检查 opscenter-agent-forward 辅助脚本')
+            return out
+        source, vmid = identity
+        if hashlib.sha256(call('cat /etc/machine-id').strip().encode()).hexdigest()[:20] != source:
+            raise ValueError('PVE 来源标识不匹配')
+        guests = json.loads(call('pvesh get /cluster/resources --type vm --output-format json'))
+        guest = next((r for r in guests if r.get('type') == 'qemu' and r['vmid'] == vmid and r.get('status') == 'running'), None)
+        if not guest or not re.fullmatch(r'[A-Za-z0-9_.-]+', guest['node']):
+            raise ValueError('PVE 客户机身份或运行状态无效')
+        config = json.loads(call(f"pvesh get /nodes/{guest['node']}/qemu/{vmid}/config --output-format json"))
+        address = guest_address(config, target)
+        host, port = endpoint.rsplit(':', 1)
+        endpoint_ip = str(ipaddress.IPv4Address(socket.gethostbyname(host)))
+        if not ipaddress.ip_address(endpoint_ip).is_global:
+            raise ValueError('PVE 客户机的 Hub Endpoint 需要公网 IPv4')
+        if not dry_run:
+            call(f'/usr/local/sbin/opscenter-agent-forward --wireguard {vmid} {address} {endpoint_ip} {int(port)}')
+    finally:
+        client.close()
