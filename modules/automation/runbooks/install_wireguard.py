@@ -6,6 +6,7 @@ import sys
 from urllib.request import Request, ProxyHandler, build_opener
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
+from sync_pve_hosts import NoRedirect
 
 
 def main():
@@ -21,7 +22,7 @@ def main():
         raise ValueError('Invalid OpsCenter URL')
     parameters = json.loads(sys.stdin.read(16001))
     login = {name: Path(config[name + '_file']).read_text().strip() for name in ('username', 'password')}
-    opener = build_opener(ProxyHandler({}))
+    opener = build_opener(ProxyHandler({}), NoRedirect())
     def call(path, body, token=''):
         request = Request(base + path, data=json.dumps(body).encode(), headers={
             'Content-Type': 'application/json', **({'Authorization': 'Bearer ' + token} if token else {})})

@@ -146,6 +146,27 @@ def test_run_parameters_are_bounded_scalars(client):
         assert client.post('/api/v1/tasks', json={'template_id': 1, 'parameters': parameters}).status_code == 422
 
 
+def test_managed_host_choices_use_allowed_web_gateway_and_exclude_credentials(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.delenv('AUTOMATION_TOKEN_FILE', raising=False)
+    app = create_app(tmp_path, mode='semaphore', engine=SimpleNamespace())
+    class Source:
+        def __init__(self, **kwargs): assert kwargs['trust_env'] is False
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def get(self, url, headers):
+            assert url == 'http://web/modules/host-inventory/api/v1/hosts'
+            assert headers['Authorization'].startswith('Bearer ')
+            return httpx.Response(200, request=httpx.Request('GET', url), json={'items': [
+                {'id':'host-uuid', 'name':'host', 'host':'192.0.2.1', 'wireguard_ip':'', 'ssh_key':'private-material'}]})
+    with TestClient(app) as client:
+        monkeypatch.setattr(httpx, 'Client', Source)
+        response = client.get('/api/v1/hosts', headers={'Authorization':'Bearer '+(tmp_path/'admin-token').read_text()})
+    assert response.status_code == 200
+    assert response.json()['items'][0]['id'] == 'host-uuid'
+    assert 'private-material' not in response.text and 'ssh_key' not in response.text
+
+
 def test_live_mode_preserves_hidden_template_and_schedule_fields(tmp_path, monkeypatch):
     monkeypatch.delenv("AUTOMATION_TOKEN_FILE", raising=False)
     requests = []

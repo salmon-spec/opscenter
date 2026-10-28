@@ -19,7 +19,7 @@ from .engine import Semaphore
 from .store import Store, now, actor
 from .scripts import Scripts
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 HERE = Path(__file__).parent
 
 
@@ -210,7 +210,7 @@ def create_app(data_dir=None, mode=None, engine=None):
             return {'items': []}
         try:
             with httpx.Client(trust_env=False, timeout=12) as client:
-                result = client.get('http://module-host-inventory:8080/api/v1/hosts', headers={'Authorization': request.headers.get('authorization', '')})
+                result = client.get('http://web/modules/host-inventory/api/v1/hosts', headers={'Authorization': request.headers.get('authorization', '')})
                 result.raise_for_status()
                 rows = result.json()['items']
                 return {'items': [{key: row.get(key, '') for key in ('id', 'name', 'host', 'wireguard_ip')} for row in rows if row.get('enabled', True)],

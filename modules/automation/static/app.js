@@ -94,7 +94,7 @@ async function runForm(id) {
   if(wg){
     const result=await api('hosts'), hosts=result.items.map(h=>({id:h.id,name:h.name+' · '+h.host})), defaults=result.defaults||{};
     if(!hosts.length)throw new Error('暂无可管理的主机');
-    controls=field('目标主机',select('server_id',hosts))+field('WireGuard Hub',select('hub_id',hosts,defaults.hub_id))+field('接口名称',input('interface','wg0','required pattern="[a-zA-Z0-9_=+.-]{1,15}"'))+field('自动分配地址池',input('pool','10.66.66.0/24','required'))+field('Hub Endpoint',input('endpoint',defaults.endpoint||'','placeholder="公网域名或IP:51820"'))+'<p class="op-note">自动避开 Hub Peer 与主机台账已用地址。保留已有隧道配置，握手及连通性通过才判成功。</p>';
+    controls=field('目标主机',select('server_id',hosts))+field('WireGuard Hub',select('hub_id',hosts,defaults.hub_id))+field('接口名称',input('interface','wg0','required maxlength="15"'))+field('自动分配地址池',input('pool','10.66.66.0/24','required'))+field('Hub Endpoint',input('endpoint',defaults.endpoint||'','placeholder="公网域名或IP:51820"'))+'<p class="op-note">自动避开 Hub Peer 与主机台账已用地址。保留已有隧道配置，握手及连通性通过才判成功。</p>';
   }
   open('运行作业',t.name,`<form data-form="run" data-wg="${wg}"><input name="template_id" type="hidden" value="${id}"><div class="op-kv"><span>执行范围</span><span>${escapeHtml(nameOf('inventories',t.inventory_id))}</span><span>作业脚本</span><code>${escapeHtml(t.playbook)}</code></div>${controls}${field('执行说明',input('message','','maxlength="300" placeholder="填写本次操作原因"'))}<label class="au-check"><input name="dry_run" type="checkbox" checked>检查模式${wg?'（仅预览 WireGuard 分配方案）':'（Ansible --check）'}</label><p class="op-note">${state.mode==='demo'?'演示模式不执行脚本。':'检查模式仍会连接真实主机；执行前请核对目标及脚本。'}</p>${actions(state.mode==='demo'?'模拟运行':'提交执行')}</form>`);
 }
