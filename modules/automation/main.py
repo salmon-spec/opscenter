@@ -49,7 +49,7 @@ class Template(Input):
         if self.app == "ansible" and self.inventory_id is None:
             raise ValueError("Ansible 需要目标主机清单")
         suffixes = {"ansible": {".yml", ".yaml"}, "python": {".py"}, "bash": {".sh"}}
-        if PurePosixPath(self.playbook).suffix not in suffixes[self.app]:
+        if self.app != "ansible" and PurePosixPath(self.playbook).suffix not in suffixes[self.app]:
             raise ValueError("脚本扩展名需与执行类型匹配")
         if self.app != "ansible": self.inventory_id = None
         return self

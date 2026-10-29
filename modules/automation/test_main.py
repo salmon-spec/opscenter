@@ -294,7 +294,7 @@ def test_native_script_template_edit_run_and_schedule(client, app, suffix):
     assert client.put(f"/api/v1/templates/{item_id}", json=template()).status_code == 409
 
 
-@pytest.mark.parametrize("app,path", [("python", "script.sh"), ("bash", "script.py"), ("ansible", "script.py")])
+@pytest.mark.parametrize("app,path", [("python", "script.sh"), ("bash", "script.py")])
 def test_script_type_requires_matching_file_extension(client, app, path):
     assert client.post("/api/v1/templates", json=template(app=app, playbook=path)).status_code == 422
 
@@ -309,3 +309,7 @@ def test_native_parameters_are_one_json_argument(tmp_path, app):
     make_engine(tmp_path, handler).save("tasks", {"template_id": 7, "dry_run": False, "parameters": parameters}, app_type=app)
     assert json.loads(seen[0]["arguments"]) == [json.dumps(parameters, ensure_ascii=False)]
     assert "environment" not in seen[0] and "parameters" not in seen[0]
+
+
+def test_existing_ansible_paths_keep_extensionless_compatibility(client):
+    assert client.post("/api/v1/templates", json=template(playbook="playbooks/check")).status_code == 201
