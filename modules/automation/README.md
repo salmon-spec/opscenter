@@ -1,11 +1,11 @@
-# 自动化作业 · 0.5.0
+# 自动化作业 · 0.6.0
 
 独立运行的 OpsCenter 风格界面与 Semaphore API 网关；支持工作台统一登录与沙箱通信。
 
 ## 首版范围
 
 - 独立令牌登录；白底表格、页签、搜索与详情抽屉，支持窄屏。
-- Ansible 模板创建、编辑；仓库/变量环境/主机清单选择。
+- Ansible、Python、Shell 模板创建和编辑；仓库/变量环境选择，Ansible 另选目标清单。
 - 静态 INI/YAML 清单创建与查看，只引用 Semaphore 中已有的 SSH 凭据。
 - 手动提交任务，默认 Ansible 检查模式；查看状态与日志，正常停止活动任务。
 - 五段 Cron 计划创建，默认暂停；支持启用/暂停。真实调度由 Semaphore 执行。
@@ -13,7 +13,7 @@
 - `/health/live`、`/health/ready`、`/api/v1/module`、`summary`、`findings` 为后续集成提供入口。
 
 所有 `/api/` 路由要求 Bearer 认证：独立运行使用模块令牌，配置 `OPS_JWT_PUBLIC_KEY_FILE` 后只接受工作台管理员 JWT。UI 不接触 Semaphore Token、私钥或变量环境内容。
-仓库、变量环境和 SSH 凭据在 Semaphore 原生界面配置。本版只支持编辑/运行 Ansible 模板。
+仓库、变量环境和 SSH 凭据在 Semaphore 原生界面配置。支持 Ansible、Python 和 Shell 模板。Python/Shell 在执行容器本地运行，参数以 JSON 作为最后一个命令行参数传递；不会自动连接主机清单。
 修改已有模板时先获取完整源数据，保留 vault、survey、task_params 等未显示配置。
 
 ## Windows 本地启动

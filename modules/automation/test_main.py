@@ -64,7 +64,7 @@ def test_inventory_and_schedule(client):
 
 
 @pytest.mark.parametrize("body", [template(playbook="../escape.yml"), template(playbook="-i evil"),
-    template(playbook="C:/escape.yml"), template(name=""), template(inventory_id=0), template(app="bash"),
+    template(playbook="C:/escape.yml"), template(name=""), template(inventory_id=0), template(app="terraform"),
     template(secret="do-not-echo")])
 def test_template_trust_boundary(client, body):
     response = client.post("/api/v1/templates", json=body)
@@ -277,3 +277,35 @@ def test_workbench_auth_roles_and_audit(tmp_path, monkeypatch):
         with app.state.store.connect() as db:
             assert {r[0] for r in db.execute('SELECT DISTINCT actor FROM audit')} == {'admin'}
         assert '../static/app.js' in client.get('/ui/').text
+
+
+@pytest.mark.parametrize("app,suffix", [("python", ".py"), ("bash", ".sh")])
+def test_native_script_template_edit_run_and_schedule(client, app, suffix):
+    body = template(app=app, playbook="scripts/example" + suffix)
+    body.pop("inventory_id")
+    response = client.post("/api/v1/templates", json=body)
+    assert response.status_code == 201
+    row = response.json(); item_id = row["id"]
+    assert row["inventory_id"] is None and row["allow_override_args_in_task"] is True
+    assert client.put(f"/api/v1/templates/{item_id}", json={**body, "name": "Edited"}).status_code == 200
+    assert client.post("/api/v1/tasks", json={"template_id": item_id}).status_code == 422
+    assert client.post("/api/v1/tasks", json={"template_id": item_id, "dry_run": False, "parameters": {"text": "hello"}}).status_code == 201
+    assert client.post("/api/v1/schedules", json={"name": "paused", "template_id": item_id, "cron_format": "0 9 * * *"}).status_code == 201
+    assert client.put(f"/api/v1/templates/{item_id}", json=template()).status_code == 409
+
+
+@pytest.mark.parametrize("app,path", [("python", "script.sh"), ("bash", "script.py"), ("ansible", "script.py")])
+def test_script_type_requires_matching_file_extension(client, app, path):
+    assert client.post("/api/v1/templates", json=template(app=app, playbook=path)).status_code == 422
+
+
+@pytest.mark.parametrize("app", ["python", "bash"])
+def test_native_parameters_are_one_json_argument(tmp_path, app):
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(201, json={"id": 9})
+    parameters = {"text": "空格 ; $(touch /tmp/unwanted) \" quotes", "count": 2, "flag": False}
+    make_engine(tmp_path, handler).save("tasks", {"template_id": 7, "dry_run": False, "parameters": parameters}, app_type=app)
+    assert json.loads(seen[0]["arguments"]) == [json.dumps(parameters, ensure_ascii=False)]
+    assert "environment" not in seen[0] and "parameters" not in seen[0]

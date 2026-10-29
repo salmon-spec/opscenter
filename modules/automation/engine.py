@@ -74,14 +74,16 @@ class Semaphore:
             raise HTTPException(502, "Semaphore 列表格式不兼容")
         return [clean(kind, row) for row in data]
 
-    def save(self, kind, value, item_id=None):
+    def save(self, kind, value, item_id=None, app_type="ansible"):
         route = {"inventories": "inventory"}.get(kind, kind)
         payload = {**value, "project_id": self.project_id}
         if kind == "tasks":
             payload["params"] = {"dry_run": payload.pop("dry_run")}
             parameters = payload.pop('parameters', {})
-            if parameters:
-                payload['environment'] = json.dumps(parameters, ensure_ascii=False)
+            if app_type == 'ansible':
+                if parameters: payload['environment'] = json.dumps(parameters, ensure_ascii=False)
+            else:
+                payload['arguments'] = json.dumps([json.dumps(parameters, ensure_ascii=False)], ensure_ascii=False)
         if item_id is not None:
             payload["id"] = item_id
         response = self.request("PUT" if item_id is not None else "POST",

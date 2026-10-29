@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import httpx
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -20,7 +20,7 @@ from .store import Store, now, actor
 from .scripts import Scripts
 from .parameters import Parameter, definitions, read_parameters, resolve_parameters
 
-VERSION = "0.5.1"
+VERSION = "0.6.0"
 HERE = Path(__file__).parent
 
 
@@ -32,10 +32,10 @@ class Template(Input):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=500)
     playbook: str = Field(min_length=1, max_length=250)
-    inventory_id: int = Field(gt=0)
+    inventory_id: int | None = Field(default=None, gt=0)
     repository_id: int = Field(gt=0)
     environment_id: int = Field(gt=0)
-    app: Literal["ansible"] = "ansible"
+    app: Literal["ansible", "python", "bash"] = "ansible"
 
     @field_validator("playbook")
     @classmethod
@@ -43,6 +43,16 @@ class Template(Input):
         if value.startswith(("/", "-")) or "\\" in value or ":" in value or ".." in PurePosixPath(value).parts or any(ord(c) < 32 for c in value):
             raise ValueError("使用仓库内的相对 playbook 路径")
         return value
+
+    @model_validator(mode="after")
+    def execution_type(self):
+        if self.app == "ansible" and self.inventory_id is None:
+            raise ValueError("Ansible 需要目标主机清单")
+        suffixes = {"ansible": {".yml", ".yaml"}, "python": {".py"}, "bash": {".sh"}}
+        if PurePosixPath(self.playbook).suffix not in suffixes[self.app]:
+            raise ValueError("脚本扩展名需与执行类型匹配")
+        if self.app != "ansible": self.inventory_id = None
+        return self
 
 
 class Inventory(Input):
@@ -167,10 +177,10 @@ def create_app(data_dir=None, mode=None, engine=None):
             raise HTTPException(404, "记录不存在或不属于当前项目")
         return row
 
-    def save(kind, value, item_id=None):
+    def save(kind, value, item_id=None, app_type="ansible"):
         store.audit(f"save_{kind}", item_id or "new", "requested")
         try:
-            result = store.save(kind, value, item_id) if mode == "demo" else engine.save(kind, value, item_id)
+            result = store.save(kind, value, item_id) if mode == "demo" else engine.save(kind, value, item_id, app_type=app_type)
         except HTTPException as exc:
             store.audit(f"save_{kind}", item_id or "new", f"http_{exc.status_code}")
             raise
@@ -240,7 +250,7 @@ def create_app(data_dir=None, mode=None, engine=None):
 
     def validate_template(body):
         for kind, key in (("inventories", "inventory_id"), ("repositories", "repository_id"), ("environments", "environment_id")):
-            find(kind, getattr(body, key))
+            if getattr(body, key) is not None: find(kind, getattr(body, key))
 
     def scripts_for(item_id):
         template = find("templates", item_id)
@@ -290,19 +300,23 @@ def create_app(data_dir=None, mode=None, engine=None):
     @app.post("/api/v1/templates", status_code=201)
     def add_template(body: Template):
         validate_template(body)
-        return save("templates", body.model_dump())
+        values = body.model_dump()
+        if body.app != "ansible": values["allow_override_args_in_task"] = True
+        return save("templates", values)
 
     @app.put("/api/v1/templates/{item_id}")
     @app.post("/api/v1/templates/{item_id}")
     def update_template(item_id: int, body: Template):
         original = find("templates", item_id)
-        if original.get("app") != "ansible":
-            raise HTTPException(409, "首版仅编辑 Ansible 模板，请在 Semaphore 管理其他类型")
+        if original.get("app") not in {"ansible", "python", "bash"} or original.get("app") != body.app:
+            raise HTTPException(409, "请新建模板以选择其他执行类型")
         validate_template(body)
         if mode == "semaphore":
             # Fetch the full source so updating exposed fields preserves vaults, surveys and task settings.
             original = engine.request("GET", f"templates/{item_id}")
-        return save("templates", {**original, **body.model_dump()}, item_id)
+        values = {**original, **body.model_dump()}
+        if body.app != "ansible": values["allow_override_args_in_task"] = True
+        return save("templates", values, item_id)
 
     @app.post("/api/v1/inventories", status_code=201)
     def add_inventory(body: Inventory):
@@ -325,12 +339,14 @@ def create_app(data_dir=None, mode=None, engine=None):
     @app.post("/api/v1/tasks", status_code=201)
     def run(body: Run):
         template = find("templates", body.template_id)
-        if template.get("app") != "ansible":
-            raise HTTPException(409, "首版只运行 Ansible 模板")
+        if template.get("app") not in {"ansible", "python", "bash"}:
+            raise HTTPException(409, "仅支持 Ansible、Python 和 Shell 模板")
+        if template["app"] != "ansible" and body.dry_run:
+            raise HTTPException(422, "Python/Shell 不支持 Ansible 检查模式，请明确选择直接执行")
         values = body.model_dump()
         values['parameters'] = resolve_parameters(template_parameters(template), body.parameters)
         if mode == "semaphore":
-            return save("tasks", values)
+            return save("tasks", values, app_type=template["app"])
         result = save("tasks", {**values, "status": "success", "created": now(), "start": now(), "end": now()})
         store.save("output", {"lines": ["[DEMO] " + template["name"], "本地演示：未执行脚本，未连接主机。",
                                        "dry_run=" + str(body.dry_run), "演示记录已持久化。"]}, result["id"])

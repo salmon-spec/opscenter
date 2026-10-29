@@ -44,3 +44,16 @@ test('log copying falls back when the secure clipboard API is unavailable in the
   assert.equal(copied, true);
   assert.equal(vm.runInContext("$('#log-feedback').textContent", context), '日志已复制');
 });
+
+
+test('native script templates expose types and direct execution without Ansible check mode', async () => {
+  const context = workspace();
+  vm.runInContext("state={repositories:[{id:1,name:'repo'}],environments:[{id:1,name:'env'}],inventories:[],templates:[{id:7,name:'Python',app:'python',playbook:'example.py'}]}; open=(title,subtitle,html)=>{globalThis.formHtml=html}; updateTemplateType=()=>{}; api=async()=>({parameters:[]}); templateForm();", context);
+  assert.ok(context.formHtml.includes('value="python"'));
+  assert.ok(context.formHtml.includes('value="bash"'));
+  await vm.runInContext('runForm(7)', context);
+  assert.ok(context.formHtml.includes('直接执行'));
+  assert.ok(context.formHtml.includes('执行容器'));
+  assert.ok(!context.formHtml.includes('checked>检查模式'));
+  assert.ok(context.formHtml.includes('最后一个命令行参数'));
+});
