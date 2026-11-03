@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">OpsCenter</string>
+    <string name="title_activity_main">OpsCenter</string>
+    <string name="package_name">com.salmon.opscenter.mobile</string>
+    <string name="custom_url_scheme">com.salmon.opscenter.mobile</string>
+</resources>

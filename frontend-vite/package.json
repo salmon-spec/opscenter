@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:mobile": "vite build --mode mobile --config vite.mobile.config.js",
+    "android:sync": "pnpm build:mobile && cap sync android"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
@@ -14,10 +16,15 @@
     "echarts": "^5.5.1",
     "gridstack": "12.4.2",
     "vue": "^3.4.0",
-    "vue-router": "^4.4.5"
+    "vue-router": "^4.4.5",
+    "@aparajita/capacitor-secure-storage": "8.0.1",
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3",
+    "gridstack": "12.4.2"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
-    "vite": "^5.4.0"
+    "vite": "^5.4.0",
+    "@capacitor/cli": "8.5.3"
   }
 }
