@@ -40,6 +40,7 @@ from app.config import CONTAINERIZED, CORS_ORIGINS, LOCAL_AGENT_TOKEN, LOCAL_SER
 
 # === v3.29 服务详情、大屏与健康路由 ===
 from app.dashboard import router as dashboard_router
+from app.screen_boards import router as screen_boards_router
 from app.control import router as control_router
 from app.service_health import run_service_health_cycle, service_health_loop
 from app.plaza import router as plaza_router, plaza_health_loop
@@ -323,6 +324,7 @@ app.add_middleware(MutationAuthMiddleware)
 # === v3.29 服务详情与大屏路由 ===
 app.include_router(auth_router)
 app.include_router(dashboard_router)
+app.include_router(screen_boards_router)
 app.include_router(control_router)
 app.include_router(plaza_router)
 app.include_router(system_control_router)

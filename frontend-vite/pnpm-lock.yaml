@@ -17,6 +17,9 @@ importers:
       echarts:
         specifier: ^5.5.1
         version: 5.6.0
+      gridstack:
+        specifier: 12.4.2
+        version: 12.4.2
       vue:
         specifier: ^3.4.0
         version: 3.5.41
@@ -407,6 +410,9 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  gridstack@12.4.2:
+    resolution: {integrity: sha512-aXbJrQpi3LwpYXYOr4UriPM5uc/dPcjK01SdOE5PDpx2vi8tnLhU7yBg/1i4T59UhNkG/RBfabdFUObuN+gMnw==}
+
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -753,6 +759,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  gridstack@12.4.2: {}
 
   magic-string@0.30.21:
     dependencies:

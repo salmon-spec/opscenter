@@ -1,6 +1,6 @@
 {
   "name": "opscenter-frontend",
-  "version": "5.5.37",
+  "version": "5.5.38",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,6 +12,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "echarts": "^5.5.1",
+    "gridstack": "12.4.2",
     "vue": "^3.4.0",
     "vue-router": "^4.4.5"
   },
