@@ -1,0 +1,24 @@
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: kube-system
+spec:
+  defaultCertificate:
+    secretName: opscenter-mobile-default-tls
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: opscenter-mobile-ip
+  namespace: opscenter
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`10.66.66.13`) && PathPrefix(`/`)
+      services:
+        - name: web
+          port: 80
+  tls: {}

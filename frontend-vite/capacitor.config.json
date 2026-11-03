@@ -1,0 +1,8 @@
+{
+  "appId": "com.salmon.opscenter.mobile",
+  "appName": "OpsCenter",
+  "webDir": "dist-mobile",
+  "server": {
+    "androidScheme": "https"
+  }
+}
