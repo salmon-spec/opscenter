@@ -8,7 +8,6 @@ import DutyHome from './views/DutyHome.vue'
 
 const ServicePlaza = () => import('./views/ServicePlaza.vue')
 const Screen = () => import('./views/Screen.vue')
-const ScreenManager = () => import('./views/ScreenManager.vue')
 const Alerts = () => import('./views/Alerts.vue')
 const Database = () => import('./views/Database.vue')
 const SystemMonitor = () => import('./views/SystemMonitor.vue')
@@ -45,7 +44,7 @@ const routes = [
   { path: '/system/ssh', name: 'SystemSSH', component: SystemSSH, meta: { title: 'SSH 管理', hostScope: 'required', clusterScope: 'none' } },
   { path: '/system/terminal', name: 'SystemTerminal', component: SystemTerminal, meta: { title: '终端', hostScope: 'none', clusterScope: 'none' } },
   { path: '/system/processes', name: 'SystemProcesses', component: SystemProcesses, meta: { title: '进程管理', hostScope: 'required', clusterScope: 'none' } },
-  { path: '/screen/manage', name: 'ScreenManager', component: ScreenManager, meta: { title: '大屏管理', hostScope: 'none', clusterScope: 'none' } },
+  { path: '/screen/manage', redirect: '/screen?edit=1' },
   { path: '/screen', name: 'Screen', component: Screen, meta: { title: '监控大屏', hostScope: 'none', clusterScope: 'none' } },
   { path: '/screen-standalone', name: 'ScreenStandalone', component: Screen, meta: { title: '监控大屏', standalone: true, hostScope: 'none', clusterScope: 'none' } },
   { path: '/alerts', name: 'Alerts', component: Alerts, meta: { title: '告警中心', hostScope: 'none', clusterScope: 'none' } },

@@ -134,7 +134,6 @@ const baseNavs = [
 const moduleNavs = [
   { path: '/kubernetes/overview', label: 'K3s 集群', icon: '☸', matches: ['/kubernetes/'] },
   { path: '/screen', label: '监控大屏', icon: '📊', exact: true },
-  { path: '/screen/manage', label: '大屏管理', icon: '▦', exact: true },
   { path: '/alerts', label: '告警中心', icon: '🔔' },
   { path: '/logs', label: '日志中心', icon: '≡' },
   { path: '/modules', label: '模块管理', icon: '◇', exact: true },
