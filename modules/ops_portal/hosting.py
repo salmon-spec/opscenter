@@ -148,6 +148,8 @@ def install(app, root, current_user):
             return app.state.portal_management()
         if key in {'oss-browser', 'command-code-usage'}:
             path = f'/v3/extension-modules/{key}/index.html'
+        elif key == 'electricity':
+            path = '/modules/electricity/ui'
         else:
             path = f'/modules/{key}/ui/'
         response = upstream('GET', WEB, path)

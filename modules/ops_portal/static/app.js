@@ -69,7 +69,7 @@ function renderWorkspace(){
  const confirm=document.createElement('button');confirm.textContent=verified[app.id]===app.url?'撤销验收':'记录人工验收';confirm.onclick=()=>{if(verified[app.id]===app.url){delete verified[app.id];save();render();}else showDetails(app.id);};note.append(confirm);
 }
 function openApp(id){const app=apps().find(a=>a.id===id);if(!app)return;
- if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.get(app.module_key);frame.title=app.name;frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);if(module)moduleHost.attach(item);frame.src=module?module.entry_url:app.url;$('#frames').append(frame);} 
+ if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.get(app.module_key);frame.title=app.name;frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);if(module)moduleHost.attach(item);frame.src=module?module.entry_url:app.url;$('#frames').append(frame);}
  active=id;recent=[id,...recent.filter(r=>r!==id)].slice(0,20);save();render();
 }
 function closeTab(id){const item=opened.get(id);if(!item)return;item.frame.remove();opened.delete(id);if(active===id)active=[...opened.keys()].at(-1)||null;renderWorkspace();}
