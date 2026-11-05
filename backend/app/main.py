@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse, Response, JSONResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import func, text
+from sqlalchemy import func, inspect, text
 
 from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, DatabaseInstance
 from app.credential_crypto import encrypt_secret
@@ -1181,8 +1181,18 @@ def _ensure_new_columns():
     ]
     try:
         with engine.connect() as conn:
+            schema = inspect(conn)
+            columns = {}
             for s in stmts:
+                parts = s.split()
+                table, column = parts[2], parts[8]
+                if table not in columns:
+                    columns[table] = {item['name'] for item in schema.get_columns(table)}
+                # Even ADD COLUMN IF NOT EXISTS takes an exclusive PostgreSQL lock.
+                if column in columns[table]:
+                    continue
                 conn.execute(text(s))
+                columns[table].add(column)
             conn.commit()
     except Exception as e:
         # 迁移失败不阻断启动，仅记录日志（旧库缺失列时相关查询会暴露，可人工处理）

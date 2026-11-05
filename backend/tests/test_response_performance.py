@@ -32,8 +32,15 @@ def inventory(monkeypatch):
         with Session(engine) as db:
             yield db
     monkeypatch.setattr(main, 'get_db', get_db)
+    monkeypatch.setattr(main, 'engine', engine)
     yield queries
     engine.dispose()
+
+
+def test_startup_skips_existing_columns(inventory, capsys):
+    main._ensure_new_columns()
+    assert not any(sql.lstrip().upper().startswith('ALTER TABLE') for sql in inventory)
+    assert '[migrate]' not in capsys.readouterr().out
 
 
 def test_host_list_uses_two_queries_and_preserves_empty_host(inventory):
