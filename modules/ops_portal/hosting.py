@@ -163,7 +163,8 @@ def install(app, root, current_user):
             if css.status_code != 200 or js.status_code != 200:
                 raise HTTPException(503, '模块资源暂不可用')
             html = html.replace('<link rel="stylesheet" href="../static/app.css">', '<style>' + css.text + '</style>')
-            html = html.replace('<script src="../static/app.js" defer></script>', '<script>' + js.text + '</script>')
+            html = html.replace('<script src="../static/app.js" defer></script>', '')
+            html = html.replace('</body>', '<script>' + js.text.replace('</script', '<\\/script') + '</script></body>')
         if key in {'electricity', 'oss-browser', 'command-code-usage'}:
             bootstrap = "<script>window.__portalNonce='';addEventListener('message',e=>{if(e.source===parent&&e.data?.type==='ops-module-info')window.__portalNonce=e.data.nonce;});</script>"
             html = html.replace('<head>', '<head>' + bootstrap, 1)
