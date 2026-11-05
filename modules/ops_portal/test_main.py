@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -89,3 +90,12 @@ def test_management_bundling_and_login_failure(module, monkeypatch):
         raise mod.requests.ConnectionError()
     monkeypatch.setattr(mod.requests, 'post', unavailable)
     assert c.post('/session/login', json={'username': 'admin', 'password': 'test-only'}).status_code == 503
+
+
+def test_portal_static_dom_contract():
+    static = Path(__file__).with_name('static')
+    html = (static / 'index.html').read_text(encoding='utf-8')
+    script = (static / 'app.js').read_text(encoding='utf-8')
+    available = set(re.findall(r'id="([\w-]+)"', html + script))
+    required = set(re.findall(r"\$\(['\"]#([\w-]+)['\"]\)", script))
+    assert required <= available, required - available

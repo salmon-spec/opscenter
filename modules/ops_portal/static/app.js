@@ -45,7 +45,6 @@ function render(){
  $('#navigation').innerHTML=menuGroups.map(([name,icon,rows],n)=>`<div class="menu-group"><button data-menu="menu-${n}" aria-expanded="false">${svg(icon)}${name}<span class="chevron">⌄</span></button><div class="menu-popup" id="menu-${n}" hidden>${rows.map(a=>`<button data-open="${esc(a.id)}">${esc(a.name)}</button>`).join('')}${name==='门户管理'?'<button data-settings>快捷访问</button><button data-admin>门户配置管理</button>':''}${!rows.length&&name!=='门户管理'?'<small>暂无应用</small>':''}</div></div>`).join('');
  $('#launcher').innerHTML=svg('grid');$('#catalog-summary').textContent=`${all.length} 个应用入口`;
  $('#categories').innerHTML=['平台支撑','运维场景','众创共享'].map(c=>`<button role="tab" aria-selected="${c===category}" data-filter="${c}" class="${c===category?'active':''}">${({'平台支撑':'基础平台','运维场景':'运维工作台','众创共享':'工具与应用'})[c]}<span class="domain-count">${all.filter(a=>domainOf(a)===c).length}</span></button>`).join('');
- $('#category-options').innerHTML=[...new Set(all.map(a=>a.category))].map(c=>`<option value="${esc(c)}"></option>`).join('');
  const query=$('#search').value.trim().toLowerCase();
  let rows=all.filter(a=>(section!=='favorites'||favorites.has(a.id))&&(section!=='recent'||recent.includes(a.id))&&(query||section!=='all'||domainOf(a)===category));
  if(query)rows=rows.filter(a=>[a.name,a.description,a.category,a.url].join(' ').toLowerCase().includes(query));

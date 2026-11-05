@@ -57,6 +57,15 @@
         respond @internalProbe 404
         reverse_proxy module-electricity:8080
     }
+    handle_path /modules/codex-agent/* {
+        @codexPublic path /ui /ui/ /api/v1/*
+        handle @codexPublic {
+            reverse_proxy module-codex-agent:8080
+        }
+        handle {
+            respond 404
+        }
+    }
     handle_path /modules/opencode-agent/* {
         @opencodePublic path /ui /ui/ /api/v1/*
         handle @opencodePublic {

@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from runtime.app import create_module_app
 from runtime.auth import SessionVerifier
 
-VERSION = '0.4.0'
+VERSION = '0.4.1'
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv('PORTAL_DB_PATH', '/data/portal.sqlite3'))
 PORTAL_URL = os.getenv('PORTAL_PUBLIC_URL', 'http://10.66.66.13:30092/').rstrip('/') + '/'
@@ -76,7 +76,7 @@ class AppEntry(BaseModel):
 class Catalogue(BaseModel):
     revision: int = Field(ge=1)
     apps: list[AppEntry] = Field(max_length=200)
-    default_favorites: list[str] = Field(default_factory=list, max_length=30)
+    default_favorites: list[str] = Field(default_factory=list, max_length=7)
 
     @model_validator(mode='after')
     def unique_entries(self):
@@ -140,7 +140,7 @@ def summary():
 
 initialize()
 app = create_module_app('ops-portal', VERSION, summary, lambda: {'status': 'ok', 'collected_at': now(), 'items': []},
-                        capabilities=['catalogue:read', 'catalogue:manage'])
+                        capabilities=['catalogue:read', 'catalogue:manage'], readiness_provider=read_catalogue)
 verifier = SessionVerifier()
 bearer = HTTPBearer(auto_error=False)
 

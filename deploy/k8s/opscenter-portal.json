@@ -65,7 +65,7 @@
             "containers": [
               {
                 "name": "portal",
-                "image": "opscenter/module-ops-portal:0.4.0",
+                "image": "opscenter/module-ops-portal:0.4.1",
                 "imagePullPolicy": "Never",
                 "ports": [
                   {
@@ -79,7 +79,7 @@
                     "memory": "64Mi"
                   },
                   "limits": {
-                    "cpu": "500m",
+                    "cpu": "200m",
                     "memory": "192Mi"
                   }
                 },
@@ -145,6 +145,15 @@
                   },
                   "initialDelaySeconds": 10,
                   "periodSeconds": 15
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health/ready",
+                    "port": 8080
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 30
                 }
               }
             ],
@@ -166,6 +175,13 @@
                     }
                   ]
                 }
+              }
+            ],
+            "tolerations": [
+              {
+                "key": "node-role.kubernetes.io/control-plane",
+                "operator": "Exists",
+                "effect": "NoSchedule"
               }
             ]
           }
