@@ -101,6 +101,17 @@
         respond @remindersInternal 404
         reverse_proxy module-life-reminders.opscenter-life.svc:8080
     }
+    handle_path /modules/ops-portal/* {
+        @portalInternal path /api/v1/internal/*
+        respond @portalInternal 404
+        @portalPublic path /ui /ui/ /api/v1/*
+        handle @portalPublic {
+            reverse_proxy module-ops-portal:8080
+        }
+        handle {
+            respond 404
+        }
+    }
     handle /modules/* {
         respond `{"detail":"业务模块网关尚未接入"}` 503
     }

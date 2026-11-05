@@ -1,0 +1,26 @@
+{
+  "key": "ops-portal",
+  "name": "运维门户",
+  "version": "0.4.0",
+  "description": "管理统一门户的应用入口、业务分组、显示顺序与默认快捷访问",
+  "icon": "PT",
+  "entry_url": "/modules/ops-portal/ui/",
+  "capabilities": [
+    "catalogue:read",
+    "catalogue:manage"
+  ],
+  "permissions": [
+    "portal:admin"
+  ],
+  "manifest": {
+    "api_prefixes": [
+      "/modules/ops-portal/api/v1/"
+    ],
+    "sandbox": [
+      "allow-scripts",
+      "allow-forms"
+    ],
+    "readonly": false
+  },
+  "sort_order": 60
+}
