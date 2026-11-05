@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: module-codex-data
+  namespace: opscenter
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: module-codex-agent
+  namespace: opscenter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: module-codex-agent
+  template:
+    metadata:
+      labels:
+        app: module-codex-agent
+      annotations:
+        opscenter.io/codex-release: 0.1.0-20261105
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: k8s-worker-02
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: prepare-data
+          image: opscenter/module-codex-agent:0.1.0-release-20261105
+          imagePullPolicy: Never
+          command: [python, -c, "import pathlib; [(pathlib.Path('/state')/p).mkdir(parents=True,exist_ok=True,mode=0o700) for p in ['codex-state/codex','codex-state/gateway','workspace']]"]
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /state
+      containers:
+        - name: codex
+          image: opscenter/module-codex-agent:0.1.0-release-20261105
+          imagePullPolicy: Never
+          env:
+            - name: CODEX_HOME
+              value: /state/codex
+            - name: CODEX_GATEWAY_DATA
+              value: /state/gateway
+            - name: CODEX_WORKSPACE
+              value: /workspace
+            - name: CODEX_VERSION
+              value: 0.166.0
+            - name: CODEX_API_BASE
+              value: https://api.agnes-ai.cn/v1
+            - name: CODEX_MODEL
+              value: agnes-2.5-flash
+            - name: CODEX_API_KEY_FILE
+              value: /run/secrets/provider-key
+            - name: OPS_JWT_PUBLIC_KEY_FILE
+              value: /run/secrets/jwt-public.pem
+            - name: OPS_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: opscenter-env
+                  key: OPS_ADMIN_USER
+          ports:
+            - containerPort: 8080
+              name: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: '1'
+              memory: 1024Mi
+          securityContext:
+            appArmorProfile:
+              type: Localhost
+              localhostProfile: opscenter-codex-userns
+            runAsUser: 10001
+            runAsGroup: 10001
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 5
+            failureThreshold: 40
+            timeoutSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 30
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /state
+              subPath: codex-state
+            - name: data
+              mountPath: /workspace
+              subPath: workspace
+            - name: provider-key
+              mountPath: /run/secrets/provider-key
+              subPath: key
+              readOnly: true
+            - name: jwt-public
+              mountPath: /run/secrets/jwt-public.pem
+              subPath: jwt-public.pem
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: module-codex-data
+        - name: provider-key
+          secret:
+            secretName: opscenter-codex-provider
+            defaultMode: 288
+        - name: jwt-public
+          secret:
+            secretName: opscenter-jwt-keypair
+            defaultMode: 288
+            items:
+              - key: jwt-public.pem
+                path: jwt-public.pem
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: module-codex-agent
+  namespace: opscenter
+spec:
+  selector:
+    app: module-codex-agent
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: module-codex-isolation
+  namespace: opscenter
+spec:
+  podSelector:
+    matchLabels:
+      app: module-codex-agent
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: web
+        - podSelector:
+            matchLabels:
+              app: backend
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 127.0.0.0/8]
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80

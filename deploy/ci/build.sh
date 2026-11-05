@@ -51,7 +51,7 @@ if docker run --rm --security-opt apparmor=unconfined --tmpfs /tmp:rw,size=512m 
   sh -ec 'apt-get update -qq && apt-get install -y -qq --no-install-recommends git
     pip install -q pytest pytest-asyncio aiohttp==3.13.3 apprise==2.0.1 websocket-client==1.8.0
     python -m pytest -q backend/tests agent/test_processes.py
-    for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms runtime extension_worker automation opencode_agent life_common; do
+    for module in alerts service_catalog host_inventory host_monitor k3s logs electricity sms runtime extension_worker automation opencode_agent codex_agent life_common; do
       PYTHONPATH="/opt/opscenter/modules/$module:/opt/opscenter/modules:/opt/opscenter/backend" python -m pytest -q "modules/$module"
     done' >"$test_log" 2>&1; then
   grep -E '[0-9]+ passed' "$test_log"
@@ -89,6 +89,11 @@ docker build -q -t "opscenter/module-automation:$tag" -f "$work/modules/automati
 docker build -q -t "opscenter/module-opencode-agent:$tag" -f "$work/modules/opencode_agent/Dockerfile" "$work"
 docker build -q -t "opscenter/opencode-runner:$tag" -f "$work/deploy/docker/opencode-runner.Dockerfile" "$work"
 images+=("opscenter/module-automation:$tag" "opscenter/module-opencode-agent:$tag" "opscenter/opencode-runner:$tag")
+
+docker build -q -t "opscenter/module-codex-agent:$tag" -f "$work/modules/codex_agent/Dockerfile" "$work"
+docker run --rm --security-opt apparmor=unconfined "opscenter/module-codex-agent:$tag" \
+  python -c 'import os,subprocess,main;assert os.geteuid()==10001;assert main.VERSION=="0.1.0";assert subprocess.check_output(["codex","--version"]).decode().strip()=="codex-cli 0.166.0";print("IMAGE_CHECK codex readable")'
+images+=("opscenter/module-codex-agent:$tag")
 docker build -q --build-arg "BACKEND_IMAGE=opscenter/backend:$tag" \
   -t "opscenter/extension-worker:$tag" -f "$work/modules/extension_worker/Dockerfile" "$work"
 images+=("opscenter/extension-worker:$tag")

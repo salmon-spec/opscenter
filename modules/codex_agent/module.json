@@ -1,0 +1,16 @@
+{
+  "key": "codex-agent",
+  "name": "Codex",
+  "version": "0.1.0",
+  "description": "Codex 官方执行引擎：持续会话、文件和图片、工具审批与流式输出",
+  "icon": "CX",
+  "entry_url": "/modules/codex-agent/ui/",
+  "capabilities": ["agent:execute", "agent:approve", "agent:stop", "files:write"],
+  "permissions": ["codex:admin"],
+  "manifest": {
+    "api_prefixes": ["/modules/codex-agent/api/v1/"],
+    "sandbox": ["allow-scripts", "allow-forms"],
+    "readonly": false
+  },
+  "sort_order": 39
+}
