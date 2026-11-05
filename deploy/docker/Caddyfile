@@ -57,6 +57,15 @@
         respond @internalProbe 404
         reverse_proxy module-electricity:8080
     }
+    handle_path /modules/codex-agent/* {
+        @codexPublic path /ui /ui/ /api/v1/*
+        handle @codexPublic {
+            reverse_proxy module-codex-agent:8080
+        }
+        handle {
+            respond 404
+        }
+    }
     handle_path /modules/opencode-agent/* {
         @opencodePublic path /ui /ui/ /api/v1/*
         handle @opencodePublic {
@@ -100,6 +109,15 @@
         respond @remindersBlocked 404
         respond @remindersInternal 404
         reverse_proxy module-life-reminders.opscenter-life.svc:8080
+    }
+    handle_path /modules/ops-portal/* {
+        @portalPublic path /ui /ui/ /api/v1/module /api/v1/version /api/v1/summary /api/v1/findings /api/v1/catalogue /api/v1/audit
+        handle @portalPublic {
+            reverse_proxy module-ops-portal:8080
+        }
+        handle {
+            respond 404
+        }
     }
     handle /modules/* {
         respond `{"detail":"业务模块网关尚未接入"}` 503

@@ -1,0 +1,291 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "module-ops-portal-data",
+        "namespace": "opscenter",
+        "labels": {
+          "app": "module-ops-portal"
+        }
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteOnce"
+        ],
+        "storageClassName": "local-path",
+        "resources": {
+          "requests": {
+            "storage": "256Mi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "module-ops-portal",
+        "namespace": "opscenter",
+        "labels": {
+          "app": "module-ops-portal"
+        }
+      },
+      "spec": {
+        "replicas": 1,
+        "revisionHistoryLimit": 3,
+        "strategy": {
+          "type": "Recreate"
+        },
+        "selector": {
+          "matchLabels": {
+            "app": "module-ops-portal"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app": "module-ops-portal"
+            }
+          },
+          "spec": {
+            "nodeSelector": {
+              "kubernetes.io/hostname": "k8s-master-01"
+            },
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 10001,
+              "runAsGroup": 10001,
+              "fsGroup": 10001
+            },
+            "automountServiceAccountToken": false,
+            "containers": [
+              {
+                "name": "portal",
+                "image": "opscenter/module-ops-portal:0.4.1",
+                "imagePullPolicy": "Never",
+                "ports": [
+                  {
+                    "name": "http",
+                    "containerPort": 8080
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "50m",
+                    "memory": "64Mi"
+                  },
+                  "limits": {
+                    "cpu": "200m",
+                    "memory": "192Mi"
+                  }
+                },
+                "env": [
+                  {
+                    "name": "MODULE_AUTH_REQUIRED",
+                    "value": "true"
+                  },
+                  {
+                    "name": "OPS_JWT_PUBLIC_KEY_FILE",
+                    "value": "/run/jwt/jwt-public.pem"
+                  },
+                  {
+                    "name": "OPS_ADMIN_USER",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "name": "opscenter-env",
+                        "key": "OPS_ADMIN_USER"
+                      }
+                    }
+                  },
+                  {
+                    "name": "PORTAL_DB_PATH",
+                    "value": "/data/portal.sqlite3"
+                  },
+                  {
+                    "name": "PORTAL_PUBLIC_URL",
+                    "value": "http://10.66.66.13:30092/"
+                  }
+                ],
+                "volumeMounts": [
+                  {
+                    "name": "data",
+                    "mountPath": "/data"
+                  },
+                  {
+                    "name": "jwt",
+                    "mountPath": "/run/jwt",
+                    "readOnly": true
+                  }
+                ],
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  },
+                  "readOnlyRootFilesystem": true
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/health/ready",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 3,
+                  "periodSeconds": 5
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/health/live",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 10,
+                  "periodSeconds": 15
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/health/ready",
+                    "port": 8080
+                  },
+                  "periodSeconds": 2,
+                  "timeoutSeconds": 2,
+                  "failureThreshold": 30
+                }
+              }
+            ],
+            "volumes": [
+              {
+                "name": "data",
+                "persistentVolumeClaim": {
+                  "claimName": "module-ops-portal-data"
+                }
+              },
+              {
+                "name": "jwt",
+                "secret": {
+                  "secretName": "opscenter-jwt-keypair",
+                  "items": [
+                    {
+                      "key": "jwt-public.pem",
+                      "path": "jwt-public.pem"
+                    }
+                  ]
+                }
+              }
+            ],
+            "tolerations": [
+              {
+                "key": "node-role.kubernetes.io/control-plane",
+                "operator": "Exists",
+                "effect": "NoSchedule"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "module-ops-portal",
+        "namespace": "opscenter",
+        "labels": {
+          "app": "module-ops-portal"
+        }
+      },
+      "spec": {
+        "selector": {
+          "app": "module-ops-portal"
+        },
+        "ports": [
+          {
+            "port": 8080,
+            "targetPort": "http",
+            "name": "http"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "ops-portal-nodeport",
+        "namespace": "opscenter",
+        "labels": {
+          "app": "module-ops-portal"
+        }
+      },
+      "spec": {
+        "type": "NodePort",
+        "externalTrafficPolicy": "Local",
+        "selector": {
+          "app": "module-ops-portal"
+        },
+        "ports": [
+          {
+            "port": 8080,
+            "targetPort": "http",
+            "nodePort": 30092,
+            "name": "http"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "name": "module-ops-portal-ingress",
+        "namespace": "opscenter",
+        "labels": {
+          "app": "module-ops-portal"
+        }
+      },
+      "spec": {
+        "podSelector": {
+          "matchLabels": {
+            "app": "module-ops-portal"
+          }
+        },
+        "policyTypes": [
+          "Ingress"
+        ],
+        "ingress": [
+          {
+            "from": [
+              {
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "web"
+                  }
+                }
+              },
+              {
+                "ipBlock": {
+                  "cidr": "10.66.66.0/24"
+                }
+              },
+              {
+                "ipBlock": {
+                  "cidr": "192.168.1.0/24"
+                }
+              }
+            ],
+            "ports": [
+              {
+                "port": 8080,
+                "protocol": "TCP"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
