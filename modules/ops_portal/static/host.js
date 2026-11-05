@@ -34,5 +34,5 @@ export function createModuleHost({token, frames, expired, openModule}) {
   finally{clearTimeout(timer);}
  }
  window.addEventListener('message',message);
- return {attach(item){item.nonce=nonce();item.frame.addEventListener('load',()=>{item.nonce=nonce();announce(item);});},announce};
+ return {attach(item){item.nonce=nonce();item.frame.addEventListener('load',()=>announce(item));},announce};
 }
