@@ -92,7 +92,7 @@ images+=("opscenter/module-automation:$tag" "opscenter/module-opencode-agent:$ta
 
 docker build -q -t "opscenter/module-codex-agent:$tag" -f "$work/modules/codex_agent/Dockerfile" "$work"
 docker run --rm --security-opt apparmor=unconfined "opscenter/module-codex-agent:$tag" \
-  python -c 'import os,subprocess,main;assert os.geteuid()==10001;assert main.VERSION=="0.1.0";assert subprocess.check_output(["codex","--version"]).decode().strip()=="codex-cli 0.166.0";print("IMAGE_CHECK codex readable")'
+  python -c 'import os,subprocess,main;assert os.geteuid()==10001;assert main.VERSION=="0.1.1";assert subprocess.check_output(["codex","--version"]).decode().strip()=="codex-cli 0.166.0";print("IMAGE_CHECK codex readable")'
 images+=("opscenter/module-codex-agent:$tag")
 docker build -q --build-arg "BACKEND_IMAGE=opscenter/backend:$tag" \
   -t "opscenter/extension-worker:$tag" -f "$work/modules/extension_worker/Dockerfile" "$work"

@@ -1,4 +1,4 @@
-# Codex 工作台模块 0.1.0
+# Codex 工作台模块 0.1.1
 
 独立模块 `codex-agent`，使用官方 `@openai/codex` 0.166.0 的 app-server stdio 协议。网关复用工作台 JWT 管理员鉴权和沙箱 iframe 消息桥，前端不持有工作台 Token 或模型密钥。通过模块注册 API 加入侧栏，无需修改核心应用源码。
 
