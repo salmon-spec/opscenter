@@ -68,7 +68,7 @@ function renderWorkspace(){
  note.textContent=verified[app.id]===app.url?'已记录人工验收。若应用升级或登录策略变化，请重新核验。':app.status==='unreachable'?'该地址未通过 HTTP/TLS 核查，请先处理访问问题。':app.embedding==='restricted'?'该应用限制跨来源嵌入，需要为门户配置精确来源。可先独立打开检查登录。':'页面显示、登录、交互尚待验证；页面加载事件不会自动判定集成成功。';
  const confirm=document.createElement('button');confirm.textContent=verified[app.id]===app.url?'撤销验收':'记录人工验收';confirm.onclick=()=>{if(verified[app.id]===app.url){delete verified[app.id];save();render();}else showDetails(app.id);};note.append(confirm);
 }
-function openApp(id){const app=apps().find(a=>a.id===id);if(!app)return;
+function openApp(id,override){const app=override||apps().find(a=>a.id===id);if(!app)return;
  if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.get(app.module_key);frame.title=app.name;frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);if(module)moduleHost.attach(item);frame.src=module?module.entry_url:app.url;$('#frames').append(frame);}
  active=id;recent=[id,...recent.filter(r=>r!==id)].slice(0,20);save();render();
 }
@@ -107,8 +107,7 @@ async function loadCatalogue(){
  snapshot=await response.json();
  const registry=await fetch('/session/modules',{headers:{Authorization:'Bearer '+sessionToken},cache:'no-store'});if(!registry.ok)throw Error('模块目录暂不可用');
  modules=new Map((await registry.json()).items.map(m=>[m.key,m]));
- base=snapshot.apps.map(validateApp).map(a=>{const key=a.module_key||a.url.match(/#\/extensions\/([a-z0-9-]+)/)?.[1];return modules.has(key)?{...a,module_key:key,url:new URL(modules.get(key).entry_url,location.origin).href}:a;});
- for(const m of modules.values())if(m.key!=='ops-portal'&&!base.some(a=>a.module_key===m.key))base.push({id:'module-'+m.key,name:m.name,description:m.description,url:new URL(m.entry_url,location.origin).href,category:'扩展模块',domain:'众创共享',module_key:m.key,enabled:true});
+ base=snapshot.apps.map(validateApp).map(a=>{const url=new URL(a.url),key=a.module_key||a.url.match(/#\/extensions\/([a-z0-9-]+)/)?.[1]||(url.origin===location.origin?url.pathname.match(/^\/host\/([a-z0-9-]+)\/ui\/$/)?.[1]:null);return modules.has(key)?{...a,module_key:key,url:new URL(modules.get(key).entry_url,location.origin).href}:a;});
  if(!Object.hasOwn(saved,'favorites'))favorites=new Set(snapshot.default_favorites||[]);
  document.body.classList.remove('locked');$('#portal-login').hidden=true;render();
 }
@@ -117,4 +116,4 @@ $('#logout').onclick=logout;
 $('#login-form').onsubmit=async e=>{e.preventDefault();$('#login-button').disabled=true;$('#login-error').textContent='';try{const values=Object.fromEntries(new FormData(e.target));const response=await fetch('/session/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)});const result=await response.json();if(!response.ok)throw Error(result.detail||'登录失败');sessionToken=result.access_token;sessionStorage.setItem('salmon-portal-token',sessionToken);e.target.elements.password.value='';await loadCatalogue();}catch(error){$('#login-error').textContent=error.message;}finally{$('#login-button').disabled=false;}};
 if(sessionToken)loadCatalogue().catch(e=>{$('#login-error').textContent=e.message;});
 
-function openManagement(){const m=modules.get('ops-portal');if(!m)return toast('门户管理模块当前不可用');if(!base.some(a=>a.id==='portal-management'))base.push({id:'portal-management',name:'门户配置管理',url:new URL(m.entry_url,location.origin).href,category:'门户管理',module_key:m.key});openApp('portal-management');}
+function openManagement(){const m=modules.get('ops-portal');if(!m)return toast('门户管理模块当前不可用');openApp('portal-management',{id:'portal-management',name:'门户配置管理',url:new URL(m.entry_url,location.origin).href,category:'门户管理',module_key:m.key});}

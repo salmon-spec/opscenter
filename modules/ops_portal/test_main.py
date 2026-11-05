@@ -43,7 +43,7 @@ def test_auth_roles_and_health(module):
     assert c.get('/api/v1/catalogue').status_code == 401
     assert c.get('/api/v1/catalogue', headers=token(expired=True)).status_code == 401
     data = c.get('/api/v1/catalogue', headers=token('viewer')).json()
-    assert len(data['apps']) == 26
+    assert len(data['apps']) == 28
     assert c.post('/api/v1/catalogue', headers=token('viewer'), json=data).status_code == 403
     assert c.get('/api/v1/audit', headers=token('viewer')).status_code == 403
 

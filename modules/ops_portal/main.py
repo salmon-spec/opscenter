@@ -73,6 +73,12 @@ class AppEntry(BaseModel):
             raise ValueError('业务域无效')
         return value
 
+    @model_validator(mode='after')
+    def module_address(self):
+        if self.module_key and urlsplit(self.url).path != f'/host/{self.module_key}/ui/':
+            raise ValueError('内置模块地址必须使用该模块的门户入口')
+        return self
+
 
 class Catalogue(BaseModel):
     revision: int = Field(ge=1)
