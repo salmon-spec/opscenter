@@ -4,9 +4,9 @@
    - hostScope/clusterScope: 'required' | 'optional' | 'none'，由 App.vue 条件式选择器消费；
    - /container 保留到 K3s 概览的兼容跳转；旧 Docker/主机控制页面不再提供入口。 */
 import { createRouter, createWebHashHistory } from 'vue-router'
-import ServicePlaza from './views/ServicePlaza.vue'
 import DutyHome from './views/DutyHome.vue'
 
+const ServicePlaza = () => import('./views/ServicePlaza.vue')
 const Screen = () => import('./views/Screen.vue')
 const ScreenManager = () => import('./views/ScreenManager.vue')
 const Alerts = () => import('./views/Alerts.vue')

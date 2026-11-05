@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse, Response, JSONResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import text
+from sqlalchemy import func, text
 
 from app.models import Base, Server, Service, ServiceRelation, ServiceProbeResult, PlazaServiceCredential, PlazaServiceProfile, ServerStatus, ServiceStatus, ServiceSource, MetricHistory, NetworkStats, NetworkLatency, AlertRule, AlertEvent, AlertSilence, LogRule, LogMatch, BackupCheck, ImageStatus, DailyReport, AuditLog, DatabaseInstance
 from app.credential_crypto import encrypt_secret
@@ -1426,9 +1426,10 @@ async def shutdown():
 def list_servers(response: Response):
     with get_db() as db:
         servers = db.query(Server).all()
+        service_counts = dict(db.query(Service.server_id, func.count(Service.id)).group_by(Service.server_id).all())
         result = []
         for s in servers:
-            svc_count = db.query(Service).filter(Service.server_id == s.id).count()
+            svc_count = service_counts.get(s.id, 0)
             has_creds = bool(s.ssh_key and (s.ssh_key.startswith("__password__") or "BEGIN" in s.ssh_key))
             result.append({
                 "id": str(s.id),
@@ -4319,10 +4320,8 @@ def list_services_with_status(server_id: Optional[str] = None):
         # Get server statuses
         server_ids = set(s.server_id for s in services)
         servers_map = {}
-        for sid in server_ids:
-            srv = db.query(Server).filter(Server.id == sid).first()
-            if srv:
-                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local, "agent_type": srv.agent_type}
+        for srv in db.query(Server).filter(Server.id.in_(server_ids)).all() if server_ids else []:
+            servers_map[str(srv.id)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local, "agent_type": srv.agent_type}
         
         result = []
         for s in services:
@@ -4358,10 +4357,8 @@ def list_all_services(server_id: Optional[str] = None, user: object = Depends(re
         services = q.all()
         server_ids = set(s.server_id for s in services)
         servers_map = {}
-        for sid in server_ids:
-            srv = db.query(Server).filter(Server.id == sid).first()
-            if srv:
-                servers_map[str(sid)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local, "agent_type": srv.agent_type}
+        for srv in db.query(Server).filter(Server.id.in_(server_ids)).all() if server_ids else []:
+            servers_map[str(srv.id)] = {"name": srv.name, "host": srv.host, "status": srv.status, "is_local": srv.is_local, "agent_type": srv.agent_type}
         result = []
         for s in services:
             si = servers_map.get(str(s.server_id), {})

@@ -366,6 +366,7 @@ def _cached_wireguard_snapshot() -> Optional[dict]:
 _SCREEN_CACHE_TTL = 5.0
 _SCREEN_MAX_WORKERS = 6
 _SCREEN_CACHE_LOCK = threading.Lock()
+_SCREEN_BUILD_LOCK = threading.Lock()
 _SCREEN_CACHE: dict = {"payload": None, "etag": "", "stored_at": 0.0, "data_timestamp": None}
 # ETag 只对业务数据做哈希：剔除时间戳类易变字段，数据未变时 ETag 跨请求稳定（否则 304 永远不命中）
 _SCREEN_VOLATILE_KEYS = ("generated_at", "data_timestamp", "cached", "cache_age_seconds", "elapsed_ms")
@@ -378,6 +379,14 @@ def reset_screen_cache() -> None:
     """清空大屏响应缓存（测试与运维用）。"""
     with _SCREEN_CACHE_LOCK:
         _SCREEN_CACHE.update(payload=None, etag="", stored_at=0.0, data_timestamp=None)
+
+
+def _fresh_screen_snapshot():
+    with _SCREEN_CACHE_LOCK:
+        age = time.monotonic() - _SCREEN_CACHE["stored_at"]
+        if _SCREEN_CACHE["payload"] is not None and age < _SCREEN_CACHE_TTL:
+            return {**_SCREEN_CACHE, "age": round(age, 3)}
+    return None
 
 
 def _screen_etag(payload: dict) -> str:
@@ -988,33 +997,25 @@ def get_screen_summary(
     - ETag/If-None-Match：业务数据哈希（不含时间戳类字段），命中返回 304 空体；
     - 5s 响应缓存（防击穿），命中时 cached=true 并带 cache_age_seconds。
     """
-    now_ts = time.monotonic()
-    with _SCREEN_CACHE_LOCK:
-        # TTL 内命中：直接返回内存载荷，不碰数据库
-        fresh = (
-            _SCREEN_CACHE.get("payload") is not None
-            and now_ts - _SCREEN_CACHE["stored_at"] < _SCREEN_CACHE_TTL
-        )
-        if fresh:
-            business = _SCREEN_CACHE["payload"]
-            data_timestamp = _SCREEN_CACHE["data_timestamp"]
-            etag = _SCREEN_CACHE["etag"]
-            cache_age = round(now_ts - _SCREEN_CACHE["stored_at"], 3)
-        else:
-            business = data_timestamp = etag = None
-    cached = fresh
+    snapshot = _fresh_screen_snapshot()
+    cached = snapshot is not None
+    if snapshot is None:
+        # Coalesce concurrent expiry refreshes; hot reads never take the build lock.
+        with _SCREEN_BUILD_LOCK:
+            snapshot = _fresh_screen_snapshot()
+            cached = snapshot is not None
+            if snapshot is None:
+                business, data_timestamp = _build_screen_business()
+                snapshot = dict(payload=business, etag=_screen_etag(business),
+                                stored_at=time.monotonic(), data_timestamp=data_timestamp)
+                with _SCREEN_CACHE_LOCK:
+                    _SCREEN_CACHE.update(snapshot)
+                snapshot["age"] = 0.0
 
-    if not fresh:
-        # ponytail: TTL 到期就重建。综合载荷含 K3s/WG/日志等非 DB 数据，不能只凭 DB 指纹续期。
-        # 构建保持在锁外；若并发重复构建成为可测瓶颈，再增加 single-flight。
-        business, data_timestamp = _build_screen_business()
-        etag = _screen_etag(business)
-        with _SCREEN_CACHE_LOCK:
-            _SCREEN_CACHE.update(
-                payload=business, etag=etag, stored_at=time.monotonic(),
-                data_timestamp=data_timestamp,
-            )
-        cache_age = 0.0
+    business = snapshot["payload"]
+    data_timestamp = snapshot["data_timestamp"]
+    etag = snapshot["etag"]
+    cache_age = snapshot["age"]
 
     if _match_if_none_match(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers={"ETag": f'"{etag}"'})

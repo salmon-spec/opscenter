@@ -21,7 +21,7 @@
           </div>
         </div>
         <div v-show="tab === 'files'" class="files-body">
-          <SftpPanel :session-id="sessionId" />
+          <SftpPanel v-if="filesOpened" :session-id="sessionId" />
         </div>
       </div>
     </div>
@@ -46,6 +46,7 @@ const emit = defineEmits(['close', 'state'])
 
 const termEl = ref(null)
 const tab = ref('term')
+const filesOpened = ref(false)
 const wsState = ref('connecting')
 const wsCloseReason = ref('')
 let term = null
@@ -113,6 +114,7 @@ function reconnect() {
 
 function switchTab(t) {
   tab.value = t
+  if (t === 'files') filesOpened.value = true
   if (t === 'term') setTimeout(fit, 60)
 }
 
