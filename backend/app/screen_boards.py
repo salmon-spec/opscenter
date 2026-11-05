@@ -50,6 +50,7 @@ class StrictModel(BaseModel):
 
 
 class Theme(StrictModel):
+    style: Literal['classic', 'gradient', 'glass', 'neon'] = 'classic'
     background: str = Field(default="#111217", pattern=r"^#[0-9a-fA-F]{6}$")
     surface: str = Field(default="#1b1c22", pattern=r"^#[0-9a-fA-F]{6}$")
     text: str = Field(default="#e8e9ed", pattern=r"^#[0-9a-fA-F]{6}$")
@@ -60,7 +61,11 @@ class Theme(StrictModel):
 
 class Widget(StrictModel):
     id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
-    type: Literal["overview", "hosts", "cluster", "alerts", "charts", "text"]
+    type: Literal["overview", "hosts", "cluster", "alerts", "charts", "text",
+                  "electricity", "logs", "services", "automation", "usage", "oss",
+                  "opencode", "sms", "password", "subscriptions", "inventory", "tasks", "modules"]
+    variant: Literal['detail', 'cards', 'compact'] = 'detail'
+    accent: str | None = Field(default=None, pattern=r'^#[0-9a-fA-F]{6}$')
     title: str = Field(default="", max_length=80)
     text: str = Field(default="", max_length=4000)
     x: int = Field(default=0, ge=0, le=11)

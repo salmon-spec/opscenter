@@ -38,6 +38,29 @@ def client(monkeypatch):
 BASE = "/api/v2/screen-boards"
 
 
+def test_module_styles_survive_publish_and_restore(client):
+    types = ['electricity', 'logs', 'services', 'automation', 'usage', 'oss', 'opencode',
+             'sms', 'password', 'subscriptions', 'inventory', 'tasks', 'modules']
+    config = deepcopy(boards.BUILTIN)
+    config['theme']['style'] = 'neon'
+    config['widgets'] = [dict(id=kind, type=kind, y=i*4, w=12, h=4,
+                              variant=['detail', 'cards', 'compact'][i%3], accent='#ab77ff')
+                         for i, kind in enumerate(types)]
+    row = create(client, config=config)
+    assert len(row['config']['widgets']) == len(types)
+    published = publish(client, row)
+    version = client.get(f"{BASE}/{row['id']}/versions/1").json()
+    assert version['config']['theme']['style'] == 'neon'
+    assert version['config']['widgets'][1]['variant'] == 'cards'
+    bad = deepcopy(row['config']); bad['widgets'][0]['variant'] = 'arbitrary-css'
+    assert save(client, published, config=bad).status_code == 422
+    bad['widgets'][0]['variant'] = 'cards'; bad['widgets'][0]['accent'] = 'url(https://example.com)'
+    assert save(client, published, config=bad).status_code == 422
+    restored = client.post(f"{BASE}/{row['id']}/versions/1/restore", json={'revision': published['revision']})
+    assert restored.status_code == 200
+    assert restored.json()['config'] == version['config']
+
+
 def create(client, **overrides):
     response = client.post(BASE, json={"name": "测试大屏", **overrides})
     assert response.status_code == 200, response.text

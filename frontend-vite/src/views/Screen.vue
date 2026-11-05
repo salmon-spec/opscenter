@@ -1,12 +1,17 @@
 <template>
-  <div v-if="error" class="screen-load-error" role="alert">{{ error }} <button @click="load">重新加载</button><router-link to="/screen/manage">大屏管理</router-link></div>
+  <ScreenManager v-if="editing" />
+  <div v-else-if="error" class="screen-load-error" role="alert">{{ error }} <button @click="load">重新加载</button><router-link to="/screen?edit=1">编辑大屏</router-link></div>
   <ScreenCanvas v-else-if="board" :key="`${board.id}:${board.version}`" :config="board.config" />
   <p v-else class="screen-load-error" role="status">正在读取已发布大屏…</p>
 </template>
 <script setup>
-import {onMounted,onActivated,onBeforeUnmount,ref} from 'vue'
+import {onMounted,onActivated,onBeforeUnmount,ref,computed,watch} from 'vue'
 import {api} from '../api'
 import ScreenCanvas from './ScreenCanvas.vue'
+import ScreenManager from './ScreenManager.vue'
+import {useRoute} from 'vue-router'
+const route=useRoute(),editing=computed(()=>route.query.edit==='1')
+watch(editing,value=>{if(!value)load()})
 const board=ref(null),error=ref('')
 let controller=null
 async function load(){

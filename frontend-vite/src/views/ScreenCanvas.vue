@@ -1,14 +1,14 @@
 <template>
-  <div class="monitor-screen" :class="{'standalone-board':standalone}" ref="screenRoot" :style="themeStyle">
+  <div class="monitor-screen" :class="[{'standalone-board':standalone},'board-style-'+(config.theme.style||'classic')]" ref="screenRoot" :style="themeStyle">
     <header class="board-head">
-      <div class="board-title"><span class="brand-mark">O</span><div><h1>{{ config.title }}</h1><p>OpsCenter <span>/</span> 主机 · 告警 · K3s</p></div></div>
-      <div class="head-actions"><router-link v-if="!editable" to="/screen/manage" class="board-button">管理大屏</router-link><span class="clock">{{ clockText }}</span><button class="board-button" @click="showCharts">查看图表 ↓</button><router-link v-if="standalone" to="/" class="board-button">工作台 ↗</router-link><button class="board-button" :disabled="loading" @click="refresh(true)">{{ loading ? '刷新中…' : '刷新' }}</button><button class="board-button" @click="toggleFullscreen">{{ fullscreen ? '退出全屏' : '全屏' }}</button></div>
+      <div class="board-title"><span class="brand-mark">O</span><div><h1>{{ config.title }}</h1><p>OpsCenter <span>/</span> 运维 · 业务 · 生活</p></div></div>
+      <div class="head-actions"><router-link v-if="!editable" :to="{path:route.path,query:{edit:'1'}}" class="board-button">编辑大屏</router-link><router-link v-if="!editable" :to="{path:route.path,query:{edit:'1',panel:'templates'}}" class="board-button">样式与模板</router-link><span class="clock">{{ clockText }}</span><button class="board-button" @click="showCharts">查看图表 ↓</button><router-link v-if="standalone" to="/" class="board-button">工作台 ↗</router-link><button class="board-button" :disabled="loading" @click="refresh(true)">{{ loading ? '刷新中…' : '刷新' }}</button><button class="board-button" @click="toggleFullscreen">{{ fullscreen ? '退出全屏' : '全屏' }}</button></div>
     </header>
 
     <div ref="gridRoot" class="grid-stack" :class="{editing:editable}">
       <div v-for="widget in config.widgets" :key="widget.id" class="grid-stack-item" :gs-id="widget.id" :gs-x="widget.x" :gs-y="widget.y" :gs-w="widget.w" :gs-h="widget.h">
-        <div class="grid-stack-item-content" :class="{'selected-widget':selectedId===widget.id}" @click="editable && emit('select',widget.id)">
-          <div v-if="editable" class="widget-handle"><span>⠿ {{ widget.title || widgetLabels[widget.type] }}</span><button type="button" @click.stop="emit('remove',widget.id)" :aria-label="'移除'+widget.title">×</button></div>
+        <div class="grid-stack-item-content" :class="[{'selected-widget':selectedId===widget.id},'variant-'+(widget.variant||'detail')]" :style="{'--widget-accent':widget.accent||moduleWidgets[widget.type]?.color||'var(--green)'}" @click="editable && emit('select',widget.id)">
+          <div v-if="editable" class="widget-handle"><button type="button" class="widget-select" :aria-label="'选择'+(widget.title || widgetLabels[widget.type])" @click.stop="emit('select',widget.id)">⠿ {{ widget.title || widgetLabels[widget.type] }}</button><button type="button" @click.stop="emit('remove',widget.id)" :aria-label="'移除'+widget.title">×</button></div>
           <template v-if="widget.type==='overview'"><section class="overview" aria-label="运行状态总览">
       <article><span>主机在线</span><strong :class="stats.offline||stats.unknown?'warning':''">{{ loaded ? stats.online : '—' }}<small>/ {{ hosts.length || '—' }}</small></strong><p>{{ loaded ? `离线 ${stats.offline} · 待确认 ${stats.unknown}` : '正在读取资产清单' }}</p></article>
       <article><span>待关注告警 <em>聚合</em></span><strong :class="alertState.usable&&alertItems.length?'danger':''">{{ alertState.usable ? alertItems.length : '—' }}<small v-if="alertState.usable">严重 {{ criticalCount }}</small></strong><p :class="alertState.level">{{ alertState.usable ? '告警事件与主机监测发现' : alertState.label }}</p></article>
@@ -49,6 +49,7 @@
           <footer class="panel-foot"><span>事件口径 · 近 30 天</span><span v-if="alertSummaryState.usable">触发 {{ count(alertCounts.firing) }} · 待确认 {{ count(alertCounts.pending) }} · 已确认 {{ count(alertCounts.acked) }}</span><span v-else :class="alertSummaryState.level">{{ alertSummaryState.label }}</span></footer>
         </section></template>
           <template v-if="widget.type==='charts'"><ScreenCharts :hosts="views" :cluster-source="sources.cluster" :alerts-source="sources.alertSummary" :active="active&&!hidden" :now="now" /></template>
+          <ScreenModuleWidget v-if="moduleWidgets[widget.type]" :widget="widget" :source="moduleSources[widget.type]" :now="now" />
           <section v-if="widget.type==='text'" class="text-widget"><h2>{{ widget.title }}</h2><p>{{ widget.text }}</p></section>
         </div>
       </div>
@@ -66,6 +67,8 @@ import { useHostContext } from '../hostContext'
 import { hostView, sortHosts, ageSeconds } from '../utils/hostScreen'
 import { sourceState, orderFindings, podSegments } from '../utils/monitorScreen'
 import ScreenCharts from '../components/ScreenCharts.vue'
+import ScreenModuleWidget from '../components/ScreenModuleWidget.vue'
+import {moduleWidgets} from '../utils/screenModules.js'
 import { GridStack } from 'gridstack'
 import 'gridstack/dist/gridstack.min.css'
 import { widgetLabels, themeVariables } from '../utils/screenBoards.js'
@@ -114,6 +117,9 @@ const errors=ref([]),filter=ref('all'),search=ref(''),now=ref(Date.now()),hidden
 const metricLabels={cpu:'CPU',memory:'内存',disk:'磁盘'}
 let timer=null,clock=null,controller=null,versionAt=0
 const sources=ref(Object.fromEntries(['cluster','clusterFindings','alertSummary','alertFindings'].map(key=>[key,{value:null,error:''}])))
+const moduleSources=ref({})
+const moduleTypes=computed(()=>[...new Set(props.config.widgets.map(w=>w.type).filter(type=>moduleWidgets[type]))])
+watch(moduleTypes,()=>{if(active.value)refresh()})
 const alertFilter=ref('all')
 const cluster=computed(()=>sources.value.cluster.value?.data || {})
 const clusterState=computed(()=>sourceState(sources.value.cluster,now.value))
@@ -174,6 +180,12 @@ async function refresh(force=false){
     if(!/^\d+\.\d+\.\d+$/.test(data.current_version||''))throw new Error('目标版本未知')
     targetVersion.value=data.current_version;versionAt=Date.now();versionOk.value=true
   }).catch(error=>{versionOk.value=false;if(error.name!=='AbortError')messages.push(`Agent 版本：${error.message}`)}))
+  for(const type of moduleTypes.value){
+    const previous=moduleSources.value[type]
+    if(!force&&previous?.attempted&&Date.now()-previous.attempted<60000)continue
+    moduleSources.value[type]={...previous,attempted:Date.now()}
+    jobs.push(api.get(moduleWidgets[type].path,null,options).then(value=>{moduleSources.value[type]={value,error:'',at:Date.now(),attempted:Date.now()}}).catch(error=>{moduleSources.value[type]={...moduleSources.value[type],error:error.name==='AbortError'?'读取已暂停':error.message}}))
+  }
   await Promise.allSettled(jobs)
   errors.value=messages;loaded.value=true;loading.value=false
 }
@@ -204,4 +216,34 @@ onUnmounted(()=>{stop();clearInterval(clock);document.removeEventListener('visib
 @media(min-width:1101px) and (max-height:850px){.board-head{height:38px;margin-bottom:10px}.board-title h1{font-size:18px}.board-title p{font-size:9px}.overview article{padding:8px 16px}.overview strong{font-size:26px}.host-toolbar{padding:6px 12px}.host-table td{padding:4px 12px}.host-ip{display:inline-block;margin:0 0 0 8px;font-size:9px}.host-name{font-size:11px}.resource b{display:block;line-height:14px;font-size:11px}.resource .meter{height:3px;margin-top:3px}.collection small{display:none}.panel-head{min-height:38px;padding:8px 16px}.host-table th{padding:6px 12px}.panel-foot{padding:8px 16px}.board-footer{padding-top:10px}.cluster-stats{margin-bottom:12px}.cluster-events{padding-bottom:8px}}
 @media(min-width:1101px) and (max-height:850px){.cluster-top{padding-top:6px}.cluster-stats{margin-top:4px;margin-bottom:6px}.cluster-stats b{font-size:18px}.pod-legend{margin-top:4px;margin-bottom:6px}.cluster-events{max-height:48px;overflow:auto;padding-bottom:4px}.alert-toolbar{padding-top:5px;padding-bottom:5px}.alerts-panel>.source-error{padding-top:4px;padding-bottom:4px}.alert-list{min-height:54px;max-height:90px}.alert-item{padding-top:8px;padding-bottom:8px}.alert-empty{padding:14px 16px}}
 .monitor-screen.standalone-board{height:100%;min-height:0;overflow:auto}.monitor-screen:fullscreen{height:100vh;overflow:auto}
+
+.widget-handle .widget-select{font-size:12px;text-align:left;flex:1}
+/* All component styles inherit the saved board palette. */
+.monitor-screen{--amber:#de9d44;--red:#e77485;background:radial-gradient(ellipse at 10% 0%,color-mix(in srgb,var(--green) 8%,transparent),transparent 50%),var(--bg)}
+.brand-mark{background:linear-gradient(135deg,var(--green),var(--blue));color:var(--bg);box-shadow:0 4px 18px color-mix(in srgb,var(--green) 25%,transparent)}
+.board-head{padding-bottom:18px;border-bottom:1px solid var(--line)}
+.board-button,.filters button,.host-toolbar input{background:color-mix(in srgb,var(--surface) 90%,var(--text) 10%);border-color:var(--line);color:var(--text)}
+.board-button:hover,.filters button:hover,.alert-item:hover{background:color-mix(in srgb,var(--green) 14%,var(--surface))}
+.grid-stack-item-content{--widget-accent:var(--green);border-top:3px solid color-mix(in srgb,var(--widget-accent) 65%,var(--surface));transition:box-shadow .2s,border-color .2s}
+.panel-head{background:linear-gradient(90deg,color-mix(in srgb,var(--widget-accent) 9%,transparent),transparent)}
+.panel-head h2,.text-widget h2{color:var(--widget-accent)}
+.overview article:nth-child(1){--stat-color:var(--green)}.overview article:nth-child(2){--stat-color:var(--violet)}.overview article:nth-child(3){--stat-color:var(--blue)}.overview article:nth-child(4){--stat-color:var(--amber)}
+.overview strong{color:var(--stat-color)}.overview strong.danger{color:var(--red)}.overview strong.warning{color:var(--amber)}
+.overview article{background:linear-gradient(135deg,color-mix(in srgb,var(--stat-color) 7%,transparent),transparent)}
+.meter .cpu{background:var(--green)}.meter .memory{background:var(--blue)}.meter .disk{background:var(--violet)}
+.text-widget{border-left:4px solid var(--widget-accent);background:linear-gradient(125deg,color-mix(in srgb,var(--widget-accent) 10%,transparent),transparent);min-height:100%}
+.board-style-gradient .grid-stack-item-content{background:linear-gradient(145deg,color-mix(in srgb,var(--widget-accent) 14%,var(--surface)),var(--surface) 65%);box-shadow:0 8px 24px #00000022}
+.board-style-gradient .panel,.board-style-glass .panel,.board-style-neon .panel{background:transparent}
+.board-style-glass{background:radial-gradient(ellipse at top left,color-mix(in srgb,var(--green) 22%,var(--bg)),transparent 60%),radial-gradient(ellipse at bottom right,color-mix(in srgb,var(--violet) 16%,var(--bg)),transparent 60%),var(--bg)}
+.board-style-glass .grid-stack-item-content{background:color-mix(in srgb,var(--surface) 80%,transparent);backdrop-filter:blur(12px);box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 10%,transparent),0 8px 20px #0000001a}
+.board-style-neon{background-image:linear-gradient(color-mix(in srgb,var(--green) 4%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--green) 4%,transparent) 1px,transparent 1px);background-size:32px 32px}
+.board-style-neon .grid-stack-item-content{border:1px solid color-mix(in srgb,var(--widget-accent) 45%,var(--surface));border-top:3px solid var(--widget-accent);box-shadow:inset 0 0 20px color-mix(in srgb,var(--widget-accent) 5%,transparent),0 0 12px color-mix(in srgb,var(--widget-accent) 10%,transparent)}
+.variant-cards .overview{gap:10px;border:0;padding:10px;background:transparent}.variant-cards .overview article{border:1px solid color-mix(in srgb,var(--stat-color) 28%,var(--line));border-radius:10px;padding:18px;background:linear-gradient(135deg,color-mix(in srgb,var(--stat-color) 16%,var(--surface)),var(--surface))}
+.variant-cards .host-table{display:block;min-width:0;padding:12px}.variant-cards .host-table thead{display:none}.variant-cards .host-table tbody{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.variant-cards .host-table tr{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:14px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(145deg,color-mix(in srgb,var(--widget-accent) 10%,var(--surface)),transparent)}.variant-cards .host-table td{display:block;padding:0;border:0}.variant-cards .host-table td:first-child{grid-column:span 2}.variant-cards .host-table td:last-child{grid-column:span 3}.variant-cards .host-ip{display:block;margin:4px 0}.variant-cards .host-table td:nth-child(3)::before{content:'CPU';font-size:10px;color:var(--muted)}.variant-cards .host-table td:nth-child(4)::before{content:'内存';font-size:10px;color:var(--muted)}.variant-cards .host-table td:nth-child(5)::before{content:'磁盘';font-size:10px;color:var(--muted)}
+.variant-cards .cluster-stats>div{padding:16px 10px;border-radius:10px;background:color-mix(in srgb,var(--blue) 10%,transparent);border-bottom:3px solid var(--blue)}.variant-cards .cluster-stats>div:nth-child(2){border-color:var(--violet);background:color-mix(in srgb,var(--violet) 10%,transparent)}.variant-cards .cluster-stats>div:nth-child(3){border-color:var(--amber);background:color-mix(in srgb,var(--amber) 10%,transparent)}
+.variant-cards .alert-list{padding:10px;display:grid;gap:8px}.variant-cards .alert-item{border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:8px;background:color-mix(in srgb,var(--amber) 5%,transparent)}
+.variant-cards .text-widget{margin:14px;min-height:calc(100% - 28px);border-radius:14px;box-shadow:0 8px 20px #00000015}
+.variant-compact .panel-head{min-height:34px;padding:8px 12px}.variant-compact .host-table td{padding:6px 10px}.variant-compact .host-ip{display:none}.variant-compact .overview article{padding:8px 12px}.variant-compact .overview strong{font-size:24px}.variant-compact .overview p{margin:3px 0}.variant-compact .alert-item{padding:8px 12px}.variant-compact .alert-item p{display:none}.variant-compact .cluster-stats{margin:8px 12px}.variant-compact .cluster-stats b{font-size:21px}.variant-compact .text-widget{padding:12px}.variant-compact .text-widget h2{font-size:14px}
+.variant-compact :deep(.screen-charts .chart-panel){padding:8px}.variant-cards :deep(.screen-charts .chart-panel){border-top:3px solid var(--widget-accent);background:linear-gradient(135deg,color-mix(in srgb,var(--widget-accent) 10%,var(--surface)),var(--surface))}
+@media(prefers-reduced-motion:reduce){.grid-stack-item-content{transition:none}}
 </style>
