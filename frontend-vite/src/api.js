@@ -117,7 +117,18 @@ async function request(path, { method = 'GET', body, query, signal, timeoutMs, i
   }
 }
 
+async function uploadFile(path, file, options = {}) {
+  const body = new FormData(); body.append('file', file)
+  const headers = { Authorization: 'Bearer ' + getAccessToken() }
+  if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey
+  const response = await fetch(apiUrl(path), { method: 'POST', headers, body })
+  const data = await response.json()
+  if (!response.ok) { const error = new Error(data.detail || '上传失败'); error.status = response.status; throw error }
+  return data
+}
+
 export const api = {
+  upload: uploadFile,
   download: (path, query, options = {}) => requestBlob(path, { query, signal: options.signal, timeoutMs: options.timeoutMs }),
   get: (path, query, options = {}) => request(path, { query, signal: options.signal, timeoutMs: options.timeoutMs }),
   post: (path, body, options = {}) => request(path, { method: 'POST', body, query: options.query, signal: options.signal, timeoutMs: options.timeoutMs, idempotencyKey: options.idempotencyKey }),

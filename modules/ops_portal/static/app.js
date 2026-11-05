@@ -1,3 +1,4 @@
+import {createModuleHost} from './host.js';
 const $ = s => document.querySelector(s);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const icons = {
@@ -21,11 +22,12 @@ try {saved=JSON.parse(localStorage.getItem(storageKey)||'{}');} catch {}
 
 let favorites=new Set(Array.isArray(saved.favorites)?saved.favorites:[]), recent=Array.isArray(saved.recent)?saved.recent:[];
 let verified=saved.verified && typeof saved.verified==='object'?saved.verified:{}, section='all', category='平台支撑', active=null;
-const opened=new Map(); let base=[], snapshot={};
+const opened=new Map(); let base=[], snapshot={}, modules=new Map();
+const moduleHost=createModuleHost({token:()=>sessionToken,frames:opened,expired:logout,openModule:key=>{const app=apps().find(a=>a.module_key===key);if(app)openApp(app.id);}});
 function validateApp(app) {
  if (!app || typeof app.name!=='string' || !app.name.trim() || app.name.length>80) throw Error('请填写有效的应用名称');
  const url=new URL(app.url);
- if (!['http:','https:'].includes(url.protocol) || url.username || url.password || url.origin===location.origin) throw Error('请使用独立应用的 HTTP/HTTPS 地址，地址中不能包含账号密码');
+ if (!['http:','https:'].includes(url.protocol) || url.username || url.password) throw Error('请使用独立应用的 HTTP/HTTPS 地址，地址中不能包含账号密码');
  if (typeof app.id!=='string' || !app.id || app.id.length>120) throw Error('应用 ID 无效');
  if (typeof app.category!=='string' || !app.category.trim() || app.category.length>80) throw Error('请填写有效分类');
  return {...app,name:app.name.trim(),url:url.href,description:String(app.description||'').slice(0,300),domain:['平台支撑','运维场景','众创共享'].includes(app.domain)?app.domain:undefined,aliases:Array.isArray(app.aliases)?app.aliases.filter(a=>typeof a==='string').slice(0,30):[]};
@@ -62,12 +64,12 @@ function renderWorkspace(){
  for(const [id,{frame}] of opened)frame.hidden=id!==active;
  if(active===null)return;
  const app=opened.get(active).app;$('#app-name').textContent=app.name;$('#app-url').textContent=app.url;$('#external').href=app.url;
- const note=$('#frame-note');note.classList.toggle('verified',verified[app.id]===app.url);
+ const note=$('#frame-note');note.hidden=!!app.module_key;$('#external').hidden=!!app.module_key;note.classList.toggle('verified',verified[app.id]===app.url);
  note.textContent=verified[app.id]===app.url?'已记录人工验收。若应用升级或登录策略变化，请重新核验。':app.status==='unreachable'?'该地址未通过 HTTP/TLS 核查，请先处理访问问题。':app.embedding==='restricted'?'该应用限制跨来源嵌入，需要为门户配置精确来源。可先独立打开检查登录。':'页面显示、登录、交互尚待验证；页面加载事件不会自动判定集成成功。';
  const confirm=document.createElement('button');confirm.textContent=verified[app.id]===app.url?'撤销验收':'记录人工验收';confirm.onclick=()=>{if(verified[app.id]===app.url){delete verified[app.id];save();render();}else showDetails(app.id);};note.append(confirm);
 }
 function openApp(id){const app=apps().find(a=>a.id===id);if(!app)return;
- if(!opened.has(id)){const frame=document.createElement('iframe');frame.title=app.name;frame.referrerPolicy='strict-origin-when-cross-origin';frame.setAttribute('sandbox','allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');frame.src=app.url;$('#frames').append(frame);opened.set(id,{app,frame});}
+ if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.get(app.module_key);frame.title=app.name;frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);if(module)moduleHost.attach(item);frame.src=module?module.entry_url:app.url;$('#frames').append(frame);} 
  active=id;recent=[id,...recent.filter(r=>r!==id)].slice(0,20);save();render();
 }
 function closeTab(id){const item=opened.get(id);if(!item)return;item.frame.remove();opened.delete(id);if(active===id)active=[...opened.keys()].at(-1)||null;renderWorkspace();}
@@ -87,22 +89,26 @@ document.addEventListener('click',e=>{
  else if(el.dataset.filter){section='all';category=el.dataset.filter;render();}
  else if(el.dataset.menu){const menu=$('#'+el.dataset.menu);const wasOpen=!menu.hidden;document.querySelectorAll('.menu-popup').forEach(m=>m.hidden=true);document.querySelectorAll('[data-menu]').forEach(b=>b.setAttribute('aria-expanded','false'));menu.hidden=wasOpen;el.setAttribute('aria-expanded',String(!wasOpen));}
  else if(el.hasAttribute('data-settings')){$('#manage').click();}
- else if(el.hasAttribute('data-admin'))toast('请在运维工作台的运维门户扩展模块中管理配置');
+ else if(el.hasAttribute('data-admin'))openManagement();
  else if(el.dataset.open){document.querySelectorAll('.menu-popup').forEach(m=>m.hidden=true);openApp(el.dataset.open);}
  else if(el.dataset.tab){active=el.dataset.tab;renderWorkspace();}
  else if(el.hasAttribute('data-home')){active=null;render();}
  else if(el.dataset.detail)showDetails(el.dataset.detail);
  else if(el.dataset.star){favorites.has(el.dataset.star)?favorites.delete(el.dataset.star):favorites.add(el.dataset.star);save();render();showManagement();}
 });
-$('#search').oninput=render;$('#add').onclick=()=>toast('请在运维工作台的运维门户扩展模块中管理应用');$('#desktop-settings').onclick=()=>$('#manage').click();$('#shortcut-edit').onclick=()=>$('#manage').click();$('#desktop-home').onclick=e=>{e.preventDefault();selectSection('all');};$('#home-float').onclick=()=>selectSection('all');$('#launcher').onclick=()=>selectSection('all');$('#recent-menu').onclick=()=>selectSection('recent');$('#account').onclick=()=>selectSection('favorites');
-$('#reload').onclick=()=>{const item=opened.get(active);if(item)item.frame.src=item.app.url;};$('#fullscreen').onclick=async()=>{try{await $('#workspace').requestFullscreen();}catch{toast('浏览器未允许全屏');}};$('#app-details').onclick=()=>showDetails(active);
+$('#search').oninput=render;$('#add').onclick=openManagement;$('#desktop-settings').onclick=()=>$('#manage').click();$('#shortcut-edit').onclick=()=>$('#manage').click();$('#desktop-home').onclick=e=>{e.preventDefault();selectSection('all');};$('#home-float').onclick=()=>selectSection('all');$('#launcher').onclick=()=>selectSection('all');$('#recent-menu').onclick=()=>selectSection('recent');$('#account').onclick=()=>selectSection('favorites');
+$('#reload').onclick=()=>{const item=opened.get(active);if(item)item.frame.src=item.module?item.module.entry_url:item.app.url;};$('#fullscreen').onclick=async()=>{try{await $('#workspace').requestFullscreen();}catch{toast('浏览器未允许全屏');}};$('#app-details').onclick=()=>showDetails(active);
 function showManagement(){$('#management-list').innerHTML=apps().map(a=>`<div class="management-row"><span>${esc(a.name)}</span><button class="${favorites.has(a.id)?'pinned':''}" data-star="${esc(a.id)}">${favorites.has(a.id)?'★ 已固定':'☆ 固定'}</button></div>`).join('');}
 $('#manage').onclick=()=>{showManagement();$('#settings').showModal();};
 document.addEventListener('keydown',e=>{if(e.key==='/'&&!['INPUT','TEXTAREA'].includes(document.activeElement.tagName)&&!document.querySelector('dialog[open]')){e.preventDefault();active=null;renderWorkspace();$('#search').focus();}if(e.key==='Enter'&&e.target.dataset.closeTab)closeTab(e.target.dataset.closeTab);});
 async function loadCatalogue(){
  const response=await fetch('/api/v1/catalogue',{headers:{Authorization:'Bearer '+sessionToken},cache:'no-store'});
  if(response.status===401){logout();throw Error('请重新登录');}if(!response.ok)throw Error('应用目录暂不可用');
- snapshot=await response.json();base=snapshot.apps.map(validateApp);
+ snapshot=await response.json();
+ const registry=await fetch('/session/modules',{headers:{Authorization:'Bearer '+sessionToken},cache:'no-store'});if(!registry.ok)throw Error('模块目录暂不可用');
+ modules=new Map((await registry.json()).items.map(m=>[m.key,m]));
+ base=snapshot.apps.map(validateApp).map(a=>{const key=a.module_key||a.url.match(/#\/extensions\/([a-z0-9-]+)/)?.[1];return modules.has(key)?{...a,module_key:key,url:new URL(modules.get(key).entry_url,location.origin).href}:a;});
+ for(const m of modules.values())if(m.key!=='ops-portal'&&!base.some(a=>a.module_key===m.key))base.push({id:'module-'+m.key,name:m.name,description:m.description,url:new URL(m.entry_url,location.origin).href,category:'扩展模块',domain:'众创共享',module_key:m.key,enabled:true});
  if(!Object.hasOwn(saved,'favorites'))favorites=new Set(snapshot.default_favorites||[]);
  document.body.classList.remove('locked');$('#portal-login').hidden=true;render();
 }
@@ -110,3 +116,5 @@ function logout(){sessionToken='';sessionStorage.removeItem('salmon-portal-token
 $('#logout').onclick=logout;
 $('#login-form').onsubmit=async e=>{e.preventDefault();$('#login-button').disabled=true;$('#login-error').textContent='';try{const values=Object.fromEntries(new FormData(e.target));const response=await fetch('/session/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)});const result=await response.json();if(!response.ok)throw Error(result.detail||'登录失败');sessionToken=result.access_token;sessionStorage.setItem('salmon-portal-token',sessionToken);e.target.elements.password.value='';await loadCatalogue();}catch(error){$('#login-error').textContent=error.message;}finally{$('#login-button').disabled=false;}};
 if(sessionToken)loadCatalogue().catch(e=>{$('#login-error').textContent=e.message;});
+
+function openManagement(){const m=modules.get('ops-portal');if(!m)return toast('门户管理模块当前不可用');if(!base.some(a=>a.id==='portal-management'))base.push({id:'portal-management',name:'门户配置管理',url:new URL(m.entry_url,location.origin).href,category:'门户管理',module_key:m.key});openApp('portal-management');}

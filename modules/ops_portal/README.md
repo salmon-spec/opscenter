@@ -1,23 +1,9 @@
-# 运维门户 0.4.1
+# 运维门户模块宿主
 
-独立门户保留纯色六边形图标、白色线条图标及左图右文布局。门户管理通过 OpsCenter 的 `ops-portal` 扩展模块提供，配置保存在本模块 PVC 的 SQLite 中。
+0.5.0：门户直接承载已注册扩展模块。门户会话由统一认证服务验证；模块页面通过消息桥使用业务 API，模块不接收登录令牌。
 
-- 独立访问：`http://10.66.66.13:30092/`，使用工作台账号登录，令牌仅保存在当前浏览器会话。
-- 管理入口：工作台侧栏“运维门户”，路由 `#/extensions/ops-portal`；沿用现有沙箱及 API 消息桥，不向 iframe 下发工作台令牌。
-- 管理功能：新增、编辑、移除、显隐、业务分组、顺序及默认快捷栏。修改需管理员权限，配置使用 revision 乐观锁，保存与审计为同一事务。
-- 浏览器个人快捷栏与最近访问独立保存；正式目录由服务端统一持有。
-- 初始目录包含 13 个控制台及 13 个已有 OpsCenter 功能入口。HTTP 核查与内嵌状态分别展示；既有六个应用的跨来源限制及两个 HTTPS 问题仍需按应用验收，不能以门户上线代替应用验收。
+注册模块的 `entry_url` 使用 `/modules/<key>/ui/` 或 `/v3/extension-modules/<key>/index.html`，`manifest.api_prefixes` 只能授权模块自己的 `/modules/<key>/` 路径。页面发送 `ops-module-ready`，接收宿主的 `ops-module-info`（module、nonce），每次请求回传 nonce。宿主按窗口身份及模块前缀检查请求；服务端再次读取注册目录、验证路径和权限，上游继续执行原有角色鉴权。下载使用 `ops-module-download-request`。
 
-## 部署
+生活类页面共用现有 Vue 业务组件，通过独立门户入口和消息桥运行，包含上传、下载、幂等键及跨模块导航。构建：在 `frontend-vite` 执行 `node node_modules/vite/bin/vite.js build --config vite.portal.config.js`，将 `dist-portal` 连同模块源码加入 Docker 构建上下文。仅模块镜像更新即可发布；无需替换工作台前端。
 
-使用 `deploy/k8s/opscenter-portal.json` 部署模块、专属 PVC、ClusterIP、NodePort 和入口网络策略。独立入口调度到 Master，NodePort 使用 Local 流量策略，入口网络策略限定 WireGuard、局域网及工作台 Web Pod。
-
-用 `deploy/k8s/opscenter-portal-registration.json` 经核心模块注册 API 注册并显示入口。该记录使用已有注册模块机制持久保存，核心启动不会重置。门户配置不访问核心数据库，也不导入其他业务模块。
-
-网关镜像复用现网前端静态包与发布清单；网关运行配置使用不可变 ConfigMap，合并现有 Codex 路由及 `/modules/ops-portal/` 路由，保留其他入口。门户 Pod 设置 50m CPU/64Mi 请求、200m CPU/192Mi 上限及启动探针；未扩大原命名空间配额。后端及其他模块无需由本次重建。发布脚本会把清单中的版本标签替换为已验证的源提交镜像标签。
-
-## 检查
-
-`python -m pytest modules/ops_portal/test_main.py -q` 验证匿名/过期会话/角色、持久化、冲突、审计、URL 和目录约束。
-
-发布前保存模块注册表备份、原部署模板和 Caddy 配置。回退只移除新增入口、恢复本次网关模板并停止门户部署；门户 PVC 与 SQLite 保留，不覆盖原注册表或其他模块资料。
+工作台侧的隐藏入口设置保留。门户单独维护自己的应用显示设置。门户中的“门户管理 → 门户配置管理”和原工作台扩展管理入口共用同一目录及版本冲突保护。

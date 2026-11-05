@@ -109,7 +109,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { api, getAccessToken, toast } from '../api'
+import { api, toast } from '../api'
 import { CONFIG, formFields, normalizeForm, operationId } from '../utils/life'
 import LifeResources from './LifeResources.vue'
 import LifeCalendar from './LifeCalendar.vue'
@@ -206,7 +206,7 @@ async function addComment(){busy.value=true;try{await api.post(base.value+'/work
 async function newSubtask(){const id=detail.value.id;detail.value=null;await openForm();form.value.parent_id=id}
 function confirmRecordAction(row,action){recordAction.value={row,action};actionError.value='';recordActionKey=operationId()}
 async function applyRecordAction(){busy.value=true;try{const {row,action}=recordAction.value;await api.post(base.value+'/record-actions/'+action,{id:String(row.id),expected_revision:row.workbench_revision || row.updatedAt || row.updated || ''},{idempotencyKey:recordActionKey,timeoutMs:45000});recordAction.value=null;await load();toast(action==='delete'?'已删除':'已复制','ok')}catch(e){actionError.value=e.message}finally{busy.value=false}}
-async function uploadFile(event){const file=event.target.files?.[0];if(!file)return;if(file.size>5*1024*1024){toast('附件不能超过5MiB','err');return}busy.value=true;try{const body=new FormData();body.append('file',file);const res=await fetch(base.value+`/${kind.value==='home-inventory'?'items':'tasks'}/${detail.value.id}/attachments`,{method:'POST',headers:{Authorization:'Bearer '+getAccessToken(),'Idempotency-Key':operationId()},body});if(!res.ok){const d=await res.json();throw new Error(d.detail || '上传失败')}await showDetails(detail.value);toast('附件已保存','ok')}catch(e){toast(e.message,'err')}finally{busy.value=false;event.target.value=''}}
+async function uploadFile(event){const file=event.target.files?.[0];if(!file)return;if(file.size>5*1024*1024){toast('附件不能超过5MiB','err');return}busy.value=true;try{await api.upload(base.value+`/${kind.value==='home-inventory'?'items':'tasks'}/${detail.value.id}/attachments`,file,{idempotencyKey:operationId()});await showDetails(detail.value);toast('附件已保存','ok')}catch(e){toast(e.message,'err')}finally{busy.value=false;event.target.value=''}}
 async function downloadAttachment(file){try{saveBlob(await api.download(base.value+`/${kind.value==='home-inventory'?'items':'tasks'}/${detail.value.id}/attachments/${file.id}`),file.file?.name || file.name || '附件')}catch(e){toast(e.message,'err')}}
 async function addMaintenance(){busy.value=true;try{await api.post(base.value+`/items/${detail.value.id}/maintenance`,maintenanceForm.value,{idempotencyKey:operationId()});await showDetails(detail.value);maintenanceForm.value.name='';toast('维护记录已保存','ok')}catch(e){toast(e.message,'err')}finally{busy.value=false}}
 async function readCsv(event){const file=event.target.files?.[0];if(!file)return;if(file.size>1024*1024){toast('CSV不能超过1MiB','err');return}csvText.value=await file.text();importPreview.value=null;importKey=operationId()}

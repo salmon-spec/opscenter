@@ -38,3 +38,5 @@ nul
 
 # Local production comparisons and operational scratch archives
 .source-compare/
+
+frontend-vite/dist-portal/

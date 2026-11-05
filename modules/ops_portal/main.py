@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from runtime.app import create_module_app
 from runtime.auth import SessionVerifier
 
-VERSION = '0.4.1'
+VERSION = '0.5.0'
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv('PORTAL_DB_PATH', '/data/portal.sqlite3'))
 PORTAL_URL = os.getenv('PORTAL_PUBLIC_URL', 'http://10.66.66.13:30092/').rstrip('/') + '/'
@@ -43,6 +43,7 @@ class AppEntry(BaseModel):
     title: str = Field(default='', max_length=500)
     aliases: list[str] = Field(default_factory=list, max_length=30)
     parent_app: str | None = Field(default=None, max_length=120)
+    module_key: str | None = Field(default=None, pattern=r'^[a-z0-9][a-z0-9-]{1,62}$')
 
     @field_validator('name', 'category')
     @classmethod
@@ -147,7 +148,7 @@ bearer = HTTPBearer(auto_error=False)
 
 def current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer)):
     if not credentials:
-        raise HTTPException(401, '请先登录运维工作台')
+        raise HTTPException(401, '请先登录运维门户')
     return verifier.verify(credentials.credentials)
 
 
@@ -194,7 +195,7 @@ def login(payload: Login):
         response = requests.post(os.getenv('PORTAL_AUTH_URL', 'http://backend:9091/api/v2/auth/login'),
                                  json=payload.model_dump(), timeout=15, allow_redirects=False)
     except requests.RequestException:
-        raise HTTPException(503, '运维工作台登录服务暂不可用') from None
+        raise HTTPException(503, '统一认证服务暂不可用') from None
     if response.status_code != 200:
         raise HTTPException(429 if response.status_code == 429 else 401, '登录失败，请检查账号密码或稍后重试')
     token = response.json().get('access_token', '')
@@ -214,4 +215,7 @@ def management():
     return html.replace('/* MANAGEMENT_CSS */', (ROOT / 'static/manage.css').read_text(encoding='utf-8')).replace('/* MANAGEMENT_JS */', (ROOT / 'static/manage.js').read_text(encoding='utf-8'))
 
 
+app.state.portal_management = management
+from ops_portal.hosting import install
+install(app, ROOT, current_user)
 app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
