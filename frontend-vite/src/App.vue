@@ -25,11 +25,11 @@
         <div class="nav-section">值班入口</div>
         <router-link to="/" class="nav-item" title="值班首页" :class="{ active: route.path === '/' }"><span class="nav-icon">▦</span><span class="nav-label">值班首页</span></router-link>
         <div class="nav-section">底座</div>
-        <router-link v-for="item in baseNavs" :key="item.path" :to="item.path" class="nav-item" :title="sidebarCollapsed ? item.label : ''" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
+        <router-link v-for="item in baseNavs" :key="item.path" :to="item.path" class="nav-item" :title="item.label" :aria-label="item.label" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
         <div class="nav-section">业务模块</div>
-        <router-link v-for="item in moduleNavs" :key="item.path" :to="item.path" class="nav-item" :title="sidebarCollapsed ? item.label : ''" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
+        <router-link v-for="item in moduleNavs" :key="item.path" :to="item.path" class="nav-item" :title="item.label" :aria-label="item.label" :class="{ active: itemActive(item) }"><span class="nav-icon">{{ item.icon }}</span><span class="nav-label">{{ item.label }}</span></router-link>
         <div v-if="runningModules.length" class="nav-section">扩展模块</div>
-        <router-link v-for="item in runningModules" :key="item.key" :to="`/extensions/${item.key}`" class="nav-item" :title="sidebarCollapsed ? item.name : ''" :class="{ active: route.path === `/extensions/${item.key}` }"><span class="nav-icon">{{ item.icon || '◇' }}</span><span class="nav-label">{{ item.name }}</span></router-link>
+        <router-link v-for="item in runningModules" :key="item.key" :to="`/extensions/${item.key}`" class="nav-item" :title="item.name" :aria-label="item.name" :class="{ active: route.path === `/extensions/${item.key}` }"><span class="nav-icon">{{ item.icon || '◇' }}</span><span class="nav-label">{{ item.name }}</span></router-link>
       </nav>
       <div class="sidebar-foot">
         <div v-if="hostSummary.total > 0" class="host-mini">
@@ -249,7 +249,13 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .sidebar { width: 56px; padding: 14px 6px; }
   .logo-text { display: none; }
+  .nav-label, .nav-section, .host-mini { display: none; }
+  .nav { overflow-x: hidden; }
   .nav-item { justify-content: center; padding: 10px 0; }
   .sidebar-toggle { display: none; }
+  .topbar { padding-inline: 12px; }
+  .topbar-right { gap: 8px; }
+  .topbar-right .muted { display: none; }
+  .topbar-title { font-size: 14px; white-space: nowrap; }
 }
 </style>
