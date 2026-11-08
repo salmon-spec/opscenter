@@ -54,6 +54,8 @@ class AppServer:
                               'model_providers.opscenter.base_url="http://127.0.0.1:8080/provider/v1"',
                               'model_providers.opscenter.env_key="CODEX_PROVIDER_KEY"',
                               'model_providers.opscenter.wire_api="responses"',
+                              'model_providers.opscenter.request_max_retries=0',
+                              'model_providers.opscenter.stream_max_retries=0',
                               'model_providers.opscenter.supports_websockets=false']:
                     args.extend(['-c', value])
                 args.extend(['-c','web_search="disabled"'])
@@ -61,7 +63,7 @@ class AppServer:
                                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                                             env=env, bufsize=1)
             threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
-            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.2.1'}}, start=False)
+            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.3.0'}}, start=False)
             self.send({'method':'initialized', 'params':{}})
             self.initialized = True
 

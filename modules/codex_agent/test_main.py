@@ -23,6 +23,8 @@ def env(tmp_path,monkeypatch):
     monkeypatch.setenv('OPS_JWT_PUBLIC_KEY_FILE',str(public))
     monkeypatch.setenv('OPS_ADMIN_USER','admin')
     monkeypatch.setattr(main,'STATE',tmp_path/'state');monkeypatch.setattr(main,'ROOT',tmp_path/'workspace')
+    monkeypatch.setattr(main,'provider_retry_at',0)
+    monkeypatch.setattr(main,'provider_last_error',None)
     calls=[]
     def rpc(method,params=None,**kw):
         calls.append((method,params))
@@ -83,6 +85,7 @@ def test_prompt_native_modes_and_attachment_contract(env):
     client,token,calls=env;ident=create(client,token)
     client.post('/api/v1/files/write',headers=token(),json={'path':'p.png','content':'aW1hZ2U=','encoding':'base64'})
     for mode,policy,approval in [('ask','workspaceWrite','on-request'),('full','dangerFullAccess','never'),('plan','readOnly','never')]:
+        main.server.active_turns.clear()
         r=client.post('/api/v1/threads/'+ident+'/prompt',headers=token(),json={'text':'hello','model':'agnes-2.5-flash','mode':mode,'attachments':['p.png']})
         assert r.status_code==200
         payload=next(p for m,p in reversed(calls) if m=='turn/start')
@@ -142,3 +145,34 @@ def test_loaded_thread_sends_without_resuming_each_turn(env):
     calls.clear()
     assert client.post('/api/v1/threads/'+ident+'/prompt',headers=token(),json={'text':'hello','model':'x'}).status_code==200
     assert [m for m,p in calls]==['turn/start']
+
+
+def test_cooldown_and_active_turn_prevent_duplicate_inference(env,monkeypatch):
+    client,token,calls=env;ident=create(client,token);calls.clear()
+    monkeypatch.setattr(main,'provider_retry_at',time.time()+60)
+    r=client.post('/api/v1/threads/'+ident+'/prompt',headers=token(),json={'text':'hello','model':'x'})
+    assert r.status_code==429 and int(r.headers['retry-after'])>0 and not calls
+    monkeypatch.setattr(main,'provider_retry_at',0)
+    main.server.active_turns[ident]='active'
+    assert client.post('/api/v1/threads/'+ident+'/prompt',headers=token(),json={'text':'hello','model':'x'}).status_code==409
+    assert not calls
+
+
+def test_provider_429_is_not_retried_and_cooldown_does_not_contact_upstream(env,monkeypatch,tmp_path):
+    import httpx
+    client,token,calls=env
+    key=tmp_path/'key';key.write_text('test-provider-key')
+    monkeypatch.setenv('CODEX_API_KEY_FILE',str(key));monkeypatch.setenv('CODEX_API_BASE','https://provider.invalid/v1')
+    requests=[]
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(429,headers={'Retry-After':'60'},json={'error':{'message':'Too Many Request&#x73;'}})
+    http=httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(main,'provider_client',http)
+    local=TestClient(main.app,client=('127.0.0.1',12345))
+    for _ in range(2):
+        r=local.post('/provider/v1/responses',headers={'Authorization':'Bearer test-provider-key'},json={'model':'x','input':[]})
+        assert r.status_code==429 and int(r.headers['retry-after'])>0
+    assert len(requests)==1
+    assert main.provider_last_error['message']=='Too Many Requests'
+    assert main.retry_seconds('invalid')==60 and main.retry_seconds('nan')==60

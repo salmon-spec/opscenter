@@ -3,6 +3,8 @@ import base64
 import binascii
 import json
 import hmac
+import html
+import math
 import asyncio
 import mimetypes
 import os
@@ -16,6 +18,7 @@ import time
 from contextlib import contextmanager, asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Literal
 
@@ -31,7 +34,7 @@ from runtime.auth import SessionVerifier
 from rpc import server
 from provider import flatten, restore_event, restore_response, has_image, chat_request, chat_events
 
-VERSION = '0.2.1'
+VERSION = '0.3.0'
 ROOT = Path(os.getenv('CODEX_WORKSPACE', '/workspace'))
 STATE = Path(os.getenv('CODEX_GATEWAY_DATA', '/state/gateway'))
 workspace = ContextVar('workspace', default='default')
@@ -45,6 +48,31 @@ provider_client = httpx.AsyncClient(trust_env=False,timeout=httpx.Timeout(20,rea
 # ponytail: one inference stream per saved key; raise only when upstream concurrency permits.
 inference_gate = asyncio.Semaphore(1)
 provider_last_error = None
+provider_retry_at = 0
+
+
+def provider_state():
+    return {'retry_at':provider_retry_at,'retry_after':max(0,math.ceil(provider_retry_at-time.time())),
+            'last_error':provider_last_error}
+
+
+def retry_seconds(value):
+    try: delay=float(value)
+    except (TypeError,ValueError):
+        try: delay=parsedate_to_datetime(value).timestamp()-time.time()
+        except (TypeError,ValueError,OverflowError): delay=60
+    return max(1,min(3600,math.ceil(delay))) if math.isfinite(delay) else 60
+
+
+def provider_message(content):
+    value=content
+    for _ in range(3):
+        if not isinstance(value,str): break
+        try: value=json.loads(value)
+        except ValueError: break
+        if isinstance(value,dict): value=value.get('error',value)
+        if isinstance(value,dict): value=value.get('message',content)
+    return html.unescape(value if isinstance(value,str) else content)[:1200]
 
 
 @contextmanager
@@ -121,7 +149,7 @@ app.router.lifespan_context = lifespan
 
 @app.post('/provider/v1/responses')
 async def provider_responses(request:Request):
-    global provider_last_error
+    global provider_last_error,provider_retry_at
     key_file=os.getenv('CODEX_API_KEY_FILE','')
     if request.client.host not in {'127.0.0.1','::1'} or not key_file:
         raise HTTPException(404,'Not found')
@@ -136,22 +164,30 @@ async def provider_responses(request:Request):
     image_compat=has_image(body)
     payload=chat_request(body) if image_compat else body
     await inference_gate.acquire()
+    if provider_state()['retry_after']:
+        inference_gate.release()
+        return JSONResponse({'error':{'message':'模型服务限流冷却中，请稍后重试。'}},status_code=429,
+                            headers={'Retry-After':str(provider_state()['retry_after'])})
     try:
-        for attempt in range(3):
-            upstream=await client.send(client.build_request('POST',os.environ['CODEX_API_BASE'].rstrip('/')+('/chat/completions' if image_compat else '/responses'),
-                headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},json=payload),stream=True)
-            if upstream.status_code!=429 or attempt==2:break
-            await upstream.aclose()
-            await asyncio.sleep(2**(attempt+1))
+        upstream=await client.send(client.build_request('POST',os.environ['CODEX_API_BASE'].rstrip('/')+('/chat/completions' if image_compat else '/responses'),
+            headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},json=payload),stream=True)
     except httpx.HTTPError:
         inference_gate.release();raise HTTPException(502,'Model provider unavailable') from None
     except BaseException:
         inference_gate.release();raise
     if upstream.status_code!=200:
-        content=(await upstream.aread())[:4000].decode(errors='replace').replace(key,'[redacted]')
-        provider_last_error={'status':upstream.status_code,'message':content[:1200]}
+        try: content=(await upstream.aread())[:4000].decode(errors='replace').replace(key,'[redacted]')
+        except httpx.HTTPError:
+            await upstream.aclose();inference_gate.release()
+            raise HTTPException(502,'Model provider error response unavailable') from None
+        provider_last_error={'status':upstream.status_code,'message':provider_message(content)}
+        headers={}
+        if upstream.status_code==429:
+            delay=retry_seconds(upstream.headers.get('retry-after'));provider_retry_at=time.time()+delay
+            headers['Retry-After']=str(delay)
         status=upstream.status_code;await upstream.aclose();inference_gate.release()
-        return JSONResponse({'error':{'message':content}},status_code=status)
+        return JSONResponse({'error':{'message':provider_last_error['message']}},status_code=status,headers=headers)
+    provider_last_error=None;provider_retry_at=0
     if not body.get('stream'):
         try:return restore_response(json.loads(await upstream.aread()),mapping)
         finally:await upstream.aclose();inference_gate.release()
@@ -271,7 +307,7 @@ def status():
             'account':server.request('account/read',{}), 'generation':server.generation,
             'provider':{'base_url':os.getenv('CODEX_API_BASE','https://api.openai.com/v1'),
                         'configured':bool(os.getenv('CODEX_API_KEY_FILE')),
-                        'default_model':os.getenv('CODEX_MODEL',''),'last_error':provider_last_error},
+                        'default_model':os.getenv('CODEX_MODEL',''),**provider_state()},
             'workspace':str(directory())}
 
 
@@ -363,6 +399,12 @@ def prompt(ident:str,body:Prompt):
     own(ident)
     with mutation:
         server.start()
+        retry_after=provider_state()['retry_after']
+        if retry_after:
+            raise HTTPException(429,f'模型服务正在限流，请等待 {retry_after} 秒后再试。',headers={'Retry-After':str(retry_after)})
+        with server.lock:
+            if server.active_turns:
+                raise HTTPException(409,'已有任务正在执行，请等待完成或先停止该任务。')
         with server.lock: loaded=ident in server.loaded_threads
         if not loaded:
             server.request('thread/resume',{'threadId':ident,'cwd':str(directory()),'excludeTurns':True})
@@ -422,7 +464,7 @@ def events(cursor:int=0):
         ident=params.get('threadId') or params.get('thread',{}).get('id')
         return ident in owned
     with server.lock:
-        return {'cursor':server.cursor,'generation':server.generation,
+        return {'cursor':server.cursor,'generation':server.generation,'provider':provider_state(),
             'refresh':bool(server.events and cursor<server.events[0]['cursor']-1),
             'events':[e for e in server.events if e['cursor']>cursor and permitted(e)],
             'pending':[m for m in server.approvals.values() if permitted(m)]}
