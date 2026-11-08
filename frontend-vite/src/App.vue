@@ -71,7 +71,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import router from './router'
 import HostManagerDrawer from './components/HostManagerDrawer.vue'
@@ -85,7 +85,13 @@ import { api, clearAccessToken, getAccessToken, setAccessToken } from './api'
 
 const route = useRoute()
 const appVersion = packageInfo.version
-const isStandalone = computed(() => !!route.meta.standalone)
+const isStandalone = computed(() => !!route.meta.standalone || route.path === '/extensions/codex-agent')
+watch(() => route.path, (path, previous) => {
+  if (previous === '/extensions/codex-agent' && path !== previous && globalUser.value) {
+    loadHosts()
+    loadModules()
+  }
+})
 // 工作台页签（v4.9）：afterEach 自动开页签 + localStorage 恢复（恢复后不自动导航）
 workbench.init(router)
 const { hosts, refreshHosts } = useHostContext()

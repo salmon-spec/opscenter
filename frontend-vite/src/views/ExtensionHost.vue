@@ -1,5 +1,5 @@
 <template>
-  <div class="module-host">
+  <div class="module-host" :class="{ 'codex-desktop': moduleKey === 'codex-agent' }">
     <div v-if="loading" class="center-state"><span class="spinner"></span>正在加载模块</div>
     <div v-else-if="loadError" class="center-state error-state">
       <b>模块加载失败</b>
@@ -27,11 +27,12 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api, toast } from '../api'
 
 const props = defineProps({ fixedKey: { type: String, default: '' }, fixedName: { type: String, default: '' } })
 const route = useRoute()
+const router = useRouter()
 const moduleKey = computed(() => props.fixedKey || String(route.params.moduleKey || ''))
 const frame = ref(null)
 const module = ref(null)
@@ -232,6 +233,9 @@ function onMessage(event) {
     handleApiRequest(data)
   } else if (data.type === 'ops-module-download-request') {
     handleDownload(data)
+  } else if (data.type === 'ops-module-navigate' && moduleKey.value === 'codex-agent'
+    && data.nonce === frameNonce && ['/', '/extensions/automation'].includes(data.path)) {
+    router.push(data.path)
   }
 }
 
@@ -248,6 +252,7 @@ onUnmounted(() => {
 
 <style scoped>
 .module-host { height: 100%; min-height: 620px; display: flex; flex-direction: column; background: #eef2f7; }
+.module-host.codex-desktop { height: 100dvh; min-height: 0; background: transparent; }
 .module-frame { width: 100%; flex: 1; min-height: 0; border: 0; background: #f4f6fa; }
 .center-state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); text-align: center; padding: 24px; }
 .center-state b { color: var(--text); font-size: 16px; }
