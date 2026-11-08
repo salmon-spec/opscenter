@@ -63,6 +63,19 @@ def test_legacy_ui_nonce_adapter(module,monkeypatch):
     assert "e.source===parent" in text
 
 
+def test_navigation_adapter_preserves_html_literals_in_vendor_scripts(module,monkeypatch):
+    _,client,_=module
+    from ops_portal import hosting
+    class Reply:
+        status_code=200
+        text='<html><body><script>const fragment="</html>";</script><main>Codex</main></body></html>'
+    monkeypatch.setattr(hosting,'upstream',lambda *a,**k:Reply())
+    text=client.get('/host/codex-agent/ui/').text
+    assert '<script>const fragment="</html>";</script>' in text
+    assert text.count('// Project each application')==1
+    assert text.index('// Project each application')>text.index('</body>')
+
+
 @pytest.mark.parametrize('key,path,method,allowed',[
  ('core-hosts','/modules/host-inventory/api/v1/hosts','POST',True),
  ('core-hosts','/api/v2/terminal/sessions','POST',True),

@@ -1,5 +1,5 @@
 {
-  "version": "0.7.0",
+  "version": "0.7.1",
   "checked_at": "2026-11-05T02:52:42.581730+00:00",
   "source_count": 145,
   "apps": [
@@ -454,10 +454,10 @@
     },
     {
       "id": "ops-opencode",
-      "name": "OpenCode",
+      "name": "OpenCode（已停用）",
       "url": "http://10.66.66.13:30092/host/opencode-agent/ui/",
       "category": "OpsCenter 模块",
-      "description": "AI 运维与工作区",
+      "description": "已停用，现使用 Codex；历史会话和数据保留。",
       "code": 200,
       "final_url": "http://10.66.66.15:30088/",
       "content_type": "text/html; charset=utf-8",
@@ -465,7 +465,7 @@
       "csp": "",
       "html": true,
       "title": "OpsCenter 运维工作台",
-      "status": "reachable",
+      "status": "stopped",
       "embedding": "native",
       "error": "",
       "checked_at": "2026-11-05T02:51:52.705114+00:00",

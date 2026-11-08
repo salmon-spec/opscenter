@@ -24,7 +24,7 @@ SANDBOX = ['allow-scripts', 'allow-forms', 'allow-downloads', 'allow-modals']
 
 def native_info(key):
     item = NATIVE[key]
-    return {'key': key, 'name': item['name'], 'version': '0.7.0', 'running': True,
+    return {'key': key, 'name': item['name'], 'version': '0.7.1', 'running': True,
             'entry_url': f'/host/{key}/ui/', 'route': item['route'],
             'manifest': {'api_prefixes': [], 'sandbox': SANDBOX}}
 
@@ -120,7 +120,8 @@ def install(app, root, current_user):
     def navigation_document(html):
         script=(root/'static/function-child.js').read_text(encoding='utf-8').replace('</script','<\\/script')
         adapter='<style>[data-portal-function-source]{display:none!important}</style><script>'+script+'</script>'
-        return html.replace('</html>',adapter+'</html>') if '</html>' in html else html+adapter
+        before,closing,after=html.rpartition('</html>')
+        return before+adapter+closing+after if closing else html+adapter
 
     def access(request, key, path, method='GET'):
         token = request.headers.get('authorization', '').removeprefix('Bearer ')
