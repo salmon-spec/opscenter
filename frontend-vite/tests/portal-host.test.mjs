@@ -11,6 +11,7 @@ test('portal host keeps the initial handshake valid across document load and sco
  const frames=new Map([['test',item]]);
  createModuleHost({token:()=> 'private-operator-token',frames,expired:()=>assert.fail('unexpected logout')}).attach(item);
  await listener({source:child,data:{type:'ops-module-ready'}});
+ assert.equal(item.ready,true);
  const initial=messages.at(-1).nonce;
  onload();assert.equal(messages.at(-1).nonce,initial);
  await listener({source:child,data:{type:'ops-module-api-request',nonce:initial,id:'first',path:'/modules/automation/api/v1/state'}});

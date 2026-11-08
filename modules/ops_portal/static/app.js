@@ -63,7 +63,7 @@ function render(){
 function renderWorkspace(){
  $('#tabs').innerHTML=opened.size?`<button data-home class="${active===null?'active':''}">应用中心</button>`+[...opened].map(([id,{app}])=>`<button data-tab="${esc(id)}" class="${active===id?'active':''}">${esc(app.name)}<span class="close-tab" role="button" tabindex="0" data-close-tab="${esc(id)}" aria-label="关闭 ${esc(app.name)}">×</span></button>`).join(''):'';
  $('#home').hidden=active!==null;$('#workspace').hidden=active===null;
- for(const [id,{frame}] of opened)frame.hidden=id!==active;
+ for(const [id,item] of opened){item.frame.hidden=id!==active;if(item.loading)item.loading.hidden=id!==active||item.ready;}
  if(active===null)return;
  const app=opened.get(active).app;$('#app-name').textContent=app.name;$('#app-url').textContent=app.url;$('#external').href=app.url;
  const note=$('#frame-note');note.hidden=!!app.module_key||app.embedding==='adapted';$('#external').hidden=!!app.module_key;note.classList.toggle('verified',verified[app.id]===app.url);
@@ -71,10 +71,12 @@ function renderWorkspace(){
  const confirm=document.createElement('button');confirm.textContent=verified[app.id]===app.url?'撤销验收':'记录人工验收';confirm.onclick=()=>{if(verified[app.id]===app.url){delete verified[app.id];save();render();}else showDetails(app.id);};note.append(confirm);
 }
 function openApp(id,override){const app=override||apps().find(a=>a.id===id);if(!app)return;
- if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.get(app.module_key);frame.title=app.name;frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);active=id;renderWorkspace();if(module)moduleHost.attach(item);$('#frames').append(frame);frame.src=module?module.entry_url:app.url;}
+ if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.get(app.module_key);frame.title=app.name;frame.loading='eager';frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);active=id;renderWorkspace();if(module)moduleHost.attach(item);$('#frames').append(frame);frame.src=module?module.entry_url:app.url;
+ if(module?.key.startsWith('core-')){const loading=document.createElement('div');loading.className='frame-loading';loading.setAttribute('role','status');loading.textContent='正在加载应用…';item.loading=loading;$('#frames').append(loading);item.retryTimer=setTimeout(()=>{if(opened.get(id)!==item||item.ready)return;frame.src=module.entry_url;loading.textContent='正在重新加载应用…';item.retryTimer=setTimeout(()=>{if(!item.ready)loading.textContent='应用加载较慢，请点击上方刷新重试。';},10000);},8000);}
+ }
  active=id;recent=[id,...recent.filter(r=>r!==id)].slice(0,20);save();render();
 }
-function closeTab(id){const item=opened.get(id);if(!item)return;moduleHost.detach(item);item.frame.remove();opened.delete(id);if(active===id)active=[...opened.keys()].at(-1)||null;renderWorkspace();}
+function closeTab(id){const item=opened.get(id);if(!item)return;moduleHost.detach(item);clearTimeout(item.retryTimer);item.loading?.remove();item.frame.remove();opened.delete(id);if(active===id)active=[...opened.keys()].at(-1)||null;renderWorkspace();}
 function showDetails(id){const app=apps().find(a=>a.id===id);if(!app)return;
  const fields=[['应用',app.name],['地址',app.url],['内嵌状态',state(app)],['HTTP 状态',app.code||app.error||'未检查'],['核查时间',app.checked_at?new Date(app.checked_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):'未检查'],['嵌入响应头',app.x_frame_options||app.csp||'未检出限制，仍需实测'],['其他入口',(app.aliases||[]).join('\n')||'无']];
  $('#detail-content').innerHTML=`<dl>${fields.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl><label class="hint"><input type="checkbox" id="verify-check"> 我已在门户内验证页面显示、登录及主要操作</label>`;

@@ -8,7 +8,7 @@ export function createModuleHost({token, frames, expired, openModule, openUrl}) 
   const item=[...frames.values()].find(i=>i.module&&i.frame.contentWindow===event.source);
   if(!item)return;
   const data=event.data||{};
-  if(data.type==='ops-module-ready'){announce(item);return;}
+  if(data.type==='ops-module-ready'){item.ready=true;clearTimeout(item.retryTimer);item.loading?.remove();announce(item);return;}
   if(data.type==='ops-module-open'&&data.nonce===item.nonce){openModule(String(data.key||''));return;}
   if(data.type==='ops-module-open-url'&&data.nonce===item.nonce){openUrl?.(String(data.url||''));return;}
   if(data.type?.startsWith('ops-module-socket-')&&data.nonce===item.nonce){
