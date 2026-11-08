@@ -1,4 +1,5 @@
 FROM caddy:2-alpine
+RUN setcap -r /usr/bin/caddy
 COPY deploy/docker/portal-apps.Caddyfile /etc/caddy/Caddyfile
 ENV XDG_CONFIG_HOME=/config XDG_DATA_HOME=/data
 USER 10001:10001
