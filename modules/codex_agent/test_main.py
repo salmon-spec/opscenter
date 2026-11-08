@@ -38,6 +38,7 @@ def env(tmp_path,monkeypatch):
     main.server.active_turns.clear()
     main.server.active_calls.clear()
     main.server.turn_modes.clear()
+    main.server.cancelled_turns.clear()
     main.server.loaded_threads.clear()
     def token(role='admin'):
         return {'Authorization':'Bearer '+jwt.encode({'sub':'1','username':'admin','role':role,'exp':time.time()+300,'iss':'opscenter','aud':'opscenter-modules'},key,algorithm='EdDSA')}
@@ -52,7 +53,7 @@ def create(client,token):
 
 def test_all_routes_fail_closed_and_keys_not_echoed(env):
     client,token,calls=env
-    for route in ['/status','/models','/threads','/events','/files','/audit','/extensions']:
+    for route in ['/status','/models','/threads','/events','/files','/audit','/extensions','/changes']:
         assert client.get('/api/v1'+route).status_code==401
         assert client.get('/api/v1'+route,headers=token('viewer')).status_code==403
     assert not calls
@@ -185,12 +186,14 @@ def test_generated_image_is_owned_by_thread_and_survives_history_read(env,monkey
     monkeypatch.setenv('CODEX_API_KEY_FILE',str(key));monkeypatch.setenv('CODEX_API_BASE','https://api.agnes-ai.cn/v1')
     from base64 import b64decode
     png=b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF1sAAAAASUVORK5CYII=')
-    monkeypatch.setattr(main,'generate_image',lambda *a:{'data':png,'mime':'image/png','suffix':'.png'})
+    async def generate(*args):return {'data':png,'mime':'image/png','suffix':'.png'}
+    monkeypatch.setattr(main,'generate_image',generate)
     local=TestClient(main.app,client=('127.0.0.1',12345))
-    body={'thread_id':ident,'prompt':'A small dog'}
+    body={'thread_id':ident,'call_id':'image-call','prompt':'A small dog'}
     headers={'Authorization':'Bearer image-test-secret'}
     assert local.post('/provider/v1/images',headers=headers,json=body).status_code==409
-    main.server.active_turns[ident]='image-turn';main.server.turn_modes[(ident,'image-turn')]='plan'
+    main.server.active_turns[ident]='image-turn';main.server.active_calls[(ident,'image-turn')]={'image-call'}
+    main.server.turn_modes[(ident,'image-turn')]='plan'
     assert local.post('/provider/v1/images',headers=headers,json=body).status_code==403
     main.server.turn_modes[(ident,'image-turn')]='ask'
     response=local.post('/provider/v1/images',headers=headers,json=body);assert response.status_code==200
@@ -215,3 +218,95 @@ def test_provider_key_is_redacted_from_saved_history_and_events(env,monkeypatch,
     main.server.emit('item/completed',{'threadId':ident,'item':{'aggregatedOutput':'private-provider-value'}})
     response=client.get('/api/v1/events',headers=token())
     assert 'private-provider-value' not in response.text and '[REDACTED]' in response.text
+
+
+def image_request_setup(env,monkeypatch,tmp_path):
+    client,token,calls=env;ident=create(client,token)
+    key=tmp_path/'image-key';key.write_text('local-image-test')
+    monkeypatch.setenv('CODEX_API_KEY_FILE',str(key));monkeypatch.setenv('CODEX_API_BASE','https://api.agnes-ai.cn/v1')
+    main.server.active_turns[ident]='image-turn'
+    main.server.active_calls[(ident,'image-turn')]={'current-call'}
+    main.server.turn_modes[(ident,'image-turn')]='ask'
+    local=TestClient(main.app,client=('127.0.0.1',12345))
+    return local,{'Authorization':'Bearer local-image-test'},{'thread_id':ident,'call_id':'current-call','prompt':'A dog'}
+
+
+def test_old_tool_call_and_unknown_permissions_never_generate(env,monkeypatch,tmp_path):
+    local,headers,body=image_request_setup(env,monkeypatch,tmp_path)
+    def unexpected(*args):raise AssertionError('Upstream must not be called')
+    monkeypatch.setattr(main,'generate_image',unexpected)
+    assert local.post('/provider/v1/images',headers=headers,json={**body,'call_id':'old-call'}).status_code==409
+    main.server.turn_modes.clear()
+    assert local.post('/provider/v1/images',headers=headers,json=body).status_code==403
+
+
+def test_cancel_while_waiting_for_inference_does_not_call_upstream(env,monkeypatch,tmp_path):
+    local,headers,body=image_request_setup(env,monkeypatch,tmp_path)
+    class Gate:
+        async def __aenter__(self):main.server.cancelled_turns.add((body['thread_id'],'image-turn'))
+        async def __aexit__(self,*args):pass
+    monkeypatch.setattr(main,'inference_gate',Gate())
+    def unexpected(*args):raise AssertionError('Cancelled image request contacted upstream')
+    monkeypatch.setattr(main,'generate_image',unexpected)
+    assert local.post('/provider/v1/images',headers=headers,json=body).status_code==409
+
+
+def test_cancel_during_generation_does_not_save_late_results(env,monkeypatch,tmp_path):
+    local,headers,body=image_request_setup(env,monkeypatch,tmp_path)
+    async def generate(*args):
+        main.server.cancelled_turns.add((body['thread_id'],'image-turn'))
+        return {'data':b'image','mime':'image/png','suffix':'.png'}
+    monkeypatch.setattr(main,'generate_image',generate)
+    assert local.post('/provider/v1/images',headers=headers,json=body).status_code==409
+    assert not list(main.ROOT.rglob('*.png'))
+    assert not any(e['method']=='item/image/generated' for e in main.server.events)
+
+
+def test_image_collision_preserves_existing_file(env,monkeypatch,tmp_path):
+    from types import SimpleNamespace
+    local,headers,body=image_request_setup(env,monkeypatch,tmp_path)
+    target=main.ROOT/'output/imagegen/fixed.png';target.parent.mkdir(parents=True);target.write_bytes(b'user-file')
+    monkeypatch.setattr(main.uuid,'uuid4',lambda:SimpleNamespace(hex='fixed'))
+    async def generate(*args):return {'data':b'new','mime':'image/png','suffix':'.png'}
+    monkeypatch.setattr(main,'generate_image',generate)
+    assert local.post('/provider/v1/images',headers=headers,json=body).status_code==502
+    assert target.read_bytes()==b'user-file'
+
+
+def test_image_commit_failure_cleans_only_new_files(env,monkeypatch,tmp_path):
+    import sqlite3
+    local,headers,body=image_request_setup(env,monkeypatch,tmp_path)
+    async def generate(*args):return {'data':b'new','mime':'image/png','suffix':'.png'}
+    monkeypatch.setattr(main,'generate_image',generate)
+    def fail(*args):raise sqlite3.OperationalError('disk failure')
+    monkeypatch.setattr(main,'audit',fail)
+    assert local.post('/provider/v1/images',headers=headers,json=body).status_code==502
+    assert not list(main.ROOT.rglob('*.png')) and not list((main.STATE/'images').rglob('*.json'))
+
+
+def test_stopped_image_releases_local_slot_before_provider_returns(env,monkeypatch,tmp_path):
+    import asyncio
+    from starlette.requests import Request
+    local,headers,body=image_request_setup(env,monkeypatch,tmp_path)
+    request=Request({'type':'http','method':'POST','path':'/provider/v1/images','client':('127.0.0.1',12345),
+                     'headers':[(b'authorization',b'Bearer local-image-test')]})
+    async def exercise():
+        started=asyncio.Event();finish=asyncio.Event();closed=asyncio.Event()
+        async def generate(*args):
+            started.set()
+            try:await finish.wait()
+            finally:closed.set()
+            return {'data':b'new','mime':'image/png','suffix':'.png'}
+        monkeypatch.setattr(main,'generate_image',generate)
+        monkeypatch.setattr(main,'inference_gate',asyncio.Semaphore(1))
+        task=asyncio.create_task(main.provider_images(request,main.ImageRequest(**body)))
+        try:
+            await asyncio.wait_for(started.wait(),1)
+            main.server.cancelled_turns.add((body['thread_id'],'image-turn'))
+            with pytest.raises(main.HTTPException) as error:await asyncio.wait_for(task,1)
+            assert error.value.status_code==409 and not finish.is_set() and closed.is_set()
+            await asyncio.wait_for(main.inference_gate.acquire(),0.1)
+            main.inference_gate.release()
+        finally:finish.set()
+    asyncio.run(exercise())
+    assert not list(main.ROOT.rglob('*.png'))

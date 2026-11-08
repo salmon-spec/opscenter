@@ -5,6 +5,7 @@ import os
 import queue
 import subprocess
 import threading
+import re
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -20,7 +21,9 @@ class AppServer:
         self.active_turns = {}
         self.active_calls = {}
         self.turn_modes = {}
+        self.cancelled_turns = set()
         self.loaded_threads = set()
+        self.public_states = collections.OrderedDict()
         self.events = collections.deque(maxlen=1500)
         self.cursor = 0
         self.sequence = 0
@@ -41,7 +44,11 @@ class AppServer:
             self.active_turns.clear()
             self.active_calls.clear()
             self.turn_modes.clear()
+            self.cancelled_turns.clear()
             self.loaded_threads.clear()
+            self.public_states.clear()
+            self.events.clear()
+            self.cursor=0
             env = os.environ.copy()
             home = Path(env.get('CODEX_HOME', '/state/codex'))
             home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -65,7 +72,7 @@ class AppServer:
                                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                                             env=env, bufsize=1)
             threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
-            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.5.0'}}, start=False)
+            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.6.0'}}, start=False)
             self.send({'method':'initialized', 'params':{}})
             self.initialized = True
 
@@ -121,6 +128,7 @@ class AppServer:
                         continue
                     method = message.get('method', '')
                     params = message.get('params', {})
+                    self.observe_public(method,params)
                     if 'id' in message:
                         self.approvals[str(message['id'])] = message
                     if method == 'serverRequest/resolved':
@@ -146,9 +154,10 @@ class AppServer:
                         self.events.append({'cursor':self.cursor, **message})
         finally:
             with self.lock:
-                for target in self.pending.values():
-                    try: target.put_nowait({'error':{'message':'Codex 服务已停止'}})
-                    except queue.Full: pass
+                if process is self.process:
+                    for target in self.pending.values():
+                        try: target.put_nowait({'error':{'message':'Codex 服务已停止'}})
+                        except queue.Full: pass
 
     def reply(self, ident, result):
         with self.lock:
@@ -159,8 +168,41 @@ class AppServer:
 
     def emit(self, method, params):
         with self.lock:
+            self.observe_public(method,params)
             self.cursor+=1
             self.events.append({'cursor':self.cursor,'method':method,'params':params})
+
+    def observe_public(self, method, params):
+        if method not in {'turn/plan/updated','turn/diff/updated'}: return
+        thread=params.get('threadId','');turn=params.get('turnId','')
+        if not all(isinstance(v,str) and re.fullmatch('[A-Za-z0-9_-]{1,100}',v) for v in [thread,turn]): return
+        key=(thread,turn)
+        with self.lock:
+            data=dict(self.public_states.get(key) or self.load_public(thread,turn))
+            if method=='turn/plan/updated':
+                data['plan']=[{'step':str(p.get('step',''))[:1000],'status':p.get('status','pending')}
+                              for p in params.get('plan',[])[:50] if isinstance(p,dict)]
+                data['planExplanation']=str(params.get('explanation') or '')[:1000]
+            else: data['diff']=str(params.get('diff') or '')[:256*1024]
+            self.public_states[key]=data;self.public_states.move_to_end(key)
+            while len(self.public_states)>200:self.public_states.popitem(last=False)
+            root=Path(os.getenv('CODEX_GATEWAY_DATA','/state/gateway'))/'progress'/thread
+            try:
+                root.mkdir(parents=True,exist_ok=True,mode=0o700)
+                target=root/(turn+'.json');temporary=root/(turn+'.tmp')
+                temporary.write_text(json.dumps(data,ensure_ascii=False),encoding='utf8');temporary.chmod(0o600)
+                os.replace(temporary,target)
+            except OSError: pass
+
+    def load_public(self, thread, turn):
+        if not all(isinstance(v,str) and re.fullmatch('[A-Za-z0-9_-]{1,100}',v) for v in [thread,turn]):return {}
+        with self.lock:
+            if (thread,turn) in self.public_states:return self.public_states[(thread,turn)]
+        path=Path(os.getenv('CODEX_GATEWAY_DATA','/state/gateway'))/'progress'/thread/(turn+'.json')
+        try:
+            data=json.loads(path.read_text(encoding='utf8'))
+            return {k:data[k] for k in ['plan','planExplanation','diff'] if k in data}
+        except (OSError,ValueError,TypeError):return {}
 
 
 server = AppServer()

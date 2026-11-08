@@ -16,7 +16,7 @@ import tempfile
 import threading
 import time
 import uuid
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import contextmanager, asynccontextmanager, suppress
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -35,8 +35,9 @@ from runtime.auth import SessionVerifier
 from rpc import server
 from provider import flatten, restore_event, restore_response, has_image, chat_request, chat_events
 from images import generate as generate_image, MAX_IMAGE
+from changes import read_changes
 
-VERSION = '0.5.0'
+VERSION = '0.6.0'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
@@ -44,7 +45,10 @@ IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Re
     "The generated image is attached to this conversation automatically; include its returned Markdown path in your answer. "
     "Use this installed tool rather than installing image SDKs or searching for credentials. "
     "Credentials are managed by the service: never read, print, or search secret files or authentication environment values. "
-    "Report actual failures and respect rate limits; do not invent generated files.")
+    "Report actual failures and respect rate limits; do not invent generated files. "
+    "For multi-step work maintain a concise plan. Publish short Chinese progress updates describing the action, "
+    "its purpose and verified result at meaningful stages. Keep private reasoning hidden; public updates should "
+    "be brief and observable. Handle simple tasks directly without an unnecessary plan.")
 ROOT = Path(os.getenv('CODEX_WORKSPACE', '/workspace'))
 STATE = Path(os.getenv('CODEX_GATEWAY_DATA', '/state/gateway'))
 workspace = ContextVar('workspace', default='default')
@@ -328,6 +332,7 @@ class Command(Input):
 
 class ImageRequest(Input):
     thread_id: str = Field(pattern='^[A-Za-z0-9_-]{1,100}$')
+    call_id: str = Field(min_length=1,max_length=200)
     prompt: str = Field(min_length=1,max_length=4000)
     ratio: Literal['1:1','3:4','4:3','16:9','9:16','2:3','3:2','21:9'] = '1:1'
 
@@ -343,39 +348,69 @@ async def provider_images(request:Request,body:ImageRequest):
     if row is None: raise HTTPException(404,'对话不存在')
     with server.lock:
         turn_id=server.active_turns.get(body.thread_id)
-        mode=server.turn_modes.get((body.thread_id,turn_id))
-    if not turn_id: raise HTTPException(409,'请在正在运行的 Codex 对话中生成图片')
-    if mode=='plan': raise HTTPException(403,'只读规划模式不能生成文件，请切换权限后生成图片')
+    def require_active():
+        # Caller holds server.lock: bind every phase to the original tool and turn.
+        pair=(body.thread_id,turn_id)
+        if (not turn_id or server.active_turns.get(body.thread_id)!=turn_id
+            or pair in server.cancelled_turns or body.call_id not in server.active_calls.get(pair,set())):
+            raise HTTPException(409,'生成任务已停止或工具轮次已变化')
+        if server.turn_modes.get(pair) not in {'ask','full'}:
+            raise HTTPException(403,'当前权限不允许生成文件，请在询问或完全控制模式中重试')
+    with server.lock: require_active()
     model=image_model()
     if not model: raise HTTPException(503,'当前 API 尚未配置图片生成模型')
     async with inference_gate:
+        with server.lock: require_active()
         delay=provider_state()['retry_after']
         if delay: raise HTTPException(429,f'模型服务限流，请等待 {delay} 秒')
         server.emit('item/image/generating',{'threadId':body.thread_id,'turnId':turn_id})
+        generation=asyncio.create_task(generate_image(os.environ['CODEX_API_BASE'],key,model,redact(body.prompt),body.ratio))
         try:
-            result=await asyncio.to_thread(generate_image,os.environ['CODEX_API_BASE'],key,model,redact(body.prompt),body.ratio)
-        except (httpx.HTTPError,ValueError,KeyError,IndexError) as exc:
+            while not generation.done():
+                await asyncio.wait({generation},timeout=0.25)
+                with server.lock:require_active()
+            result=await generation
+        except (httpx.HTTPError,ValueError,OSError,TimeoutError,KeyError,IndexError) as exc:
             raise HTTPException(502,str(redact(str(exc)))[:800]) from None
+        finally:
+            # Closing the local connection cannot promise cancellation of the
+            # provider's already accepted compute or charge.
+            if not generation.done():
+                generation.cancel()
+                with suppress(asyncio.CancelledError,httpx.HTTPError):await generation
+            server.emit('item/image/finished',{'threadId':body.thread_id,'turnId':turn_id})
         if 'error' in result:
-            provider_last_error={'status':result['status'],'message':provider_message(result['error'])}
+            provider_last_error={'status':result['status'],'message':redact(provider_message(result['error']))}
             if result['status']==429: provider_retry_at=time.time()+retry_seconds(result.get('retry_after'))
             raise HTTPException(result['status'],provider_last_error['message'])
-        with server.lock:
-            if server.active_turns.get(body.thread_id)!=turn_id: raise HTTPException(409,'生成任务已停止，结果未保存')
         scope=workspace.set(row['workspace'])
+        created=[]
         try:
-            ident=uuid.uuid4().hex
-            path=file_path('output/imagegen/'+ident+result['suffix'])
-            path.parent.mkdir(parents=True,exist_ok=True)
-            with path.open('xb') as f: f.write(result['data'])
-            item={'id':ident,'turn_id':turn_id,'path':str(path),'mime':result['mime'],'model':model,
-                  'created_at':datetime.now(timezone.utc).isoformat(),'description':redact(body.prompt[:200])}
-            folder=STATE/'images'/body.thread_id;folder.mkdir(parents=True,exist_ok=True,mode=0o700)
-            record=folder/(ident+'.json');record.write_text(json.dumps(item,ensure_ascii=False),encoding='utf8');record.chmod(0o600)
-            audit('image.generated',body.thread_id)
+            # Commit and publish under the same lock as stop/cancel; no late writes.
+            with server.lock:
+                require_active()
+                ident=uuid.uuid4().hex
+                path=file_path('output/imagegen/'+ident+result['suffix'])
+                path.parent.mkdir(parents=True,exist_ok=True)
+                fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                created.append(path)
+                with os.fdopen(fd,'wb') as f: f.write(result['data'])
+                item={'id':ident,'turn_id':turn_id,'path':str(path),'mime':result['mime'],'model':model,
+                      'created_at':datetime.now(timezone.utc).isoformat(),'description':redact(body.prompt[:200])}
+                folder=STATE/'images'/body.thread_id;folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+                record=folder/(ident+'.json')
+                fd=os.open(record,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                created.append(record)
+                with os.fdopen(fd,'w',encoding='utf8') as f:json.dump(item,f,ensure_ascii=False)
+                audit('image.generated',body.thread_id)
+                provider_last_error=None;provider_retry_at=0
+                server.emit('item/image/generated',{'threadId':body.thread_id,'turnId':turn_id,'image':item})
+        except (OSError,sqlite3.Error):
+            for created_path in reversed(created):
+                try:created_path.unlink(missing_ok=True)
+                except OSError:pass
+            raise HTTPException(502,'图片已生成，但保存文件失败，请稍后重试') from None
         finally: workspace.reset(scope)
-        provider_last_error=None;provider_retry_at=0
-        server.emit('item/image/generated',{'threadId':body.thread_id,'turnId':turn_id,'image':item})
         return item
 
 
@@ -471,7 +506,10 @@ def thread_read(ident:str):
             if turn['id']==active:turn['status']='inProgress'
     result['running_turn_id']=active
     images=generated_images(ident)
-    for turn in result['thread'].get('turns',[]): turn['images']=[i for i in images if i['turn_id']==turn['id']]
+    for turn in result['thread'].get('turns',[]):
+        turn['images']=[i for i in images if i['turn_id']==turn['id']]
+        turn.update(server.load_public(ident,turn['id']))
+        turn['items']=[i for i in turn.get('items',[]) if i.get('type')!='reasoning']
     result['metadata'] = row
     return redact(result)
 
@@ -548,7 +586,9 @@ def stop(ident:str):
             # prevent it from affecting any subsequent turn in this thread.
             subprocess.Popen([sys.executable,str(Path(__file__).with_name('cancel_tools.py')),ident,json.dumps(call_ids)],
                 stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
-        if active: server.request('turn/interrupt',{'threadId':ident,'turnId':active['id']})
+        if active:
+            with server.lock: server.cancelled_turns.add((ident,active['id']))
+            server.request('turn/interrupt',{'threadId':ident,'turnId':active['id']})
     audit('turn.stop',ident)
     return {'interrupted':bool(active),'cancelled_tool_calls':len(call_ids)}
 
@@ -558,6 +598,8 @@ def stop(ident:str):
 def events(cursor:int=0):
     with database() as db: owned={r[0] for r in db.execute('select id from threads where workspace=?',(workspace.get(),))}
     def permitted(message):
+        if message.get('method','').startswith('item/reasoning/') or message.get('params',{}).get('item',{}).get('type')=='reasoning':
+            return False
         params=message.get('params',{})
         ident=params.get('threadId') or params.get('thread',{}).get('id')
         return ident in owned
@@ -653,6 +695,11 @@ def terminal(body:Command):
 def extensions():
     return {'skills':server.request('skills/list',{'cwds':[str(directory())],'forceReload':True}),
             'mcp':server.request('mcpServerStatus/list',{'limit':100})}
+
+
+@app.get('/api/v1/changes')
+def changes(path:str | None=None):
+    return redact(read_changes(directory(),path))
 
 
 @app.get('/api/v1/audit')
