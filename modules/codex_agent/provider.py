@@ -8,34 +8,54 @@ import uuid
 
 
 def has_image(body):
-    return any(c.get('type')=='input_image' for i in body.get('input',[])
-               for c in (i.get('content',[]) if isinstance(i.get('content'),list) else []))
+    return any(isinstance(c,dict) and c.get('type')=='input_image'
+               for i in body.get('input',[]) for field in ('content','output')
+               for c in (i.get(field,[]) if isinstance(i.get(field),list) else []))
+
+
+def chat_content(content):
+    if not isinstance(content,list):return content
+    converted=[]
+    for c in content:
+        if c['type'] in {'input_text','output_text'}:converted.append({'type':'text','text':c.get('text','')})
+        elif c['type']=='input_image':converted.append({'type':'image_url','image_url':{'url':c['image_url'],
+            'detail':c.get('detail') if c.get('detail') in {'auto','high','low'} else 'auto'}})
+    return ''.join(c['text'] for c in converted) if all(c['type']=='text' for c in converted) else converted
 
 
 def chat_request(body):
     """The existing provider's Responses image converter is incomplete."""
-    messages=[]
+    messages=[];pending_images=[]
+    def flush_images():
+        # Parallel tool calls must receive all tool replies before another role.
+        if pending_images:
+            messages.append({'role':'user','content':list(pending_images)})
+            pending_images.clear()
     if body.get('instructions'):messages.append({'role':'system','content':body['instructions']})
     for item in body.get('input',[]):
         kind=item.get('type','message')
         if kind=='message':
-            content=item.get('content','')
-            if isinstance(content,list):
-                converted=[]
-                for c in content:
-                    if c['type'] in {'input_text','output_text'}:converted.append({'type':'text','text':c.get('text','')})
-                    elif c['type']=='input_image':converted.append({'type':'image_url','image_url':{'url':c['image_url'],'detail':'auto'}})
-                content=converted
-                if all(c['type']=='text' for c in content):content=''.join(c['text'] for c in content)
-            messages.append({'role':item['role'],'content':content})
+            flush_images()
+            messages.append({'role':item['role'],'content':chat_content(item.get('content',''))})
         elif kind=='function_call':
+            flush_images()
             call={'id':item['call_id'],'type':'function','function':{'name':item['name'],'arguments':item['arguments']}}
             if messages and messages[-1]['role']=='assistant':messages[-1].setdefault('tool_calls',[]).append(call)
             else:messages.append({'role':'assistant','content':None,'tool_calls':[call]})
-        elif kind=='function_call_output':
+        elif kind in {'function_call_output','custom_tool_call_output'}:
             output=item.get('output','')
+            if isinstance(output,list):
+                converted=chat_content(output)
+                if isinstance(converted,list):
+                    # Older Chat gateways accept images on user messages, while
+                    # tool messages retain the matching call id and text receipt.
+                    pending_images.append({'type':'text','text':'Images returned by tool call '+item['call_id']+':'})
+                    pending_images.extend(converted)
+                    output=''.join(c['text'] for c in converted if c['type']=='text') or 'Tool returned images attached in the following user message.'
+                else:output=converted
             if not isinstance(output,str):output=json.dumps(output)
             messages.append({'role':'tool','tool_call_id':item['call_id'],'content':output})
+    flush_images()
     result={'model':body['model'],'messages':messages,'stream':True,
             'stream_options':{'include_usage':True}}
     tools=[{'type':'function','function':{k:v for k,v in tool.items() if k in {'name','description','parameters','strict'}}}

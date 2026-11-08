@@ -1,4 +1,4 @@
-# Codex 工作台模块 0.6.0
+# Codex 工作台模块 0.6.1
 
 独立模块 `codex-agent`，使用官方 `@openai/codex` 0.166.0 的 app-server stdio 协议。网关复用工作台 JWT 管理员鉴权和沙箱 iframe 消息桥，前端不持有工作台 Token 或模型密钥。通过模块注册 API 加入侧栏，无需修改核心应用源码。
 
@@ -23,7 +23,7 @@
 
 官方协议文档：https://learn.chatgpt.com/docs/app-server 。
 
-实现说明：复用原 Agent 的模型 API，不替换为其他账号。对于旧 API，模块将 Codex 的 namespace/custom 工具定义转换为函数格式；图片请求经同一服务的 Chat Completions 端点适配，工具仍由官方 Codex 执行。API 限流使用有界重试和单密钥并发控制。
+实现说明：复用原 Agent 的模型 API。对于旧 API，模块将 Codex 的 namespace/custom 工具定义转换为函数格式；用户消息或工具结果中的图片经同一服务的 Chat Completions 端点适配，工具仍由官方 Codex 执行。API 限流使用单次请求、冷却和单密钥并发控制。
 
 节点前置：在固定的 Worker 2 上加载本目录 `apparmor.profile` 为 `/etc/apparmor.d/opscenter-codex-userns`。它只为新模块授权原生 user namespace，避免 Ubuntu 自动切入受限 profile；未修改全局 sysctl。Pod 仍为 UID10001、capabilities=ALL drop、禁止提权、无宿主挂载/ServiceAccount令牌。部署使用 Localhost AppArmor profile，迁移节点时须先加载该 profile。
 
