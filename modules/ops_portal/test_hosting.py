@@ -68,6 +68,8 @@ def test_legacy_ui_nonce_adapter(module,monkeypatch):
  ('core-hosts','/api/v2/terminal/sessions','POST',True),
  ('core-kubernetes','/api/v2/clusters/c1/pods','GET',True),
  ('core-screen','/api/v2/screen-boards/1/publish','POST',True),
+ ('core-screen','/api/v2/servers/host-1/metrics/timeseries','GET',True),
+ ('core-screen','/api/v2/servers/host-1/metrics/timeseries','POST',False),
  ('core-screen','/modules/automation/api/v1/summary','GET',True),
  ('core-screen','/modules/automation/api/v1/tasks','POST',False),
  ('core-logs','/api/v2/servers/1','DELETE',False),
