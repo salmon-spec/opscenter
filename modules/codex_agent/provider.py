@@ -70,7 +70,7 @@ async def chat_events(upstream,model):
     ident='resp_'+uuid.uuid4().hex
     response={'id':ident,'object':'response','created_at':int(time.time()),'model':model,'status':'in_progress','output':[]}
     yield {'type':'response.created','response':dict(response)}
-    text=None;calls={};items=[];usage={};finish=None
+    text=None;calls={};items=[];usage={};finish=None;phase=None
     async for line in upstream.aiter_lines():
         if not line.startswith('data:'):continue
         raw=line[5:].strip()
@@ -84,9 +84,13 @@ async def chat_events(upstream,model):
         for choice in data.get('choices',[]):
             delta=choice.get('delta',{})
             if choice.get('finish_reason'):finish=choice['finish_reason']
+            if delta.get('phase') in {'commentary','partial_answer','final_answer'}:
+                phase=delta['phase']
+                if text is not None:text['phase']=phase
             if delta.get('content'):
                 if text is None:
                     text={'id':'msg_'+uuid.uuid4().hex,'type':'message','role':'assistant','status':'in_progress','content':[]}
+                    if phase is not None:text['phase']=phase
                     items.append(text);index=len(items)-1
                     yield {'type':'response.output_item.added','output_index':index,'item':dict(text)}
                     yield {'type':'response.content_part.added','output_index':index,'item_id':text['id'],'content_index':0,'part':{'type':'output_text','text':'','annotations':[]}}
@@ -110,6 +114,9 @@ async def chat_events(upstream,model):
     for index,item in enumerate(items):
         item['status']='completed'
         if item['type']=='message':
+            if item.get('phase') not in {'commentary','partial_answer','final_answer'} and item['content'][0]['text'].strip():
+                if calls and finish in {'tool_calls','stop'}:item['phase']='commentary'
+                elif not calls and finish=='stop':item['phase']='final_answer'
             yield {'type':'response.output_text.done','output_index':index,'item_id':item['id'],'content_index':0,'text':item['content'][0]['text']}
             yield {'type':'response.content_part.done','output_index':index,'item_id':item['id'],'content_index':0,'part':item['content'][0]}
         else:yield {'type':'response.function_call_arguments.done','output_index':index,'item_id':item['id'],'arguments':item['arguments']}

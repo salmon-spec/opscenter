@@ -2,6 +2,7 @@ from provider import flatten,restore_event,restore_response
 from provider import has_image,chat_request,chat_events
 import asyncio
 import json
+import pytest
 
 
 def test_namespaced_function_round_trip():
@@ -114,3 +115,49 @@ def test_chat_stream_produces_executable_responses_call_and_final_text():
     item=next(e['item'] for e in events if e['type']=='response.output_item.done')
     assert item['call_id']=='c1' and json.loads(item['arguments'])=={'cmd':'pwd'}
     assert events[-1]['response']['status']=='completed' and events[-1]['response']['usage']['total_tokens']==12
+
+
+@pytest.mark.parametrize('content,calls,finish,phase,expected',[
+    ('正在检查文件。',True,'tool_calls',None,'commentary'),
+    ('正在检查文件。',True,'stop',None,'commentary'),
+    ('检查已经完成。',False,'stop',None,'final_answer'),
+    (' \n ',True,'tool_calls',None,None),
+    (' \n ',False,'stop',None,None),
+    ('答复被截断',False,'length',None,None),
+    ('工具被截断',True,'length',None,None),
+    ('结束原因未知',False,None,None,None),
+    ('工具结束原因未知',True,None,None,None),
+    ('已经确认的部分结果',True,'tool_calls','partial_answer','partial_answer'),
+    ('公开进展',False,'stop','commentary','commentary'),
+    ('完成结果',False,'stop','invalid','final_answer'),
+])
+def test_chat_stream_labels_only_real_public_text(content,calls,finish,phase,expected):
+    class Stream:
+        async def aiter_lines(self):
+            delta={'content':content}
+            if phase is not None:delta['phase']=phase
+            yield 'data: '+json.dumps({'choices':[{'delta':delta}]})
+            if calls:
+                yield 'data: '+json.dumps({'choices':[{'delta':{'tool_calls':[
+                    {'index':0,'id':'c1','function':{'name':'read_file','arguments':'{}'}}]}}]})
+            yield 'data: '+json.dumps({'choices':[{'delta':{},'finish_reason':finish}]})
+            yield 'data: [DONE]'
+    async def collect():return [e async for e in chat_events(Stream(),'test')]
+    events=asyncio.run(collect())
+    item=next(e['item'] for e in events if e['type']=='response.output_item.done' and e['item']['type']=='message')
+    assert item.get('phase')==expected
+    assert item['content'][0]['text']==content
+    assert next(i for i in events[-1]['response']['output'] if i['type']=='message')==item
+    added=next(e['item'] for e in events if e['type']=='response.output_item.added' and e['item']['type']=='message')
+    assert added.get('phase')==(phase if phase in {'commentary','partial_answer','final_answer'} else None)
+
+
+def test_chat_stream_preserves_late_valid_phase():
+    class Stream:
+        async def aiter_lines(self):
+            for delta,finish in [({'content':'确认的结果'},None),({'phase':'partial_answer'},'stop')]:
+                yield 'data: '+json.dumps({'choices':[{'delta':delta,'finish_reason':finish}]})
+            yield 'data: [DONE]'
+    async def collect():return [e async for e in chat_events(Stream(),'test')]
+    events=asyncio.run(collect())
+    assert events[-1]['response']['output'][0]['phase']=='partial_answer'

@@ -10,6 +10,7 @@ import mimetypes
 import os
 import re
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -34,10 +35,10 @@ from runtime.app import create_module_app
 from runtime.auth import SessionVerifier
 from rpc import server
 from provider import flatten, restore_event, restore_response, has_image, chat_request, chat_events
-from images import generate as generate_image, MAX_IMAGE
+from images import generate as generate_image, MAX_IMAGE, raster_type
 from changes import read_changes
 
-VERSION = '0.6.1'
+VERSION = '0.6.2'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
@@ -91,6 +92,31 @@ def generated_images(ident):
                 result.append(item)
         except (ValueError,OSError,KeyError,HTTPException): continue
     return sorted(result,key=lambda i:i['created_at'])[-100:]
+
+
+def attach_viewed_images(turn):
+    """Promote real native image views into the same persistent-read image cards."""
+    root=directory()
+    seen={str(Path(image['path']).resolve()) for image in turn['images']}
+    for item in turn.get('items',[]):
+        if len(turn['images'])>=100:break
+        if item.get('type')!='imageView' or not isinstance(item.get('path'),str):continue
+        try:
+            source=Path(item['path'])
+            relative=source.resolve().relative_to(root).as_posix() if source.is_absolute() else item['path']
+            target=file_path(relative)
+            if str(target) in seen or not target.is_file():continue
+            # Read only the raster signature; never load image bodies on polls.
+            with os.fdopen(os.open(target,os.O_RDONLY|getattr(os,'O_NONBLOCK',0)),'rb') as stream:
+                info=os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or not 0<info.st_size<=MAX_IMAGE:continue
+                mime,_=raster_type(stream.read(12))
+            if mimetypes.guess_type(target.name)[0] not in RASTER:continue
+            image={'id':'native-'+uuid.uuid5(uuid.NAMESPACE_URL,turn['id']+':'+str(target)).hex,
+                   'turn_id':turn['id'],'path':str(target),'mime':mime,'source':'imageView',
+                   'description':'对话图片'}
+            turn['images'].append(image);seen.add(str(target))
+        except (ValueError,OSError,HTTPException):continue
 
 
 def provider_state():
@@ -508,6 +534,7 @@ def thread_read(ident:str):
     images=generated_images(ident)
     for turn in result['thread'].get('turns',[]):
         turn['images']=[i for i in images if i['turn_id']==turn['id']]
+        attach_viewed_images(turn)
         turn.update(server.load_public(ident,turn['id']))
         turn['items']=[i for i in turn.get('items',[]) if i.get('type')!='reasoning']
     result['metadata'] = row

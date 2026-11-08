@@ -126,6 +126,56 @@ def test_live_turn_state_overrides_unfinished_persisted_placeholder(env,monkeypa
     assert data['running_turn_id']=='turn_live' and data['thread']['turns'][0]['status']=='inProgress'
 
 
+def test_native_image_views_attach_on_thread_read_and_refresh(env,monkeypatch):
+    client,token,_=env;ident=create(client,token)
+    folder=main.ROOT/'output'/'imagegen';folder.mkdir(parents=True)
+    # Native tools can save PNG bytes using a .jpg filename.
+    image=folder/'puppy.jpg';image.write_bytes(b'\x89PNG\r\n\x1a\nimage-data')
+    native={'thread':{'id':ident,'turns':[{'id':'native_turn','status':'completed','items':[
+        {'id':'view1','type':'imageView','path':str(image)},
+        {'id':'view2','type':'imageView','path':'output/imagegen/puppy.jpg'}]}]}}
+    monkeypatch.setattr(main.server,'request',lambda *a,**k:json.loads(json.dumps(native)))
+    first=client.get('/api/v1/threads/'+ident,headers=token()).json()['thread']['turns'][0]['images']
+    second=client.get('/api/v1/threads/'+ident,headers=token()).json()['thread']['turns'][0]['images']
+    assert len(first)==1 and first==second
+    assert first[0]['path']==str(image.resolve()) and first[0]['mime']=='image/png'
+    assert first[0]['source']=='imageView' and first[0]['id'].startswith('native-')
+    assert client.get('/api/v1/files/content',headers=token(),params={'path':'output/imagegen/puppy.jpg'}).json()['image'].startswith('data:image/jpeg;base64,')
+
+
+def test_native_image_views_reject_outside_invalid_and_oversize_files(env,monkeypatch,tmp_path):
+    client,token,_=env;ident=create(client,token)
+    outside=tmp_path/'outside.png';outside.write_bytes(b'\x89PNG\r\n\x1a\nvalid')
+    invalid=main.ROOT/'invalid.png';invalid.write_bytes(b'not an image')
+    unsupported=main.ROOT/'unsupported.txt';unsupported.write_bytes(b'\xff\xd8\xffimage-data')
+    empty=main.ROOT/'empty.png';empty.write_bytes(b'')
+    oversized=main.ROOT/'oversized.png'
+    with oversized.open('wb') as stream:
+        stream.write(b'\x89PNG\r\n\x1a\n');stream.truncate(main.MAX_IMAGE+1)
+    paths=[str(outside),'../outside.png',str(invalid),str(unsupported),str(empty),str(oversized),str(main.ROOT/'missing.png'),'bad\0.png',None]
+    native={'thread':{'id':ident,'turns':[{'id':'t','items':[
+        {'id':str(index),'type':'imageView','path':path} for index,path in enumerate(paths)]}]}}
+    monkeypatch.setattr(main.server,'request',lambda *a,**k:json.loads(json.dumps(native)))
+    response=client.get('/api/v1/threads/'+ident,headers=token())
+    assert response.status_code==200 and response.json()['thread']['turns'][0]['images']==[]
+
+
+def test_native_image_views_dedupe_helper_images_and_respect_project_root(env,monkeypatch):
+    client,token,_=env;ident=create(client,token)
+    root_image=main.ROOT/'root.png';root_image.write_bytes(b'\x89PNG\r\n\x1a\nimage-data')
+    folder=main.STATE/'images'/ident;folder.mkdir(parents=True)
+    helper={'id':'helper-image','turn_id':'t','path':str(root_image),'created_at':'2026-11-08T00:00:00Z','mime':'image/png'}
+    (folder/'helper-image.json').write_text(json.dumps(helper))
+    native={'thread':{'id':ident,'turns':[{'id':'t','items':[{'id':'v','type':'imageView','path':str(root_image)}]}]}}
+    monkeypatch.setattr(main.server,'request',lambda *a,**k:json.loads(json.dumps(native)))
+    assert client.get('/api/v1/threads/'+ident,headers=token()).json()['thread']['turns'][0]['images']==[helper]
+    # A project cannot import an image from the default workspace through history.
+    client.post('/api/v1/workspaces',headers=token(),json={'name':'project','title':'Project'})
+    with main.database() as db:db.execute('update threads set workspace=? where id=?',('project',ident))
+    response=client.get('/api/v1/threads/'+ident,headers=token(),params={'workspace':'project'})
+    assert response.status_code==200 and response.json()['thread']['turns'][0]['images']==[]
+
+
 def test_reads_do_not_wait_for_database_writer(env):
     client,token,calls=env
     client.get('/api/v1/threads',headers=token())
