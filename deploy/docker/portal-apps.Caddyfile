@@ -16,73 +16,91 @@
 }
 
 :8081 {
+    header {
+        +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
+        defer
+    }
     reverse_proxy http://10.66.66.13:8084 {
         header_up -Forwarded
         header_up X-Forwarded-Host 10.66.66.13:30093
         header_up X-Forwarded-Port 30093
         header_down -X-Frame-Options
         header_down Content-Security-Policy "(?i)frame-ancestors[^;]*(;|$)" ""
-        header_down +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
         header_down Location "^http://10\\.66\\.66\\.13:8084(/.*)?$" "http://10.66.66.13:30093$1"
     }
 }
 
 :8082 {
+    header {
+        +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
+        defer
+    }
     reverse_proxy http://10.66.66.13:8082 {
         header_up -Forwarded
         header_up X-Forwarded-Host 10.66.66.13:30094
         header_up X-Forwarded-Port 30094
         header_down -X-Frame-Options
         header_down Content-Security-Policy "(?i)frame-ancestors[^;]*(;|$)" ""
-        header_down +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
         header_down Location "^http://10\\.66\\.66\\.13:8082(/.*)?$" "http://10.66.66.13:30094$1"
     }
 }
 
 :8083 {
+    header {
+        +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
+        defer
+    }
     reverse_proxy http://10.66.66.13:8081 {
         header_up -Forwarded
         header_up X-Forwarded-Host 10.66.66.13:30095
         header_up X-Forwarded-Port 30095
         header_down -X-Frame-Options
         header_down Content-Security-Policy "(?i)frame-ancestors[^;]*(;|$)" ""
-        header_down +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
         header_down Location "^http://10\\.66\\.66\\.13:8081(/.*)?$" "http://10.66.66.13:30095$1"
     }
 }
 
 :8084 {
+    header {
+        +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
+        defer
+    }
     reverse_proxy http://10.66.66.13:9000 {
         header_up -Forwarded
         header_up X-Forwarded-Host 10.66.66.13:30096
         header_up X-Forwarded-Port 30096
         header_down -X-Frame-Options
         header_down Content-Security-Policy "(?i)frame-ancestors[^;]*(;|$)" ""
-        header_down +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
         header_down Location "^http://10\\.66\\.66\\.13:9000(/.*)?$" "http://10.66.66.13:30096$1"
     }
 }
 
 :8085 {
+    header {
+        +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
+        defer
+    }
     reverse_proxy http://10.66.66.13:8087 {
         header_up -Forwarded
         header_up X-Forwarded-Host 10.66.66.13:30097
         header_up X-Forwarded-Port 30097
         header_down -X-Frame-Options
         header_down Content-Security-Policy "(?i)frame-ancestors[^;]*(;|$)" ""
-        header_down +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
         header_down Location "^http://10\\.66\\.66\\.13:8087(/.*)?$" "http://10.66.66.13:30097$1"
     }
 }
 
 :8086 {
+    header {
+        +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
+        defer
+    }
     reverse_proxy http://10.66.66.13:9003 {
         header_up -Forwarded
         header_up X-Forwarded-Host 10.66.66.13:30098
         header_up X-Forwarded-Port 30098
         header_down -X-Frame-Options
         header_down Content-Security-Policy "(?i)frame-ancestors[^;]*(;|$)" ""
-        header_down +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
         header_down Location "^http://10\\.66\\.66\\.13:9003(/.*)?$" "http://10.66.66.13:30098$1"
     }
 }
