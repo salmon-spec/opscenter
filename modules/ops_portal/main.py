@@ -14,6 +14,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from runtime.app import create_module_app
@@ -148,6 +149,7 @@ def summary():
 initialize()
 app = create_module_app('ops-portal', VERSION, summary, lambda: {'status': 'ok', 'collected_at': now(), 'items': []},
                         capabilities=['catalogue:read', 'catalogue:manage'], readiness_provider=read_catalogue)
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 verifier = SessionVerifier()
 bearer = HTTPBearer(auto_error=False)
 

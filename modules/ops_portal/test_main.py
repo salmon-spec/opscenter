@@ -40,6 +40,7 @@ def test_auth_roles_and_health(module):
     assert c.get('/health/ready').status_code == 200
     assert c.get('/').status_code == 200
     assert 'portal-login' in c.get('/').text
+    assert c.get('/', headers={'Accept-Encoding': 'gzip'}).headers['content-encoding'] == 'gzip'
     assert c.get('/api/v1/catalogue').status_code == 401
     assert c.get('/api/v1/catalogue', headers=token(expired=True)).status_code == 401
     data = c.get('/api/v1/catalogue', headers=token('viewer')).json()
