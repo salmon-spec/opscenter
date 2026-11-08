@@ -19,6 +19,7 @@ class AppServer:
         self.approvals = {}
         self.active_turns = {}
         self.active_calls = {}
+        self.turn_modes = {}
         self.loaded_threads = set()
         self.events = collections.deque(maxlen=1500)
         self.cursor = 0
@@ -39,6 +40,7 @@ class AppServer:
             self.approvals.clear()
             self.active_turns.clear()
             self.active_calls.clear()
+            self.turn_modes.clear()
             self.loaded_threads.clear()
             env = os.environ.copy()
             home = Path(env.get('CODEX_HOME', '/state/codex'))
@@ -63,7 +65,7 @@ class AppServer:
                                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                                             env=env, bufsize=1)
             threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
-            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.4.0'}}, start=False)
+            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.5.0'}}, start=False)
             self.send({'method':'initialized', 'params':{}})
             self.initialized = True
 
@@ -124,6 +126,7 @@ class AppServer:
                     if method == 'serverRequest/resolved':
                         self.approvals.pop(str(params.get('requestId')), None)
                     if method == 'turn/completed':
+                        self.turn_modes.pop((params.get('threadId'),params.get('turn',{}).get('id')),None)
                         self.active_turns.pop(params.get('threadId'),None)
                         self.active_calls.pop((params.get('threadId'),params.get('turn',{}).get('id')),None)
                         for key, approval in list(self.approvals.items()):
@@ -153,6 +156,11 @@ class AppServer:
             if not message:
                 raise HTTPException(409, '该请求已结束，请刷新')
             self.send({'id':message['id'], 'result':result})
+
+    def emit(self, method, params):
+        with self.lock:
+            self.cursor+=1
+            self.events.append({'cursor':self.cursor,'method':method,'params':params})
 
 
 server = AppServer()

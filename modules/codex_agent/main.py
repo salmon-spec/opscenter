@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import contextmanager, asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -33,8 +34,17 @@ from runtime.app import create_module_app
 from runtime.auth import SessionVerifier
 from rpc import server
 from provider import flatten, restore_event, restore_response, has_image, chat_request, chat_events
+from images import generate as generate_image, MAX_IMAGE
 
-VERSION = '0.4.0'
+VERSION = '0.5.0'
+IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
+    "For image creation requests, an installed image tool uses the configured Agent API. "
+    "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
+    "optionally --ratio 16:9. Generate directly with reasonable defaults for short requests such as a dog or a forest. "
+    "The generated image is attached to this conversation automatically; include its returned Markdown path in your answer. "
+    "Use this installed tool rather than installing image SDKs or searching for credentials. "
+    "Credentials are managed by the service: never read, print, or search secret files or authentication environment values. "
+    "Report actual failures and respect rate limits; do not invent generated files.")
 ROOT = Path(os.getenv('CODEX_WORKSPACE', '/workspace'))
 STATE = Path(os.getenv('CODEX_GATEWAY_DATA', '/state/gateway'))
 workspace = ContextVar('workspace', default='default')
@@ -49,6 +59,34 @@ provider_client = httpx.AsyncClient(trust_env=False,timeout=httpx.Timeout(20,rea
 inference_gate = asyncio.Semaphore(1)
 provider_last_error = None
 provider_retry_at = 0
+
+
+def image_model():
+    host=(httpx.URL(os.getenv('CODEX_API_BASE','https://api.openai.com/v1')).host or '').lower()
+    return os.getenv('CODEX_IMAGE_MODEL','agnes-image-2.5-flash' if host.endswith(('agnes-ai.cn','agnes-ai.com')) else '')
+
+
+def redact(value):
+    try: key=Path(os.environ['CODEX_API_KEY_FILE']).read_text().strip()
+    except (KeyError,OSError): key=''
+    def scrub(item):
+        if isinstance(item,str): return item.replace(key,'[REDACTED]') if key else item
+        if isinstance(item,list): return [scrub(x) for x in item]
+        if isinstance(item,dict): return {k:scrub(v) for k,v in item.items()}
+        return item
+    return scrub(value)
+
+
+def generated_images(ident):
+    result=[]
+    for p in (STATE/'images'/ident).glob('*.json'):
+        try:
+            item=json.loads(p.read_text(encoding='utf8'))
+            target=Path(item['path']).resolve()
+            if target.is_relative_to(directory()) and file_path(target.relative_to(directory()).as_posix()).is_file():
+                result.append(item)
+        except (ValueError,OSError,KeyError,HTTPException): continue
+    return sorted(result,key=lambda i:i['created_at'])[-100:]
 
 
 def provider_state():
@@ -158,7 +196,7 @@ async def provider_responses(request:Request):
         raise HTTPException(401,'Provider authentication required')
     raw=await request.body()
     if len(raw)>32*1024*1024:raise HTTPException(413,'Request too large')
-    try:body,mapping=flatten(json.loads(raw))
+    try:body,mapping=flatten(redact(json.loads(raw)))
     except (ValueError,KeyError,TypeError):raise HTTPException(422,'Invalid Responses request') from None
     client=provider_client
     image_compat=has_image(body)
@@ -288,6 +326,59 @@ class Command(Input):
     command: str = Field(min_length=1,max_length=10000)
 
 
+class ImageRequest(Input):
+    thread_id: str = Field(pattern='^[A-Za-z0-9_-]{1,100}$')
+    prompt: str = Field(min_length=1,max_length=4000)
+    ratio: Literal['1:1','3:4','4:3','16:9','9:16','2:3','3:2','21:9'] = '1:1'
+
+
+@app.post('/provider/v1/images')
+async def provider_images(request:Request,body:ImageRequest):
+    global provider_last_error,provider_retry_at
+    key_file=os.getenv('CODEX_API_KEY_FILE','')
+    if request.client.host not in {'127.0.0.1','::1'} or not key_file: raise HTTPException(404,'Not found')
+    key=Path(key_file).read_text().strip()
+    if not hmac.compare_digest(request.headers.get('authorization',''),'Bearer '+key): raise HTTPException(401,'Unauthorized')
+    with database() as db: row=db.execute('select workspace from threads where id=?',(body.thread_id,)).fetchone()
+    if row is None: raise HTTPException(404,'对话不存在')
+    with server.lock:
+        turn_id=server.active_turns.get(body.thread_id)
+        mode=server.turn_modes.get((body.thread_id,turn_id))
+    if not turn_id: raise HTTPException(409,'请在正在运行的 Codex 对话中生成图片')
+    if mode=='plan': raise HTTPException(403,'只读规划模式不能生成文件，请切换权限后生成图片')
+    model=image_model()
+    if not model: raise HTTPException(503,'当前 API 尚未配置图片生成模型')
+    async with inference_gate:
+        delay=provider_state()['retry_after']
+        if delay: raise HTTPException(429,f'模型服务限流，请等待 {delay} 秒')
+        server.emit('item/image/generating',{'threadId':body.thread_id,'turnId':turn_id})
+        try:
+            result=await asyncio.to_thread(generate_image,os.environ['CODEX_API_BASE'],key,model,redact(body.prompt),body.ratio)
+        except (httpx.HTTPError,ValueError,KeyError,IndexError) as exc:
+            raise HTTPException(502,str(redact(str(exc)))[:800]) from None
+        if 'error' in result:
+            provider_last_error={'status':result['status'],'message':provider_message(result['error'])}
+            if result['status']==429: provider_retry_at=time.time()+retry_seconds(result.get('retry_after'))
+            raise HTTPException(result['status'],provider_last_error['message'])
+        with server.lock:
+            if server.active_turns.get(body.thread_id)!=turn_id: raise HTTPException(409,'生成任务已停止，结果未保存')
+        scope=workspace.set(row['workspace'])
+        try:
+            ident=uuid.uuid4().hex
+            path=file_path('output/imagegen/'+ident+result['suffix'])
+            path.parent.mkdir(parents=True,exist_ok=True)
+            with path.open('xb') as f: f.write(result['data'])
+            item={'id':ident,'turn_id':turn_id,'path':str(path),'mime':result['mime'],'model':model,
+                  'created_at':datetime.now(timezone.utc).isoformat(),'description':redact(body.prompt[:200])}
+            folder=STATE/'images'/body.thread_id;folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+            record=folder/(ident+'.json');record.write_text(json.dumps(item,ensure_ascii=False),encoding='utf8');record.chmod(0o600)
+            audit('image.generated',body.thread_id)
+        finally: workspace.reset(scope)
+        provider_last_error=None;provider_retry_at=0
+        server.emit('item/image/generated',{'threadId':body.thread_id,'turnId':turn_id,'image':item})
+        return item
+
+
 @app.get('/ui', response_class=HTMLResponse)
 @app.get('/ui/', response_class=HTMLResponse)
 def page():
@@ -308,6 +399,7 @@ def status():
             'provider':{'base_url':os.getenv('CODEX_API_BASE','https://api.openai.com/v1'),
                         'configured':bool(os.getenv('CODEX_API_KEY_FILE')),
                         'default_model':os.getenv('CODEX_MODEL',''),**provider_state()},
+            'image_generation':{'enabled':bool(image_model()),'model':image_model()},
             'workspace':str(directory())}
 
 
@@ -328,6 +420,7 @@ def models():
                 except (httpx.HTTPError,ValueError,KeyError):
                     provider_models=(time.monotonic(),[custom] if custom else [])
             names=list(dict.fromkeys(([custom] if custom else [])+provider_models[1]))
+            names=[m for m in names if not re.search('image|video',m,re.I)]
         return {'data':[{'id':m,'model':m,'displayName':m,'isDefault':m==custom} for m in names]}
     result = server.request('model/list',{'limit':100})
     if custom and not any(m.get('model')==custom for m in result.get('data',[])):
@@ -360,7 +453,7 @@ def threads(archived:bool=False):
 def thread_create(body:ThreadCreate):
     result = server.request('thread/start',{'cwd':str(directory()),'model':body.model or os.getenv('CODEX_MODEL') or None,
         'approvalPolicy':'on-request','sandbox':'workspace-write',
-        'developerInstructions':'Work in the current workspace. Preserve user files. Reply in Chinese unless requested otherwise. When showing an image use Markdown ![description](/workspace/path.png). Verify actual tool outcomes; do not invent results.'})
+        'developerInstructions':IMAGE_INSTRUCTIONS})
     ident = result['thread']['id']
     with database() as db: db.execute('insert into threads(id,workspace,title) values(?,?,?)',(ident,workspace.get(),body.title))
     server.request('thread/name/set',{'threadId':ident,'name':body.title})
@@ -377,8 +470,10 @@ def thread_read(ident:str):
         for turn in result['thread'].get('turns',[]):
             if turn['id']==active:turn['status']='inProgress'
     result['running_turn_id']=active
+    images=generated_images(ident)
+    for turn in result['thread'].get('turns',[]): turn['images']=[i for i in images if i['turn_id']==turn['id']]
     result['metadata'] = row
-    return result
+    return redact(result)
 
 
 @app.post('/api/v1/threads/{ident}/edit')
@@ -407,7 +502,8 @@ def prompt(ident:str,body:Prompt):
                 raise HTTPException(409,'已有任务正在执行，请等待完成或先停止该任务。')
         with server.lock: loaded=ident in server.loaded_threads
         if not loaded:
-            server.request('thread/resume',{'threadId':ident,'cwd':str(directory()),'excludeTurns':True})
+            server.request('thread/resume',{'threadId':ident,'cwd':str(directory()),'excludeTurns':True,
+                                          'developerInstructions':IMAGE_INSTRUCTIONS})
         inputs = [{'type':'text','text':body.text}]
         for value in body.attachments:
             path = file_path(value)
@@ -421,7 +517,9 @@ def prompt(ident:str,body:Prompt):
         audit('turn.start',ident)
         result = server.request('turn/start',{'threadId':ident,'input':inputs,'model':body.model,'effort':body.effort,
             'approvalPolicy':'never' if body.mode in {'full','plan'} else 'on-request','sandboxPolicy':policy})
-        with server.lock:server.active_turns[ident]=result['turn']['id']
+        with server.lock:
+            server.active_turns[ident]=result['turn']['id']
+            server.turn_modes[(ident,result['turn']['id'])]=body.mode
         return result
 
 
@@ -464,10 +562,10 @@ def events(cursor:int=0):
         ident=params.get('threadId') or params.get('thread',{}).get('id')
         return ident in owned
     with server.lock:
-        return {'cursor':server.cursor,'generation':server.generation,'provider':provider_state(),
+        return redact({'cursor':server.cursor,'generation':server.generation,'provider':provider_state(),
             'refresh':bool(server.events and cursor<server.events[0]['cursor']-1),
             'events':[e for e in server.events if e['cursor']>cursor and permitted(e)],
-            'pending':[m for m in server.approvals.values() if permitted(m)]}
+            'pending':[m for m in server.approvals.values() if permitted(m)]})
 
 
 @app.post('/api/v1/approvals/{ident}')
@@ -504,9 +602,10 @@ def files(path:str=''):
 def file_content(path:str):
     target=file_path(path)
     if not target.is_file(): raise HTTPException(404,'文件不存在')
-    if target.stat().st_size>2*1024*1024: raise HTTPException(413,'预览限 2 MiB')
-    content=target.read_bytes()
     mime=mimetypes.guess_type(target.name)[0]
+    limit=MAX_IMAGE if mime in RASTER else 2*1024*1024
+    if target.stat().st_size>limit: raise HTTPException(413,'文件超过预览大小限制')
+    content=target.read_bytes()
     if mime in RASTER: return {'image':'data:'+mime+';base64,'+base64.b64encode(content).decode()}
     try: return {'content':content.decode('utf8')}
     except UnicodeError: raise HTTPException(422,'该二进制格式不支持预览') from None
@@ -546,7 +645,7 @@ def terminal(body:Command):
                 os.killpg(proc.pid,signal.SIGKILL);proc.wait()
                 raise HTTPException(504,'命令超过 20 秒，已终止进程组') from None
             output.seek(0)
-            return {'exit_code':proc.returncode,'output':output.read(256*1024).decode(errors='replace')}
+            return redact({'exit_code':proc.returncode,'output':output.read(256*1024).decode(errors='replace')})
     except FileNotFoundError: raise HTTPException(503,'终端不可用') from None
 
 

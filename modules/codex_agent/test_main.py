@@ -37,6 +37,7 @@ def env(tmp_path,monkeypatch):
     main.server.approvals.clear();main.server.events.clear()
     main.server.active_turns.clear()
     main.server.active_calls.clear()
+    main.server.turn_modes.clear()
     main.server.loaded_threads.clear()
     def token(role='admin'):
         return {'Authorization':'Bearer '+jwt.encode({'sub':'1','username':'admin','role':role,'exp':time.time()+300,'iss':'opscenter','aud':'opscenter-modules'},key,algorithm='EdDSA')}
@@ -176,3 +177,41 @@ def test_provider_429_is_not_retried_and_cooldown_does_not_contact_upstream(env,
     assert len(requests)==1
     assert main.provider_last_error['message']=='Too Many Requests'
     assert main.retry_seconds('invalid')==60 and main.retry_seconds('nan')==60
+
+
+def test_generated_image_is_owned_by_thread_and_survives_history_read(env,monkeypatch,tmp_path):
+    client,token,calls=env;ident=create(client,token)
+    key=tmp_path/'key';key.write_text('image-test-secret')
+    monkeypatch.setenv('CODEX_API_KEY_FILE',str(key));monkeypatch.setenv('CODEX_API_BASE','https://api.agnes-ai.cn/v1')
+    from base64 import b64decode
+    png=b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF1sAAAAASUVORK5CYII=')
+    monkeypatch.setattr(main,'generate_image',lambda *a:{'data':png,'mime':'image/png','suffix':'.png'})
+    local=TestClient(main.app,client=('127.0.0.1',12345))
+    body={'thread_id':ident,'prompt':'A small dog'}
+    headers={'Authorization':'Bearer image-test-secret'}
+    assert local.post('/provider/v1/images',headers=headers,json=body).status_code==409
+    main.server.active_turns[ident]='image-turn';main.server.turn_modes[(ident,'image-turn')]='plan'
+    assert local.post('/provider/v1/images',headers=headers,json=body).status_code==403
+    main.server.turn_modes[(ident,'image-turn')]='ask'
+    response=local.post('/provider/v1/images',headers=headers,json=body);assert response.status_code==200
+    image=response.json();assert main.Path(image['path']).read_bytes()==png
+    monkeypatch.setattr(main.server,'request',lambda *a,**k:{'thread':{'id':ident,'turns':[{'id':'image-turn','status':'completed','items':[]}]}})
+    data=client.get('/api/v1/threads/'+ident,headers=token()).json()
+    assert data['thread']['turns'][0]['images'][0]['id']==image['id']
+    events=client.get('/api/v1/events',headers=token()).json()['events']
+    assert events[-1]['method']=='item/image/generated' and events[-1]['params']['image']['path']==image['path']
+    relative=main.Path(image['path']).relative_to(main.ROOT).as_posix()
+    assert client.get('/api/v1/files/content',headers=token(),params={'path':relative}).json()['image'].startswith('data:image/png;base64,')
+    assert client.post('/provider/v1/images',headers=headers,json=body).status_code==404
+
+
+def test_provider_key_is_redacted_from_saved_history_and_events(env,monkeypatch,tmp_path):
+    client,token,calls=env;ident=create(client,token)
+    key=tmp_path/'key';key.write_text('private-provider-value')
+    monkeypatch.setenv('CODEX_API_KEY_FILE',str(key))
+    data={'thread':{'id':ident,'turns':[{'id':'t','items':[{'type':'commandExecution','aggregatedOutput':'private-provider-value'}]}]}}
+    monkeypatch.setattr(main.server,'request',lambda *a,**k:data)
+    assert 'private-provider-value' not in client.get('/api/v1/threads/'+ident,headers=token()).text
+    main.server.emit('item/completed',{'threadId':ident,'item':{'aggregatedOutput':'private-provider-value'}})
+    response=client.get('/api/v1/events',headers=token())
+    assert 'private-provider-value' not in response.text and '[REDACTED]' in response.text
