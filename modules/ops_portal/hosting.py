@@ -40,6 +40,8 @@ def native_access(key, path, method):
         return False
     if key == 'core-screen' and re.fullmatch(r'/api/v2/servers/[a-zA-Z0-9-]+/metrics/timeseries', path):
         return True
+    if key == 'core-services' and path == '/api/v2/services/all':
+        return True
     if path in {'/modules/host-inventory/api/v1/hosts', '/api/v2/agents/version',
                 '/api/v2/modules', '/api/v2/metrics/hosts/overview',
                 '/modules/service-catalog/api/v1/services', '/modules/alerts/api/v1/events'}:

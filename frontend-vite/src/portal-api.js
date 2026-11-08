@@ -19,6 +19,7 @@ const handshake=setInterval(()=>{if(nonce)clearInterval(handshake);else parent.p
 parent.postMessage({type:'ops-module-ready'},'*');
 export const portalReady=ready;
 export function openPortalModule(key){parent.postMessage({type:'ops-module-open',nonce,key},'*');}
+export function openPortalApp(url){parent.postMessage({type:'ops-module-open-url',nonce,url},'*');}
 // UI capability marker; operator credentials remain in the parent document.
 export const getAccessToken=()=>nonce?'portal-session':'';
 async function request(path,options={}){

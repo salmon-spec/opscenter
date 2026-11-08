@@ -1,5 +1,5 @@
 // The portal owns operator credentials; child documents receive only a scoped message channel.
-export function createModuleHost({token, frames, expired, openModule}) {
+export function createModuleHost({token, frames, expired, openModule, openUrl}) {
  const sockets=new Map();
  const detach=item=>{for(const [id,value] of sockets)if(value.item===item){value.cancelled=true;value.socket?.close();sockets.delete(id)}};
  const nonce=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
@@ -10,6 +10,7 @@ export function createModuleHost({token, frames, expired, openModule}) {
   const data=event.data||{};
   if(data.type==='ops-module-ready'){announce(item);return;}
   if(data.type==='ops-module-open'&&data.nonce===item.nonce){openModule(String(data.key||''));return;}
+  if(data.type==='ops-module-open-url'&&data.nonce===item.nonce){openUrl?.(String(data.url||''));return;}
   if(data.type?.startsWith('ops-module-socket-')&&data.nonce===item.nonce){
    const id=String(data.id||'');if(!id||id.length>200)return;
    const socketId=item.nonce+':'+id,value=sockets.get(socketId);

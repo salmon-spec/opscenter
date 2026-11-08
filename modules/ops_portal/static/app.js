@@ -23,7 +23,8 @@ try {saved=JSON.parse(localStorage.getItem(storageKey)||'{}');} catch {}
 let favorites=new Set(Array.isArray(saved.favorites)?saved.favorites:[]), recent=Array.isArray(saved.recent)?saved.recent:[];
 let verified=saved.verified && typeof saved.verified==='object'?saved.verified:{}, section='all', category='平台支撑', active=null;
 const opened=new Map(); let base=[], snapshot={}, modules=new Map();
-const moduleHost=createModuleHost({token:()=>sessionToken,frames:opened,expired:logout,openModule:key=>{const app=apps().find(a=>a.module_key===key||(key==='password-manager'&&/Vaultwarden/.test(a.name)));if(app)openApp(app.id);}});
+const moduleHost=createModuleHost({token:()=>sessionToken,frames:opened,expired:logout,openModule:key=>{const app=apps().find(a=>a.module_key===key||(key==='password-manager'&&/Vaultwarden/.test(a.name)));if(app)openApp(app.id);},openUrl:openCatalogueUrl});
+function openCatalogueUrl(value){try{const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)return;const rows=apps(),addresses=a=>[a.url,...(a.aliases||[])];const app=rows.find(a=>addresses(a).some(v=>new URL(v).href===url.href))||rows.find(a=>addresses(a).some(v=>new URL(v).origin===url.origin));if(app)openApp(app.id);else toast('请先在门户配置管理中添加该服务入口');}catch{toast('服务地址无效');}}
 function validateApp(app) {
  if (!app || typeof app.name!=='string' || !app.name.trim() || app.name.length>80) throw Error('请填写有效的应用名称');
  const url=new URL(app.url);
