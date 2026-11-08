@@ -4,6 +4,8 @@ import json
 import asyncio
 import secrets
 import time
+import os
+import tempfile
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
@@ -165,11 +167,6 @@ def install(app, root, current_user):
         limit = (65 if terminal else 6) * 1024 * 1024
         if int(request.headers.get('content-length', '0')) > limit:
             raise HTTPException(413, '上传文件过大')
-        data = bytearray()
-        async for chunk in request.stream():
-            data.extend(chunk)
-            if len(data) > limit:
-                raise HTTPException(413, '上传文件过大')
         content_type = request.headers.get('content-type', '')
         if not content_type.startswith('multipart/form-data;'):
             raise HTTPException(415, '需要附件表单')
@@ -179,7 +176,17 @@ def install(app, root, current_user):
         # Blocking upstream I/O runs in a worker, keeping the async upload endpoint responsive.
         from starlette.concurrency import run_in_threadpool
         params = {'path': request.query_params.get('directory', '')} if terminal else {}
-        return result(await run_in_threadpool(upstream, 'POST', WEB, path, token, params=params, data=bytes(data), headers=headers))
+        # Stream multipart bodies through the writable data volume rather than holding
+        # two copies of a terminal upload in the portal's 192MiB container.
+        with tempfile.TemporaryFile(dir=Path(os.getenv('PORTAL_DB_PATH', '/data/portal.sqlite3')).parent) as data:
+            size = 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > limit:
+                    raise HTTPException(413, '上传文件过大')
+                data.write(chunk)
+            data.seek(0)
+            return result(await run_in_threadpool(upstream, 'POST', WEB, path, token, params=params, data=data, headers=headers))
 
     # Short-lived, single-use tickets keep the bearer token out of child documents and socket URLs.
     tickets = {}

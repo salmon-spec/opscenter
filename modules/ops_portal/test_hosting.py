@@ -105,3 +105,23 @@ def test_socket_tickets_are_scoped_and_single_use(module):
     with pytest.raises(WebSocketDisconnect) as failure:
         with client.websocket_connect('/session/socket/'+ticket): pass
     assert failure.value.code==4401
+
+
+def test_terminal_upload_streams_authenticated_multipart(module,monkeypatch):
+    _,client,token=module
+    from ops_portal import hosting
+    calls=[]
+    class Reply:
+        status_code=200
+        content=b'{"ok":true}'
+        headers={'Content-Type':'application/json'}
+    def upstream(method,base,path,credential='',**kwargs):
+        body=kwargs['data']
+        assert hasattr(body,'read') and not isinstance(body,(bytes,bytearray))
+        calls.append((path,credential,kwargs['params'],body.read()))
+        return Reply()
+    monkeypatch.setattr(hosting,'upstream',upstream)
+    response=client.post('/session/upload/core-terminal',params={'path':'/api/v2/terminal/sessions/session-1/files/upload','directory':'/tmp'},headers=token(),files={'file':('sample.txt',b'portal upload sample','text/plain')})
+    assert response.status_code==200 and response.json()=={'ok':True}
+    assert calls[0][1] and calls[0][2]=={'path':'/tmp'}
+    assert b'portal upload sample' in calls[0][3] and b'filename="sample.txt"' in calls[0][3]
