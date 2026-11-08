@@ -1,7 +1,7 @@
 {
   "key": "ops-portal",
   "name": "运维门户",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "管理统一门户的应用入口、业务分组、显示顺序与默认快捷访问",
   "icon": "PT",
   "entry_url": "/modules/ops-portal/ui/",

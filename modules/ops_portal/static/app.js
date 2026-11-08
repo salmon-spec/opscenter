@@ -64,7 +64,7 @@ function renderWorkspace(){
  for(const [id,{frame}] of opened)frame.hidden=id!==active;
  if(active===null)return;
  const app=opened.get(active).app;$('#app-name').textContent=app.name;$('#app-url').textContent=app.url;$('#external').href=app.url;
- const note=$('#frame-note');note.hidden=!!app.module_key;$('#external').hidden=!!app.module_key;note.classList.toggle('verified',verified[app.id]===app.url);
+ const note=$('#frame-note');note.hidden=!!app.module_key||app.embedding==='adapted';$('#external').hidden=!!app.module_key;note.classList.toggle('verified',verified[app.id]===app.url);
  note.textContent=verified[app.id]===app.url?'已记录人工验收。若应用升级或登录策略变化，请重新核验。':app.status==='unreachable'?'该地址未通过 HTTP/TLS 核查，请先处理访问问题。':app.embedding==='restricted'?'该应用限制跨来源嵌入，需要为门户配置精确来源。可先独立打开检查登录。':'页面显示、登录、交互尚待验证；页面加载事件不会自动判定集成成功。';
  const confirm=document.createElement('button');confirm.textContent=verified[app.id]===app.url?'撤销验收':'记录人工验收';confirm.onclick=()=>{if(verified[app.id]===app.url){delete verified[app.id];save();render();}else showDetails(app.id);};note.append(confirm);
 }
