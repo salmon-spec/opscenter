@@ -27,7 +27,7 @@ spec:
       labels:
         app: module-codex-agent
       annotations:
-        opscenter.io/codex-release: 0.6.2-20261108
+        opscenter.io/codex-release: 0.6.3-20261108
     spec:
       automountServiceAccountToken: false
       nodeSelector:
@@ -37,7 +37,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
         - name: prepare-data
-          image: opscenter/module-codex-agent:0.6.2-release-20261108
+          image: opscenter/module-codex-agent:0.6.3-release-20261108
           imagePullPolicy: Never
           command: [python, -c, "import pathlib; [(pathlib.Path('/state')/p).mkdir(parents=True,exist_ok=True,mode=0o700) for p in ['codex-state/codex','codex-state/gateway','workspace']]"]
           securityContext:
@@ -52,7 +52,7 @@ spec:
               mountPath: /state
       containers:
         - name: codex
-          image: opscenter/module-codex-agent:0.6.2-release-20261108
+          image: opscenter/module-codex-agent:0.6.3-release-20261108
           imagePullPolicy: Never
           env:
             - name: CODEX_HOME

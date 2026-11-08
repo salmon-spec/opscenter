@@ -38,7 +38,7 @@ from provider import flatten, restore_event, restore_response, has_image, chat_r
 from images import generate as generate_image, MAX_IMAGE, raster_type
 from changes import read_changes
 
-VERSION = '0.6.2'
+VERSION = '0.6.3'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
