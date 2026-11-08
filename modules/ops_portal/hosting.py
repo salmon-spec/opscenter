@@ -24,7 +24,7 @@ SANDBOX = ['allow-scripts', 'allow-forms', 'allow-downloads', 'allow-modals']
 
 def native_info(key):
     item = NATIVE[key]
-    return {'key': key, 'name': item['name'], 'version': '0.6.0', 'running': True,
+    return {'key': key, 'name': item['name'], 'version': '0.6.1', 'running': True,
             'entry_url': f'/host/{key}/ui/', 'route': item['route'],
             'manifest': {'api_prefixes': [], 'sandbox': SANDBOX}}
 

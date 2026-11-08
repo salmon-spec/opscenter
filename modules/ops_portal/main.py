@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from runtime.app import create_module_app
 from runtime.auth import SessionVerifier
 
-VERSION = '0.6.0'
+VERSION = '0.6.1'
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv('PORTAL_DB_PATH', '/data/portal.sqlite3'))
 PORTAL_URL = os.getenv('PORTAL_PUBLIC_URL', 'http://10.66.66.13:30092/').rstrip('/') + '/'
@@ -172,7 +172,7 @@ async def browser_headers(request: Request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Cache-Control'] = 'no-store'
     response.headers['Referrer-Policy'] = 'no-referrer'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src http: https:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'self' http://10.66.66.13:30088 http://10.66.66.14:30088 http://10.66.66.15:30088 https://10.66.66.13 https://10.66.66.15"
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-src 'self' http: https:; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'self' http://10.66.66.13:30088 http://10.66.66.14:30088 http://10.66.66.15:30088 https://10.66.66.13 https://10.66.66.15"
     return response
 
 
