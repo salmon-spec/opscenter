@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {newWidget,applyLayout,themes,themeVariables,boardTemplates,templateConfig} from '../src/utils/screenBoards.js'
+import {newWidget,applyLayout,themes,themeVariables,boardTemplates,templateConfig,contrastRatio,readableAccent} from '../src/utils/screenBoards.js'
 import {moduleMetrics,moduleWarning,metricPercent,moduleWidgets} from '../src/utils/screenModules.js'
 
 test('adding components never overlaps existing geometry and preserves content during drag',()=>{
@@ -52,4 +52,13 @@ test('module adapters preserve zero, missing values and distinct units',()=>{
   assert.equal(metricPercent({value:0,total:0}),null)
   assert.equal(moduleWarning({health:{available:false,error:'未配置'}}),'未配置')
   assert.ok(moduleWarning({status:'demo'}))
+})
+test('business accents remain readable on every preset surface',()=>{
+  for(const theme of Object.values(themes)){
+    for(const module of Object.values(moduleWidgets))assert.ok(contrastRatio(readableAccent(module.color,theme.surface),theme.surface)>=4.5)
+    const variables=themeVariables(theme)
+    for(const key of ['--blue','--violet','--amber','--red'])assert.ok(contrastRatio(variables[key],theme.surface)>=4.5)
+  }
+  assert.equal(readableAccent('#ffffff','#000000'),'#ffffff')
+  assert.ok(contrastRatio(readableAccent('#ffffff','#ffffff'),'#ffffff')>=4.5)
 })

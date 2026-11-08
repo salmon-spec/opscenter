@@ -2,13 +2,13 @@
   <div class="monitor-screen" :class="[{'standalone-board':standalone},'board-style-'+(config.theme.style||'classic')]" ref="screenRoot" :style="themeStyle">
     <header class="board-head">
       <div class="board-title"><span class="brand-mark">O</span><div><h1>{{ config.title }}</h1><p>OpsCenter <span>/</span> 运维 · 业务 · 生活</p></div></div>
-      <div class="head-actions"><router-link v-if="!editable" :to="{path:route.path,query:{edit:'1'}}" class="board-button">编辑大屏</router-link><router-link v-if="!editable" :to="{path:route.path,query:{edit:'1',panel:'templates'}}" class="board-button">样式与模板</router-link><span class="clock">{{ clockText }}</span><button class="board-button" @click="showCharts">查看图表 ↓</button><router-link v-if="standalone" to="/" class="board-button">工作台 ↗</router-link><button class="board-button" :disabled="loading" @click="refresh(true)">{{ loading ? '刷新中…' : '刷新' }}</button><button class="board-button" @click="toggleFullscreen">{{ fullscreen ? '退出全屏' : '全屏' }}</button></div>
+      <div v-if="!editable" class="head-actions"><router-link v-if="!previewMode" :to="{path:route.path,query:{edit:'1'}}" class="board-button">编辑大屏</router-link><router-link v-if="!previewMode" :to="{path:route.path,query:{edit:'1',panel:'templates'}}" class="board-button">样式与模板</router-link><span class="clock">{{ clockText }}</span><button class="board-button" @click="showCharts">查看图表 ↓</button><router-link v-if="standalone" to="/" class="board-button">工作台 ↗</router-link><button class="board-button" :disabled="loading" @click="refresh(true)">{{ loading ? '刷新中…' : '刷新' }}</button><button class="board-button" @click="toggleFullscreen">{{ fullscreen ? '退出全屏' : '全屏' }}</button></div>
     </header>
 
     <div ref="gridRoot" class="grid-stack" :class="{editing:editable}">
       <div v-for="widget in config.widgets" :key="widget.id" class="grid-stack-item" :gs-id="widget.id" :gs-x="widget.x" :gs-y="widget.y" :gs-w="widget.w" :gs-h="widget.h">
-        <div class="grid-stack-item-content" :class="[{'selected-widget':selectedId===widget.id},'variant-'+(widget.variant||'detail')]" :style="{'--widget-accent':widget.accent||moduleWidgets[widget.type]?.color||'var(--green)'}" @click="editable && emit('select',widget.id)">
-          <div v-if="editable" class="widget-handle"><button type="button" class="widget-select" :aria-label="'选择'+(widget.title || widgetLabels[widget.type])" @click.stop="emit('select',widget.id)">⠿ {{ widget.title || widgetLabels[widget.type] }}</button><button type="button" @click.stop="emit('remove',widget.id)" :aria-label="'移除'+widget.title">×</button></div>
+        <div class="grid-stack-item-content" :class="[{'selected-widget':selectedId===widget.id},'variant-'+(widget.variant||'detail')]" :style="{'--widget-accent':widget.accent||moduleWidgets[widget.type]?.color||config.theme.accent,'--widget-ink':readableAccent(widget.accent||moduleWidgets[widget.type]?.color||config.theme.accent,config.theme.surface)}" @click="editable && emit('select',widget.id)">
+          <div v-if="editable" class="widget-handle"><span class="widget-drag" title="拖动以移动组件" aria-hidden="true" @pointerdown="emit('select',widget.id)">⠿</span><button type="button" class="widget-select" :aria-label="'选择'+(widget.title || widgetLabels[widget.type])" @click.stop="emit('select',widget.id)"> {{ widget.title || widgetLabels[widget.type] }}</button><button type="button" @click.stop="emit('remove',widget.id)" :aria-label="'移除'+widget.title">×</button></div>
           <template v-if="widget.type==='overview'"><section class="overview" aria-label="运行状态总览">
       <article><span>主机在线</span><strong :class="stats.offline||stats.unknown?'warning':''">{{ loaded ? stats.online : '—' }}<small>/ {{ hosts.length || '—' }}</small></strong><p>{{ loaded ? `离线 ${stats.offline} · 待确认 ${stats.unknown}` : '正在读取资产清单' }}</p></article>
       <article><span>待关注告警 <em>聚合</em></span><strong :class="alertState.usable&&alertItems.length?'danger':''">{{ alertState.usable ? alertItems.length : '—' }}<small v-if="alertState.usable">严重 {{ criticalCount }}</small></strong><p :class="alertState.level">{{ alertState.usable ? '告警事件与主机监测发现' : alertState.label }}</p></article>
@@ -71,8 +71,8 @@ import ScreenModuleWidget from '../components/ScreenModuleWidget.vue'
 import {moduleWidgets} from '../utils/screenModules.js'
 import { GridStack } from 'gridstack'
 import 'gridstack/dist/gridstack.min.css'
-import { widgetLabels, themeVariables } from '../utils/screenBoards.js'
-const props=defineProps({ config:{type:Object,required:true},editable:Boolean,selectedId:String,suspended:Boolean })
+import { widgetLabels, themeVariables, readableAccent } from '../utils/screenBoards.js'
+const props=defineProps({ config:{type:Object,required:true},editable:Boolean,selectedId:String,suspended:Boolean,previewMode:Boolean })
 const emit=defineEmits(['layout','select','remove'])
 const themeStyle=computed(()=>themeVariables(props.config.theme))
 const gridRoot=ref(null)
@@ -81,8 +81,9 @@ async function syncGrid(){
   await nextTick(); if(!gridRoot.value)return
   syncing=true
   if(!grid){
-    grid=GridStack.init({column:12,cellHeight:props.editable?78:58,margin:6,float:true,handle:'.widget-handle',staticGrid:!props.editable,columnOpts:{breakpoints:[{w:700,c:1}]}},gridRoot.value)
+    grid=GridStack.init({column:12,cellHeight:props.editable?78:58,margin:6,float:true,handle:'.widget-drag',alwaysShowResizeHandle:props.editable,staticGrid:!props.editable,columnOpts:{breakpoints:[{w:700,c:1}]}},gridRoot.value)
     grid.on('change',()=>{if(syncing||!props.editable||grid.getColumn()!==12)return;emit('layout',grid.engine.nodes.map(n=>({id:n.id,x:n.x,y:n.y,w:n.w,h:n.h})))})
+    grid.on('dragstart resizestart',(_event,el)=>{if(props.editable&&el.gridstackNode?.id)emit('select',el.gridstackNode.id)})
   }
   grid.batchUpdate()
   const ids=new Set(props.config.widgets.map(w=>w.id))
@@ -246,4 +247,6 @@ onUnmounted(()=>{stop();clearInterval(clock);document.removeEventListener('visib
 .variant-compact .panel-head{min-height:34px;padding:8px 12px}.variant-compact .host-table td{padding:6px 10px}.variant-compact .host-ip{display:none}.variant-compact .overview article{padding:8px 12px}.variant-compact .overview strong{font-size:24px}.variant-compact .overview p{margin:3px 0}.variant-compact .alert-item{padding:8px 12px}.variant-compact .alert-item p{display:none}.variant-compact .cluster-stats{margin:8px 12px}.variant-compact .cluster-stats b{font-size:21px}.variant-compact .text-widget{padding:12px}.variant-compact .text-widget h2{font-size:14px}
 .variant-compact :deep(.screen-charts .chart-panel){padding:8px}.variant-cards :deep(.screen-charts .chart-panel){border-top:3px solid var(--widget-accent);background:linear-gradient(135deg,color-mix(in srgb,var(--widget-accent) 10%,var(--surface)),var(--surface))}
 @media(prefers-reduced-motion:reduce){.grid-stack-item-content{transition:none}}
+
+.widget-handle{gap:8px;background:color-mix(in srgb,var(--bg) 70%,var(--surface));border-bottom:1px solid var(--line);padding:5px 9px;min-height:36px}.widget-drag{display:grid;place-items:center;width:24px;height:28px;flex-shrink:0;cursor:grab;touch-action:none;font-size:22px;color:var(--muted);border-radius:4px}.widget-drag:hover{color:var(--text);background:var(--line)}.widget-drag:active{cursor:grabbing}.widget-handle .widget-select{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:3px 0;color:var(--text);font-size:12px}.widget-handle>button:last-child{display:grid;place-items:center;width:26px;height:26px;border-radius:4px;font-size:18px}.widget-handle>button:last-child:hover{color:var(--red);background:color-mix(in srgb,var(--red) 12%,transparent)}.panel-head h2,.text-widget h2{color:var(--widget-ink)}.grid-stack-item-content{scrollbar-width:thin;scrollbar-color:var(--line) transparent}.board-head{flex-wrap:wrap}.head-actions{flex-wrap:wrap}.board-button{display:inline-flex;align-items:center;justify-content:center;min-height:34px;line-height:20px;text-decoration:none!important}.text-widget p{line-height:1.8}
 </style>

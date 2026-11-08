@@ -13,13 +13,30 @@ export const themes = {
   ivory: {name:'暖白橙金',background:'#f5f0e7',surface:'#fffcf5',text:'#403326',accent:'#a65014',style:'classic'},
 }
 export const clone = value => JSON.parse(JSON.stringify(value))
+function luminance(hex){
+  const rgb=hex.slice(1).match(/../g).map(v=>parseInt(v,16)/255).map(v=>v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4)
+  return rgb[0]*0.2126+rgb[1]*0.7152+rgb[2]*0.0722
+}
+export function contrastRatio(a,b){const x=luminance(a),y=luminance(b);return (Math.max(x,y)+0.05)/(Math.min(x,y)+0.05)}
+export function readableAccent(color,surface){
+  if(contrastRatio(color,surface)>=4.5)return color
+  const target=luminance(surface)>0.4?0:255
+  const rgb=color.slice(1).match(/../g).map(v=>parseInt(v,16))
+  for(let step=1;step<=10;step++){
+    const adjusted='#'+rgb.map(v=>Math.round(v+(target-v)*step/10).toString(16).padStart(2,'0')).join('')
+    if(contrastRatio(adjusted,surface)>=4.5)return adjusted
+  }
+  return target?'#ffffff':'#000000'
+}
 export function themeVariables(theme) {
   return {'--bg':theme.background,'--surface':theme.surface,'--text':theme.text,'--green':theme.accent,
-    '--board-font-size':`${theme.font_size}px`,'--board-radius':`${theme.radius}px`,
+    '--board-font-size':`${theme.font_size??13}px`,'--board-radius':`${theme.radius??8}px`,
     '--muted':`color-mix(in srgb, ${theme.text} 68%, ${theme.surface})`,
     '--line':`color-mix(in srgb, ${theme.text} 18%, ${theme.surface})`,
-    '--blue':theme.background.startsWith('#f')||theme.background==='#edf1f5'?'#2465b5':'#64aaff',
-    '--violet':theme.background.startsWith('#f')||theme.background==='#edf1f5'?'#8750b1':'#bc9aff'}
+    '--blue':readableAccent('#64aaff',theme.surface),
+    '--violet':readableAccent('#bc9aff',theme.surface),
+    '--amber':readableAccent('#de9d44',theme.surface),
+    '--red':readableAccent('#e77485',theme.surface)}
 }
 export function newWidget(type, widgets) {
   const y = Math.max(0,...widgets.map(w=>w.y+w.h))
