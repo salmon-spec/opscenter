@@ -65,7 +65,7 @@
             "containers": [
               {
                 "name": "portal",
-                "image": "opscenter/module-ops-portal:0.5.1",
+                "image": "opscenter/module-ops-portal:0.6.0",
                 "imagePullPolicy": "Never",
                 "ports": [
                   {

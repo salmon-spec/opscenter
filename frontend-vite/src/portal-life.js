@@ -1,13 +1,23 @@
-import {createApp, h, ref} from 'vue'
-import {createRouter,createMemoryHistory,RouterView} from 'vue-router'
-import LifeModule from './views/LifeModule.vue'
+import {createApp} from 'vue'
+import {createRouter,createMemoryHistory} from 'vue-router'
+import {routes} from './routes'
+import PortalNative from './PortalNative.vue'
 import {portalReady,openPortalModule} from './portal-api.js'
+import catalog from '../../modules/ops_portal/native_catalog.json'
+import workbench from './workbench/tabs'
 import './styles.css'
-const keys=['subscriptions','home-inventory','life-reminders'];
-const router=createRouter({history:createMemoryHistory(),routes:keys.map(kind=>({path:'/extensions/'+kind,component:LifeModule,props:{kind}}))});
+const life=['subscriptions','home-inventory','life-reminders']
+const router=createRouter({history:createMemoryHistory(),routes:routes.filter(r=>r.name!=='ExtensionHost')})
 portalReady.then(async module=>{
- if(!keys.includes(module.key))return;
- await router.push('/extensions/'+module.key);await router.isReady();
- router.beforeEach(to=>{const key=to.path.split('/').at(-1);if(key!==module.key){if(keys.includes(key))openPortalModule(key);return false;}});
- createApp({setup(){const notice=ref('');window.addEventListener('ops-toast',e=>{notice.value=e.detail.msg;setTimeout(()=>notice.value='',5000)});return()=>h('div',{class:'portal-native'},[h(RouterView),notice.value?h('div',{role:'status',class:'portal-notice'},notice.value):null]);}}).use(router).mount('#app');
-});
+ const entry=catalog.find(x=>x.key===module.key)
+ const start=entry?.route||(life.includes(module.key)?'/extensions/'+module.key:null)
+ if(!start)return
+ workbench.init(router)
+ await router.push(start);await router.isReady()
+ router.beforeEach(to=>{
+  const target=catalog.find(x=>x.route===to.path||(x.key==='core-kubernetes'&&to.path.startsWith('/kubernetes/')))
+  const key=target?.key||(to.path.startsWith('/extensions/')?to.path.split('/').at(-1):null)
+  if(key&&key!==module.key){openPortalModule(key);return false}
+ })
+ createApp(PortalNative).use(router).mount('#app')
+})

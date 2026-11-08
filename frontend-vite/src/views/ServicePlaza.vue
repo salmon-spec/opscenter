@@ -155,6 +155,7 @@
 </template>
 
 <script setup>
+import {safeStorage} from '../safeStorage'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { api, getAccessToken, toast } from '../api'
 import EmptyState from '../components/EmptyState.vue'
@@ -162,7 +163,7 @@ import Modal from '../components/Modal.vue'
 import ServiceDetailDrawer from '../components/ServiceDetailDrawer.vue'
 
 const PLAZA_CACHE_KEY='ops-plaza-cache-v2'
-function readCache(){try{const value=JSON.parse(localStorage.getItem(PLAZA_CACHE_KEY)||'null');return Array.isArray(value?.items)?value.items:[]}catch{return[]}}
+function readCache(){try{const value=JSON.parse(safeStorage.getItem(PLAZA_CACHE_KEY)||'null');return Array.isArray(value?.items)?value.items:[]}catch{return[]}}
 const services = ref(readCache())
 const inventory = ref([])
 const inventoryLoading = ref(false)
@@ -274,7 +275,7 @@ function openDetail(s) {
 function startOrder(){managerSearch.value='';sortDraft.value=[...services.value];sortMode.value=true}
 function cancelOrder(){sortMode.value=false;sortDraft.value=[]}
 function moveService(service,delta){const from=sortDraft.value.findIndex(item=>item.key===service.key),to=from+delta;if(from<0||to<0||to>=sortDraft.value.length)return;const rows=[...sortDraft.value];rows.splice(to,0,rows.splice(from,1)[0]);sortDraft.value=rows}
-async function saveOrder(){orderSaving.value=true;try{await api.put('/modules/service-catalog/api/v1/services/order',{ordered_keys:sortDraft.value.map(item=>item.key)});services.value=[...sortDraft.value];localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}));cancelOrder();toast('服务顺序已保存','success')}catch(error){toast(`顺序保存失败：${error.message}`,'error')}finally{orderSaving.value=false}}
+async function saveOrder(){orderSaving.value=true;try{await api.put('/modules/service-catalog/api/v1/services/order',{ordered_keys:sortDraft.value.map(item=>item.key)});services.value=[...sortDraft.value];safeStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}));cancelOrder();toast('服务顺序已保存','success')}catch(error){toast(`顺序保存失败：${error.message}`,'error')}finally{orderSaving.value=false}}
 
 function statusCount(status){return services.value.filter(s=>(s.status||'unknown')===status).length}
 function shortTime(value){const numeric=typeof value==='number'||/^\d+(\.\d+)?$/.test(String(value||''));const date=new Date(numeric?Number(value)*1000:value);return Number.isNaN(date.getTime())?'-':date.toLocaleTimeString('zh-CN',{hour12:false,hour:'2-digit',minute:'2-digit'})}
@@ -291,7 +292,7 @@ async function reload(silent=false) {
   loading.value = true
   try {
     const svc = await api.get('/modules/service-catalog/api/v1/services')
-    if(Array.isArray(svc)){services.value=svc;localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:svc,time:Date.now()}));svc.slice(0,6).forEach(warmService);await loadHealthOverview()}
+    if(Array.isArray(svc)){services.value=svc;safeStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:svc,time:Date.now()}));svc.slice(0,6).forEach(warmService);await loadHealthOverview()}
     groups.value = PLAZA_GROUPS
   } catch(error) {
     if(!services.value.length&&!silent)toast(`服务广场加载失败：${error.message}`,'error')
@@ -308,7 +309,7 @@ async function loadInventory() {
   finally { inventoryLoading.value = false }
 }
 
-async function loadHealthOverview(){try{const data=await api.get('/modules/service-catalog/api/v1/health-overview',{hours:24});overview.value=data||{summary:{},items:[]};const healthByKey=new Map((data.items||[]).map(item=>[item.key,item]));services.value=services.value.map(service=>{const health=healthByKey.get(service.key);return health?{...service,...health}:service});localStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}))}catch{/* 总览失败不影响服务入口 */}}
+async function loadHealthOverview(){try{const data=await api.get('/modules/service-catalog/api/v1/health-overview',{hours:24});overview.value=data||{summary:{},items:[]};const healthByKey=new Map((data.items||[]).map(item=>[item.key,item]));services.value=services.value.map(service=>{const health=healthByKey.get(service.key);return health?{...service,...health}:service});safeStorage.setItem(PLAZA_CACHE_KEY,JSON.stringify({items:services.value,time:Date.now()}))}catch{/* 总览失败不影响服务入口 */}}
 
 const managerRows = computed(() => {
   const rows = sortMode.value ? sortDraft.value : managerScope.value === 'inventory' ? inventory.value : managerScope.value === 'hidden' ? hiddenServices.value : services.value

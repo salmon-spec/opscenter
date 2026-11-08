@@ -23,7 +23,7 @@ def test_registry_and_scoped_relay(module, monkeypatch):
     monkeypatch.setattr(hosting, 'upstream', upstream)
     assert client.get('/session/modules').status_code == 401
     items=client.get('/session/modules',headers=token()).json()['items']
-    assert len(items)==3 and 'allow-same-origin' not in items[0]['manifest']['sandbox']
+    assert len(items)==3+len(hosting.NATIVE) and 'allow-same-origin' not in items[0]['manifest']['sandbox']
     payload={'module':'automation','path':'/modules/automation/api/v1/tasks','method':'POST','body':{'x':1},'idempotency_key':'request-1'}
     assert client.post('/session/relay',json=payload).status_code==401
     response=client.post('/session/relay',json=payload,headers=token())
@@ -61,3 +61,43 @@ def test_legacy_ui_nonce_adapter(module,monkeypatch):
     text=client.get('/host/electricity/ui/').text
     assert "nonce: window.__portalNonce" in text
     assert "e.source===parent" in text
+
+
+@pytest.mark.parametrize('key,path,method,allowed',[
+ ('core-hosts','/modules/host-inventory/api/v1/hosts','POST',True),
+ ('core-hosts','/api/v2/terminal/sessions','POST',True),
+ ('core-kubernetes','/api/v2/clusters/c1/pods','GET',True),
+ ('core-screen','/api/v2/screen-boards/1/publish','POST',True),
+ ('core-screen','/modules/automation/api/v1/summary','GET',True),
+ ('core-screen','/modules/automation/api/v1/tasks','POST',False),
+ ('core-logs','/api/v2/servers/1','DELETE',False),
+ ('core-hosts','/api/v2/auth/me','GET',False),
+ ('core-hosts','/api/v2/servers/1/internal','GET',False),
+ ('core-kubernetes','/api/v2/clusters-other','POST',False),
+])
+def test_native_permissions(module,monkeypatch,key,path,method,allowed):
+    _,client,token=module
+    from ops_portal import hosting
+    class Reply:
+        status_code=200
+        content=b'{"ok":true}'
+        headers={'Content-Type':'application/json'}
+    monkeypatch.setattr(hosting,'upstream',lambda *a,**k:Reply())
+    response=client.post('/session/relay',headers=token(),json={'module':key,'path':path,'method':method})
+    assert response.status_code==(200 if allowed else 403)
+
+
+def test_socket_tickets_are_scoped_and_single_use(module):
+    _,client,token=module
+    payload={'module':'core-terminal','path':'/ws/terminal/session-1'}
+    assert client.post('/session/socket-ticket',json=payload).status_code==401
+    assert client.post('/session/socket-ticket',json={**payload,'module':'core-logs'},headers=token()).status_code==403
+    assert client.post('/session/socket-ticket',json={**payload,'path':'//other/ws'},headers=token()).status_code==400
+    ticket=client.post('/session/socket-ticket',json=payload,headers=token()).json()['ticket']
+    with client.websocket_connect('/session/socket/'+ticket) as socket:
+        # No backend exists in the isolated test; the ticket still must be consumed.
+        pass
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect) as failure:
+        with client.websocket_connect('/session/socket/'+ticket): pass
+    assert failure.value.code==4401

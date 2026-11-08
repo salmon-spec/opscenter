@@ -1,5 +1,5 @@
 {
-  "version": "0.5.1",
+  "version": "0.6.0",
   "checked_at": "2026-11-05T02:52:42.581730+00:00",
   "source_count": 145,
   "apps": [
@@ -101,7 +101,7 @@
     {
       "id": "opscenter",
       "name": "OpsCenter",
-      "url": "http://10.66.66.15:30088/",
+      "url": "http://10.66.66.13:30092/host/core-overview/ui/",
       "category": "安全与运维",
       "description": "运维工作台",
       "code": 200,
@@ -112,10 +112,14 @@
       "html": true,
       "title": "OpsCenter 运维工作台",
       "status": "reachable",
-      "embedding": "unverified",
+      "embedding": "adapted",
       "error": "",
       "checked_at": "2026-11-05T02:51:52.705114+00:00",
-      "enabled": true
+      "enabled": true,
+      "aliases": [
+        "http://10.66.66.15:30088/"
+      ],
+      "module_key": "core-overview"
     },
     {
       "id": "tools-current",
@@ -272,7 +276,7 @@
     {
       "id": "ops-hosts",
       "name": "主机管理",
-      "url": "http://10.66.66.15:30088/#/hosts",
+      "url": "http://10.66.66.13:30092/host/core-hosts/ui/",
       "category": "OpsCenter 模块",
       "description": "资产信息与主机管理",
       "code": 200,
@@ -283,18 +287,21 @@
       "html": true,
       "title": "OpsCenter 运维工作台",
       "status": "reachable",
-      "embedding": "unverified",
+      "embedding": "adapted",
       "error": "",
       "checked_at": "2026-11-05T02:51:52.705114+00:00",
       "domain": "平台支撑",
       "parent_app": "opscenter",
-      "aliases": [],
-      "enabled": true
+      "aliases": [
+        "http://10.66.66.15:30088/#/hosts"
+      ],
+      "enabled": true,
+      "module_key": "core-hosts"
     },
     {
       "id": "ops-k3s",
       "name": "容器管理",
-      "url": "http://10.66.66.15:30088/#/kubernetes/overview",
+      "url": "http://10.66.66.13:30092/host/core-kubernetes/ui/",
       "category": "OpsCenter 模块",
       "description": "K3s 集群与工作负载",
       "code": 200,
@@ -305,18 +312,21 @@
       "html": true,
       "title": "OpsCenter 运维工作台",
       "status": "reachable",
-      "embedding": "unverified",
+      "embedding": "adapted",
       "error": "",
       "checked_at": "2026-11-05T02:51:52.705114+00:00",
       "domain": "平台支撑",
       "parent_app": "opscenter",
-      "aliases": [],
-      "enabled": true
+      "aliases": [
+        "http://10.66.66.15:30088/#/kubernetes/overview"
+      ],
+      "enabled": true,
+      "module_key": "core-kubernetes"
     },
     {
       "id": "ops-logs",
       "name": "日志中心",
-      "url": "http://10.66.66.15:30088/#/logs",
+      "url": "http://10.66.66.13:30092/host/core-logs/ui/",
       "category": "OpsCenter 模块",
       "description": "主机日志检索与查询",
       "code": 200,
@@ -327,18 +337,21 @@
       "html": true,
       "title": "OpsCenter 运维工作台",
       "status": "reachable",
-      "embedding": "unverified",
+      "embedding": "adapted",
       "error": "",
       "checked_at": "2026-11-05T02:51:52.705114+00:00",
       "domain": "运维场景",
       "parent_app": "opscenter",
-      "aliases": [],
-      "enabled": true
+      "aliases": [
+        "http://10.66.66.15:30088/#/logs"
+      ],
+      "enabled": true,
+      "module_key": "core-logs"
     },
     {
       "id": "ops-monitor",
       "name": "系统监控",
-      "url": "http://10.66.66.15:30088/#/system/monitor",
+      "url": "http://10.66.66.13:30092/host/core-monitor/ui/",
       "category": "OpsCenter 模块",
       "description": "主机资源与历史趋势",
       "code": 200,
@@ -349,18 +362,21 @@
       "html": true,
       "title": "OpsCenter 运维工作台",
       "status": "reachable",
-      "embedding": "unverified",
+      "embedding": "adapted",
       "error": "",
       "checked_at": "2026-11-05T02:51:52.705114+00:00",
       "domain": "运维场景",
       "parent_app": "opscenter",
-      "aliases": [],
-      "enabled": true
+      "aliases": [
+        "http://10.66.66.15:30088/#/system/monitor"
+      ],
+      "enabled": true,
+      "module_key": "core-monitor"
     },
     {
       "id": "ops-alerts",
       "name": "告警中心",
-      "url": "http://10.66.66.15:30088/#/alerts",
+      "url": "http://10.66.66.13:30092/host/core-alerts/ui/",
       "category": "OpsCenter 模块",
       "description": "告警事件与规则管理",
       "code": 200,
@@ -371,18 +387,21 @@
       "html": true,
       "title": "OpsCenter 运维工作台",
       "status": "reachable",
-      "embedding": "unverified",
+      "embedding": "adapted",
       "error": "",
       "checked_at": "2026-11-05T02:51:52.705114+00:00",
       "domain": "运维场景",
       "parent_app": "opscenter",
-      "aliases": [],
-      "enabled": true
+      "aliases": [
+        "http://10.66.66.15:30088/#/alerts"
+      ],
+      "enabled": true,
+      "module_key": "core-alerts"
     },
     {
       "id": "ops-screen",
       "name": "可视化大屏",
-      "url": "http://10.66.66.15:30088/#/screen",
+      "url": "http://10.66.66.13:30092/host/core-screen/ui/",
       "category": "OpsCenter 模块",
       "description": "综合监控与大屏管理",
       "code": 200,
@@ -393,13 +412,16 @@
       "html": true,
       "title": "OpsCenter 运维工作台",
       "status": "reachable",
-      "embedding": "unverified",
+      "embedding": "adapted",
       "error": "",
       "checked_at": "2026-11-05T02:51:52.705114+00:00",
       "domain": "运维场景",
       "parent_app": "opscenter",
-      "aliases": [],
-      "enabled": true
+      "aliases": [
+        "http://10.66.66.15:30088/#/screen"
+      ],
+      "enabled": true,
+      "module_key": "core-screen"
     },
     {
       "id": "ops-automation",
@@ -583,6 +605,123 @@
       "enabled": true,
       "module_key": "command-code-usage",
       "embedding": "native"
+    },
+    {
+      "id": "core-services",
+      "name": "服务广场",
+      "description": "服务广场与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-services/ui/",
+      "module_key": "core-services",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
+    },
+    {
+      "id": "core-database",
+      "name": "数据库",
+      "description": "数据库与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-database/ui/",
+      "module_key": "core-database",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
+    },
+    {
+      "id": "core-files",
+      "name": "文件管理",
+      "description": "文件管理与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-files/ui/",
+      "module_key": "core-files",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
+    },
+    {
+      "id": "core-firewall",
+      "name": "防火墙",
+      "description": "防火墙与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-firewall/ui/",
+      "module_key": "core-firewall",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
+    },
+    {
+      "id": "core-ssh",
+      "name": "SSH 管理",
+      "description": "SSH 管理与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-ssh/ui/",
+      "module_key": "core-ssh",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
+    },
+    {
+      "id": "core-terminal",
+      "name": "终端",
+      "description": "终端与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-terminal/ui/",
+      "module_key": "core-terminal",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
+    },
+    {
+      "id": "core-processes",
+      "name": "进程管理",
+      "description": "进程管理与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-processes/ui/",
+      "module_key": "core-processes",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
+    },
+    {
+      "id": "core-modules",
+      "name": "模块管理",
+      "description": "模块管理与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-modules/ui/",
+      "module_key": "core-modules",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
+    },
+    {
+      "id": "core-password",
+      "name": "密码管理",
+      "description": "密码管理与运维操作",
+      "url": "http://10.66.66.13:30092/host/core-password/ui/",
+      "module_key": "core-password",
+      "category": "运维管理",
+      "domain": "运维场景",
+      "enabled": true,
+      "status": "unverified",
+      "embedding": "adapted",
+      "aliases": []
     }
   ],
   "default_favorites": [

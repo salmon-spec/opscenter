@@ -49,7 +49,7 @@
 
 <script setup>
 import { onActivated, onMounted, ref } from 'vue'
-import { fmtTime, getAccessToken } from '../api'
+import { fmtTime, api } from '../api'
 
 const modules = ref([
   { key: 'service-catalog', title: '服务广场', description: '服务目录与健康探活摘要', path: '/services', summary: null, error: '', findings: null, findingsError: '', loading: false },
@@ -102,13 +102,7 @@ function stateClass(item) {
 }
 
 async function moduleRequest(item, endpoint, controller) {
-  const headers = { Accept: 'application/json' }
-  const token = getAccessToken()
-  if (token) headers.Authorization = `Bearer ${token}`
-  const response = await fetch(`/modules/${item.key}/api/v1/${endpoint}`, { headers, signal: controller.signal })
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('模块网关尚未接入')
-  return response.json()
+  return api.get(`/modules/${item.key}/api/v1/${endpoint}`, undefined, {signal:controller.signal})
 }
 
 async function loadSummary(item) {

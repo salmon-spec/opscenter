@@ -2,11 +2,12 @@
    与主机选择完全独立：localStorage 'ops-cluster-v1'，切换一方不影响另一方（需求基线 §6）。
    后端 GET /api/v2/clusters 由另一 agent 并行实现；未就绪时 refreshClusters 抛错，
    调用方（ClusterSelector / K3s 页面）需 catch 并提供空列表 + 重试降级，不白屏。 */
+import {safeStorage} from '../safeStorage'
 import { computed, ref } from 'vue'
 import { api } from '../api'
 
 const clusters = ref([])
-const selectedClusterId = ref(localStorage.getItem('ops-cluster-v1') || '')
+const selectedClusterId = ref(safeStorage.getItem('ops-cluster-v1') || '')
 const loading = ref(false)
 let loaded = false
 let refreshController = null
@@ -28,7 +29,7 @@ async function refreshClusters(force = false) {
       loaded = true
       if (!clusters.value.some((cluster) => cluster.id === selectedClusterId.value)) {
         selectedClusterId.value = clusters.value[0]?.id || ''
-        if (selectedClusterId.value) localStorage.setItem('ops-cluster-v1', selectedClusterId.value)
+        if (selectedClusterId.value) safeStorage.setItem('ops-cluster-v1', selectedClusterId.value)
       }
       return clusters.value
     } catch (error) {
@@ -48,7 +49,7 @@ async function refreshClusters(force = false) {
 function selectCluster(id) {
   if (!clusters.value.some((cluster) => cluster.id === id)) return
   selectedClusterId.value = id
-  localStorage.setItem('ops-cluster-v1', id)
+  safeStorage.setItem('ops-cluster-v1', id)
 }
 
 export function useClusterContext() {

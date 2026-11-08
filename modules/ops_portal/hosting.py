@@ -1,9 +1,14 @@
 """Portal host transport. Upstreams and module permissions come from the core registry."""
 import re
+import json
+import asyncio
+import secrets
+import time
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import requests
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
@@ -11,6 +16,36 @@ CORE = 'http://backend:9091'
 WEB = 'http://web'
 LIFE = {'subscriptions', 'home-inventory', 'life-reminders'}
 KEY = re.compile(r'^[a-z0-9][a-z0-9-]{1,62}$')
+NATIVE = {item['key']: item for item in json.loads(Path(__file__).with_name('native_catalog.json').read_text(encoding='utf-8'))}
+SANDBOX = ['allow-scripts', 'allow-forms', 'allow-downloads', 'allow-modals']
+
+
+def native_info(key):
+    item = NATIVE[key]
+    return {'key': key, 'name': item['name'], 'version': '0.6.0', 'running': True,
+            'entry_url': f'/host/{key}/ui/', 'route': item['route'],
+            'manifest': {'api_prefixes': [], 'sandbox': SANDBOX}}
+
+
+def native_access(key, path, method):
+    item = NATIVE[key]
+    if any(segment in {'internal', 'auth'} for segment in path.split('/')):
+        return False
+    prefixes = ['/api/v2/' + p for p in item['prefixes']]
+    prefixes += [f'/modules/{p}/api/v1' for p in item.get('modules', [])]
+    if key == 'core-password':
+        prefixes.append('/modules/password-manager/status')
+    if any(path == p or path.startswith(p + '/') for p in prefixes):
+        return True
+    # Shared selectors and dashboards read summaries, never another module's write APIs.
+    if method != 'GET':
+        return False
+    if path in {'/modules/host-inventory/api/v1/hosts', '/api/v2/agents/version',
+                '/api/v2/modules', '/api/v2/metrics/hosts/overview',
+                '/modules/service-catalog/api/v1/services', '/modules/alerts/api/v1/events'}:
+        return True
+    return bool(re.fullmatch(r'/modules/[a-z0-9-]+/(?:api/v1/(?:summary|findings)|status)', path)
+                or path == '/modules/electricity/api/v1/overview')
 
 
 def safe_path(value):
@@ -78,8 +113,13 @@ class Relay(BaseModel):
 
 
 def install(app, root, current_user):
-    def access(request, key, path):
+    def access(request, key, path, method='GET'):
         token = request.headers.get('authorization', '').removeprefix('Bearer ')
+        path = safe_path(path)
+        if key in NATIVE:
+            if not native_access(key, path, method):
+                raise HTTPException(403, '模块无权访问该接口')
+            return token, path
         item = next((i for i in registry(token) if i['key'] == key), None)
         info = host_info(item) if item else None
         if not info:
@@ -101,30 +141,33 @@ def install(app, root, current_user):
     @app.get('/session/modules')
     def modules(request: Request, user=Depends(current_user)):
         token = request.headers['authorization'].removeprefix('Bearer ')
-        return {'items': [info for item in registry(token) if (info := host_info(item))]}
+        return {'items': [info for item in registry(token) if (info := host_info(item))]
+                + [native_info(key) for key in NATIVE]}
 
     @app.post('/session/relay')
     def relay(payload: Relay, request: Request, user=Depends(current_user)):
-        token, path = access(request, payload.module, payload.path)
         method = payload.method.upper()
         if method not in {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}:
             raise HTTPException(405, '不支持的请求方法')
+        token, path = access(request, payload.module, payload.path, method)
         headers = {'Idempotency-Key': payload.idempotency_key} if payload.idempotency_key else {}
         return result(upstream(method, WEB, path, token, params=payload.query,
                                **({'json': payload.body} if method != 'GET' else {}), headers=headers))
 
     @app.post('/session/upload/{key}')
     async def upload(key: str, request: Request, user=Depends(current_user)):
-        token, path = access(request, key, request.query_params.get('path', ''))
-        if key not in LIFE or not re.fullmatch(rf'/modules/{key}/api/v1/(items|tasks)/[a-zA-Z0-9-]+/attachments', path):
+        token, path = access(request, key, request.query_params.get('path', ''), 'POST')
+        terminal = key in {'core-hosts', 'core-terminal'} and re.fullmatch(r'/api/v2/terminal/sessions/[a-zA-Z0-9-]+/files/upload', path)
+        if not terminal and (key not in LIFE or not re.fullmatch(rf'/modules/{key}/api/v1/(items|tasks)/[a-zA-Z0-9-]+/attachments', path)):
             raise HTTPException(403, '模块无权上传到该接口')
-        if int(request.headers.get('content-length', '0')) > 6 * 1024 * 1024:
-            raise HTTPException(413, '附件不能超过5MiB')
+        limit = (65 if terminal else 6) * 1024 * 1024
+        if int(request.headers.get('content-length', '0')) > limit:
+            raise HTTPException(413, '上传文件过大')
         data = bytearray()
         async for chunk in request.stream():
             data.extend(chunk)
-            if len(data) > 6 * 1024 * 1024:
-                raise HTTPException(413, '附件不能超过5MiB')
+            if len(data) > limit:
+                raise HTTPException(413, '上传文件过大')
         content_type = request.headers.get('content-type', '')
         if not content_type.startswith('multipart/form-data;'):
             raise HTTPException(415, '需要附件表单')
@@ -133,11 +176,70 @@ def install(app, root, current_user):
             headers['Idempotency-Key'] = request.headers['idempotency-key'][:200]
         # Blocking upstream I/O runs in a worker, keeping the async upload endpoint responsive.
         from starlette.concurrency import run_in_threadpool
-        return result(await run_in_threadpool(upstream, 'POST', WEB, path, token, data=bytes(data), headers=headers))
+        params = {'path': request.query_params.get('directory', '')} if terminal else {}
+        return result(await run_in_threadpool(upstream, 'POST', WEB, path, token, params=params, data=bytes(data), headers=headers))
+
+    # Short-lived, single-use tickets keep the bearer token out of child documents and socket URLs.
+    tickets = {}
+
+    @app.post('/session/socket-ticket')
+    def socket_ticket(payload: Relay, request: Request, user=Depends(current_user)):
+        path = safe_path(payload.path)
+        if payload.module not in {'core-hosts', 'core-terminal'} or not re.fullmatch(r'/ws/terminal/[a-zA-Z0-9-]+', path):
+            raise HTTPException(403, '模块无权连接该终端')
+        for key, value in list(tickets.items()):
+            if value[0] < time.monotonic():
+                tickets.pop(key, None)
+        if len(tickets) >= 256:
+            raise HTTPException(429, '终端连接过多')
+        ticket = secrets.token_urlsafe(32)
+        tickets[ticket] = (time.monotonic() + 30, path, request.headers['authorization'].removeprefix('Bearer '))
+        return {'ticket': ticket}
+
+    @app.websocket('/session/socket/{ticket}')
+    async def socket(websocket: WebSocket, ticket: str):
+        from urllib.parse import urlencode
+        import websockets
+        value = tickets.pop(ticket, None)
+        if not value or value[0] < time.monotonic():
+            await websocket.close(code=4401)
+            return
+        await websocket.accept()
+        tasks = []
+        try:
+            async with websockets.connect(CORE.replace('http:', 'ws:') + value[1] + '?' + urlencode({'token': value[2]}), max_size=1024*1024) as target:
+                async def incoming():
+                    while True:
+                        await target.send(await websocket.receive_text())
+                async def outgoing():
+                    async for message in target:
+                        await websocket.send_text(message)
+                    await websocket.close(code=target.close_code if target.close_code not in {1005, 1006} else 1011)
+                tasks = [asyncio.create_task(incoming()), asyncio.create_task(outgoing())]
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+        except websockets.exceptions.ConnectionClosed as error:
+            try:
+                await websocket.close(code=error.code if error.code not in {1005, 1006} else 1011)
+            except RuntimeError:
+                pass
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            try:
+                await websocket.close(code=1011)
+            except RuntimeError:
+                pass
+        finally:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
 
     @app.get('/host/{key}/ui/', response_class=HTMLResponse)
     def page(key: str):
-        if key in LIFE:
+        if key in LIFE or key in NATIVE:
             css = (root / 'native/style.css').read_text(encoding='utf-8')
             js = (root / 'native/app.js').read_text(encoding='utf-8')
             return '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>' + css + '\n.portal-native{padding:16px}.portal-notice{position:fixed;bottom:24px;left:30%;background:#18334b;color:white;padding:12px 24px;border-radius:8px;z-index:9999}</style><div id="app"></div><script>' + js.replace('</script', '<\\/script') + '</script></html>'

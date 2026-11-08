@@ -23,6 +23,7 @@ test('unavailable response keeps the last host list, selection and persisted cac
   const code = (await readFile(new URL('../src/hostContext.js', import.meta.url), 'utf8'))
     .replace("import { computed, ref } from 'vue'", 'const ref = value => ({value}); const computed = fn => ({get value(){return fn()}})')
     .replace("import { api } from './api'", 'const api = globalThis.auditApi')
+    .replace("from './safeStorage'", `from '${new URL('../src/safeStorage.js', import.meta.url).href}'`)
   const { useHostContext } = await import(`data:text/javascript,${encodeURIComponent(code)}`)
   const state = useHostContext()
   await state.refreshHosts(true)

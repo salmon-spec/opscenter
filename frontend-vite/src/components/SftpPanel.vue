@@ -127,13 +127,8 @@ async function onUpload(e) {
   const files = Array.from(e.target.files || [])
   if (!files.length) return
   for (const f of files) {
-    const form = new FormData()
-    form.append('file', f)
     try {
-      await fetch(`/api/v2/terminal/sessions/${props.sessionId}/files/upload?path=${encodeURIComponent(cwd.value)}`, {
-        method: 'POST',
-        body: form,
-      })
+      await api.upload(`/terminal/sessions/${props.sessionId}/files/upload`,f,{query:{path:cwd.value}})
       toast(`已上传 ${f.name}`, 'ok')
     } catch (err) {
       toast(`上传失败 ${f.name}: ${err.message}`, 'err')
@@ -143,8 +138,11 @@ async function onUpload(e) {
   load()
 }
 
-function download(item) {
-  window.open(`/api/v2/terminal/sessions/${props.sessionId}/files/download?path=${encodeURIComponent(item.path)}`, '_blank')
+async function download(item) {
+  try {
+    const blob=await api.download(`/terminal/sessions/${props.sessionId}/files/download`,{path:item.path})
+    const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=item.name;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000)
+  } catch(error) { toast(`下载失败: ${error.message}`,'err') }
 }
 
 async function mkdir() {

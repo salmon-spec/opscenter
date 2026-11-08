@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from runtime.app import create_module_app
 from runtime.auth import SessionVerifier
 
-VERSION = '0.5.1'
+VERSION = '0.6.0'
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv('PORTAL_DB_PATH', '/data/portal.sqlite3'))
 PORTAL_URL = os.getenv('PORTAL_PUBLIC_URL', 'http://10.66.66.13:30092/').rstrip('/') + '/'

@@ -1,3 +1,4 @@
+import {safeStorage} from './safeStorage'
 import { computed, ref } from 'vue'
 import { api } from './api'
 
@@ -6,7 +7,7 @@ const HOST_CACHE_MAX_AGE = 10 * 60 * 1000
 
 function readHostCache() {
   try {
-    const cached = JSON.parse(localStorage.getItem(HOST_CACHE_KEY) || 'null')
+    const cached = JSON.parse(safeStorage.getItem(HOST_CACHE_KEY) || 'null')
     if (!cached?.items || !Array.isArray(cached.items)) return []
     if (Date.now() - Number(cached.time || 0) > HOST_CACHE_MAX_AGE) return []
     return cached.items
@@ -16,7 +17,7 @@ function readHostCache() {
 }
 
 const hosts = ref(readHostCache())
-const selectedHostId = ref(localStorage.getItem('ops-global-host') || '')
+const selectedHostId = ref(safeStorage.getItem('ops-global-host') || '')
 const loading = ref(false)
 const refreshError = ref('')
 const lastSuccessAt = ref(0)
@@ -47,8 +48,8 @@ async function refreshHosts(force = false) {
         || hosts.value.find((host) => host.status === 'online')
         || hosts.value[0]
       selectedHostId.value = selected?.id || ''
-      if (selectedHostId.value) localStorage.setItem('ops-global-host', selectedHostId.value)
-      localStorage.setItem(HOST_CACHE_KEY, JSON.stringify({ items: hosts.value, time: Date.now() }))
+      if (selectedHostId.value) safeStorage.setItem('ops-global-host', selectedHostId.value)
+      safeStorage.setItem(HOST_CACHE_KEY, JSON.stringify({ items: hosts.value, time: Date.now() }))
       loaded = true
       return hosts.value
     } catch (error) {
@@ -69,7 +70,7 @@ async function refreshHosts(force = false) {
 function selectHost(id) {
   if (!hosts.value.some((host) => host.id === id)) return
   selectedHostId.value = id
-  localStorage.setItem('ops-global-host', id)
+  safeStorage.setItem('ops-global-host', id)
 }
 
 export function useHostContext() {

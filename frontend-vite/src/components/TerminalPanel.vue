@@ -32,7 +32,7 @@
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { wsUrl } from '../api'
+import { createWebSocket } from '../api'
 import SftpPanel from './SftpPanel.vue'
 
 const props = defineProps({
@@ -89,7 +89,7 @@ function connect() {
   term.onResize(({ cols, rows }) => send({ type: 'resize', cols, rows }))
   }
 
-  ws = new WebSocket(wsUrl(`/ws/terminal/${props.sessionId}`))
+  ws = createWebSocket(`/ws/terminal/${props.sessionId}`)
   ws.onopen = () => { wsState.value = 'open'; emit('state', 'connected') }
   ws.onmessage = (e) => term.write(String(e.data))
   ws.onclose = (ev) => {

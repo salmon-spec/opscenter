@@ -3,6 +3,6 @@ import vue from '@vitejs/plugin-vue'
 import {fileURLToPath} from 'node:url'
 export default defineConfig({
  define:{'process.env.NODE_ENV':JSON.stringify('production')},
- plugins:[{name:'portal-api',enforce:'pre',resolveId(source,importer){if(source==='../api'&&importer?.includes('/src/views/'))return fileURLToPath(new URL('./src/portal-api.js',import.meta.url));}},vue()],
+ plugins:[{name:'portal-api',enforce:'pre',resolveId(source,importer){if(/^\.{1,2}\/.*api(?:\.js)?$/.test(source)&&importer?.includes('/src/')&&!importer.endsWith('/portal-api.js'))return fileURLToPath(new URL('./src/portal-api.js',import.meta.url));}},vue()],
  build:{outDir:'dist-portal',emptyOutDir:true,cssCodeSplit:false,lib:{entry:'src/portal-life.js',name:'PortalLife',formats:['iife'],fileName:()=> 'app.js'},rollupOptions:{output:{inlineDynamicImports:true}}},
 });

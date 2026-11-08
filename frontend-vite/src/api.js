@@ -4,7 +4,7 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 const TOKEN_KEY = 'ops-access-token'
 
 // Module lifecycle belongs to the core registry; business APIs keep their gateway paths.
-const apiUrl = (path) => API_BASE + (path.startsWith('/modules/') && !/^\/modules\/[^/]+(?:\/(?:start|stop|health))?$/.test(path) ? path : '/api/v2' + path)
+export const apiUrl = (path) => API_BASE + (path.startsWith('/modules/') && !/^\/modules\/[^/]+(?:\/(?:start|stop|health))?$/.test(path) ? path : '/api/v2' + path)
 
 export const getAccessToken = () => localStorage.getItem(TOKEN_KEY) || ''
 export const setAccessToken = (token) => localStorage.setItem(TOKEN_KEY, token || '')
@@ -121,7 +121,8 @@ async function uploadFile(path, file, options = {}) {
   const body = new FormData(); body.append('file', file)
   const headers = { Authorization: 'Bearer ' + getAccessToken() }
   if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey
-  const response = await fetch(apiUrl(path), { method: 'POST', headers, body })
+  const query = new URLSearchParams(options.query || {}).toString()
+  const response = await fetch(apiUrl(path) + (query ? '?' + query : ''), { method: 'POST', headers, body })
   const data = await response.json()
   if (!response.ok) { const error = new Error(data.detail || '上传失败'); error.status = response.status; throw error }
   return data
@@ -178,3 +179,5 @@ export function fmtTime(iso) {
   const pad = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
+
+export const createWebSocket = path => new WebSocket(wsUrl(path))

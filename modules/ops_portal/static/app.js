@@ -72,7 +72,7 @@ function openApp(id,override){const app=override||apps().find(a=>a.id===id);if(!
  if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.get(app.module_key);frame.title=app.name;frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);if(module)moduleHost.attach(item);frame.src=module?module.entry_url:app.url;$('#frames').append(frame);}
  active=id;recent=[id,...recent.filter(r=>r!==id)].slice(0,20);save();render();
 }
-function closeTab(id){const item=opened.get(id);if(!item)return;item.frame.remove();opened.delete(id);if(active===id)active=[...opened.keys()].at(-1)||null;renderWorkspace();}
+function closeTab(id){const item=opened.get(id);if(!item)return;moduleHost.detach(item);item.frame.remove();opened.delete(id);if(active===id)active=[...opened.keys()].at(-1)||null;renderWorkspace();}
 function showDetails(id){const app=apps().find(a=>a.id===id);if(!app)return;
  const fields=[['应用',app.name],['地址',app.url],['内嵌状态',state(app)],['HTTP 状态',app.code||app.error||'未检查'],['核查时间',app.checked_at?new Date(app.checked_at).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):'未检查'],['嵌入响应头',app.x_frame_options||app.csp||'未检出限制，仍需实测'],['其他入口',(app.aliases||[]).join('\n')||'无']];
  $('#detail-content').innerHTML=`<dl>${fields.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl><label class="hint"><input type="checkbox" id="verify-check"> 我已在门户内验证页面显示、登录及主要操作</label>`;
