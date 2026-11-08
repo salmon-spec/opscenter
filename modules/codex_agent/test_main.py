@@ -35,6 +35,7 @@ def env(tmp_path,monkeypatch):
     main.server.approvals.clear();main.server.events.clear()
     main.server.active_turns.clear()
     main.server.active_calls.clear()
+    main.server.loaded_threads.clear()
     def token(role='admin'):
         return {'Authorization':'Bearer '+jwt.encode({'sub':'1','username':'admin','role':role,'exp':time.time()+300,'iss':'opscenter','aud':'opscenter-modules'},key,algorithm='EdDSA')}
     return TestClient(main.app),token,calls
@@ -118,3 +119,26 @@ def test_live_turn_state_overrides_unfinished_persisted_placeholder(env,monkeypa
     monkeypatch.setattr(main.server,'request',lambda *a,**k:{'thread':{'id':ident,'turns':[{'id':'turn_live','status':'interrupted','items':[]}]}})
     data=client.get('/api/v1/threads/'+ident,headers=token()).json()
     assert data['running_turn_id']=='turn_live' and data['thread']['turns'][0]['status']=='inProgress'
+
+
+def test_reads_do_not_wait_for_database_writer(env):
+    client,token,calls=env
+    client.get('/api/v1/threads',headers=token())
+    import sqlite3
+    db=sqlite3.connect(main.STATE/'gateway.sqlite')
+    try:
+        db.execute('begin immediate')
+        db.execute("insert into audit(action) values('held-write')")
+        for path in ['/threads','/events','/workspaces']:
+            before=time.monotonic()
+            assert client.get('/api/v1'+path,headers=token()).status_code==200
+            assert time.monotonic()-before<1
+    finally: db.rollback();db.close()
+
+
+def test_loaded_thread_sends_without_resuming_each_turn(env):
+    client,token,calls=env;ident=create(client,token)
+    main.server.loaded_threads.add(ident)
+    calls.clear()
+    assert client.post('/api/v1/threads/'+ident+'/prompt',headers=token(),json={'text':'hello','model':'x'}).status_code==200
+    assert [m for m,p in calls]==['turn/start']

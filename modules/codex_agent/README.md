@@ -1,4 +1,4 @@
-# Codex 工作台模块 0.1.1
+# Codex 工作台模块 0.2.0
 
 独立模块 `codex-agent`，使用官方 `@openai/codex` 0.166.0 的 app-server stdio 协议。网关复用工作台 JWT 管理员鉴权和沙箱 iframe 消息桥，前端不持有工作台 Token 或模型密钥。通过模块注册 API 加入侧栏，无需修改核心应用源码。
 
@@ -28,3 +28,7 @@
 节点前置：在固定的 Worker 2 上加载本目录 `apparmor.profile` 为 `/etc/apparmor.d/opscenter-codex-userns`。它只为新模块授权原生 user namespace，避免 Ubuntu 自动切入受限 profile；未修改全局 sysctl。Pod 仍为 UID10001、capabilities=ALL drop、禁止提权、无宿主挂载/ServiceAccount令牌。部署使用 Localhost AppArmor profile，迁移节点时须先加载该 profile。
 
 验收边界：默认沿用原 Agent 的 Agnes 2.5 Flash；官方 Codex 负责执行循环。该第三方模型的原生 freeform apply_patch 能力未列为通过项，文件创建、编辑和校验已通过原生终端实测。
+
+## 0.2.0 发送与界面
+
+消息在点击发送时立即显示；创建会话与提交在后台继续，失败恢复输入。已有原生会话复用加载状态，重启后首次续聊恢复；轮询读请求不再初始化写库。上游HTTP连接复用，执行时150ms检查事件、空闲降低频率、隐藏页面暂停轮询。界面采用窄侧栏、居中对话、底部输入框及可折叠工具面板。首次会话建立和模型首字仍受执行引擎及API耗时影响。

@@ -19,6 +19,7 @@ class AppServer:
         self.approvals = {}
         self.active_turns = {}
         self.active_calls = {}
+        self.loaded_threads = set()
         self.events = collections.deque(maxlen=1500)
         self.cursor = 0
         self.sequence = 0
@@ -38,6 +39,7 @@ class AppServer:
             self.approvals.clear()
             self.active_turns.clear()
             self.active_calls.clear()
+            self.loaded_threads.clear()
             env = os.environ.copy()
             home = Path(env.get('CODEX_HOME', '/state/codex'))
             home.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -59,7 +61,7 @@ class AppServer:
                                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                                             env=env, bufsize=1)
             threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
-            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.1.1'}}, start=False)
+            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.2.0'}}, start=False)
             self.send({'method':'initialized', 'params':{}})
             self.initialized = True
 
@@ -89,7 +91,13 @@ class AppServer:
                 # Protocol errors have no submitted request body or credentials.
                 message = str(result['error'].get('message', 'Codex 请求失败'))[:1200]
                 raise HTTPException(502, message)
-            return result.get('result', {})
+            value = result.get('result', {})
+            with self.lock:
+                if method in {'thread/start','thread/resume'}:
+                    self.loaded_threads.add(value['thread']['id'])
+                elif method=='thread/archive':
+                    self.loaded_threads.discard(params['threadId'])
+            return value
         finally:
             with self.lock:
                 self.pending.pop(ident, None)
@@ -121,6 +129,8 @@ class AppServer:
                                 self.approvals.pop(key, None)
                     if method == 'turn/started':
                         self.active_turns[params['threadId']]=params['turn']['id']
+                    if method == 'thread/closed':
+                        self.loaded_threads.discard(params.get('threadId'))
                     if method=='item/started' and params.get('item',{}).get('type')=='commandExecution':
                         self.active_calls.setdefault((params.get('threadId'),params.get('turnId')),set()).add(params['item']['id'])
                     if method.startswith(('item/', 'turn/', 'thread/', 'error', 'account/', 'serverRequest/')):

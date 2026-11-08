@@ -13,7 +13,7 @@ import sys
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +31,7 @@ from runtime.auth import SessionVerifier
 from rpc import server
 from provider import flatten, restore_event, restore_response, has_image, chat_request, chat_events
 
-VERSION = '0.1.1'
+VERSION = '0.2.0'
 ROOT = Path(os.getenv('CODEX_WORKSPACE', '/workspace'))
 STATE = Path(os.getenv('CODEX_GATEWAY_DATA', '/state/gateway'))
 workspace = ContextVar('workspace', default='default')
@@ -39,6 +39,9 @@ mutation = threading.RLock()
 RASTER = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 provider_models = (0, [])
 models_lock = threading.Lock()
+database_lock = threading.Lock()
+initialized_databases = set()
+provider_client = httpx.AsyncClient(trust_env=False,timeout=httpx.Timeout(20,read=180))
 # ponytail: one inference stream per saved key; raise only when upstream concurrency permits.
 inference_gate = asyncio.Semaphore(1)
 provider_last_error = None
@@ -50,11 +53,15 @@ def database():
     db = sqlite3.connect(STATE/'gateway.sqlite', timeout=10)
     db.row_factory = sqlite3.Row
     try:
-        db.execute('pragma journal_mode=WAL')
-        db.execute('create table if not exists workspaces(id text primary key,title text not null)')
-        db.execute("insert or ignore into workspaces values('default','默认工作区')")
-        db.execute('create table if not exists threads(id text primary key,workspace text,title text,archived integer default 0)')
-        db.execute('create table if not exists audit(id integer primary key,action text,target text,created_at text)')
+        with database_lock:
+            if STATE not in initialized_databases:
+                db.execute('pragma journal_mode=WAL')
+                db.execute('create table if not exists workspaces(id text primary key,title text not null)')
+                db.execute("insert or ignore into workspaces values('default','默认工作区')")
+                db.execute('create table if not exists threads(id text primary key,workspace text,title text,archived integer default 0)')
+                db.execute('create table if not exists audit(id integer primary key,action text,target text,created_at text)')
+                db.commit()
+                initialized_databases.add(STATE)
         yield db
         db.commit()
     finally:
@@ -103,6 +110,15 @@ def summary():
 app = create_module_app('codex-agent', VERSION, summary, lambda:{'status':'ok','items':[]}, readiness_provider=health)
 
 
+@asynccontextmanager
+async def lifespan(app):
+    try: yield
+    finally: await provider_client.aclose()
+
+
+app.router.lifespan_context = lifespan
+
+
 @app.post('/provider/v1/responses')
 async def provider_responses(request:Request):
     global provider_last_error
@@ -116,7 +132,7 @@ async def provider_responses(request:Request):
     if len(raw)>32*1024*1024:raise HTTPException(413,'Request too large')
     try:body,mapping=flatten(json.loads(raw))
     except (ValueError,KeyError,TypeError):raise HTTPException(422,'Invalid Responses request') from None
-    client=httpx.AsyncClient(trust_env=False,timeout=httpx.Timeout(20,read=180))
+    client=provider_client
     image_compat=has_image(body)
     payload=chat_request(body) if image_compat else body
     await inference_gate.acquire()
@@ -128,17 +144,17 @@ async def provider_responses(request:Request):
             await upstream.aclose()
             await asyncio.sleep(2**(attempt+1))
     except httpx.HTTPError:
-        inference_gate.release();await client.aclose();raise HTTPException(502,'Model provider unavailable') from None
+        inference_gate.release();raise HTTPException(502,'Model provider unavailable') from None
     except BaseException:
-        inference_gate.release();await client.aclose();raise
+        inference_gate.release();raise
     if upstream.status_code!=200:
         content=(await upstream.aread())[:4000].decode(errors='replace').replace(key,'[redacted]')
         provider_last_error={'status':upstream.status_code,'message':content[:1200]}
-        status=upstream.status_code;await upstream.aclose();await client.aclose();inference_gate.release()
+        status=upstream.status_code;await upstream.aclose();inference_gate.release()
         return JSONResponse({'error':{'message':content}},status_code=status)
     if not body.get('stream'):
         try:return restore_response(json.loads(await upstream.aread()),mapping)
-        finally:await upstream.aclose();await client.aclose();inference_gate.release()
+        finally:await upstream.aclose();inference_gate.release()
     async def stream():
         custom_ids=set()
         try:
@@ -155,7 +171,7 @@ async def provider_responses(request:Request):
                 except ValueError:continue
                 if event is not None:yield 'event: '+event.get('type','message')+'\ndata: '+json.dumps(event,ensure_ascii=False)+'\n\n'
         finally:
-            await upstream.aclose();await client.aclose();inference_gate.release()
+            await upstream.aclose();inference_gate.release()
     return StreamingResponse(stream(),media_type='text/event-stream',headers={'Cache-Control':'no-store'})
 
 
@@ -346,7 +362,10 @@ def thread_edit(ident:str,body:ThreadEdit):
 def prompt(ident:str,body:Prompt):
     own(ident)
     with mutation:
-        server.request('thread/resume',{'threadId':ident,'cwd':str(directory()),'excludeTurns':True})
+        server.start()
+        with server.lock: loaded=ident in server.loaded_threads
+        if not loaded:
+            server.request('thread/resume',{'threadId':ident,'cwd':str(directory()),'excludeTurns':True})
         inputs = [{'type':'text','text':body.text}]
         for value in body.attachments:
             path = file_path(value)
