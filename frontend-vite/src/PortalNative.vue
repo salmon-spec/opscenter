@@ -1,5 +1,5 @@
 <template>
- <main class="portal-native">
+ <main class="portal-native" :class="{'native-terminal':route.name==='SystemTerminal'}">
   <div v-if="hostRequired || clusterRequired" class="native-context">
    <label v-if="hostRequired">目标主机 <select :value="selectedHostId" aria-label="选择目标主机" @change="selectHost($event.target.value)"><option v-if="!hosts.length" value="">暂无主机</option><option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }} · {{ host.lan_ip || host.host }}</option></select></label>
    <ClusterSelector v-if="clusterRequired" />
@@ -29,4 +29,6 @@ onBeforeUnmount(()=>{window.removeEventListener('ops-toast',toast);clearTimeout(
 </script>
 <style>
 html,body,#app{min-height:100%;margin:0}.portal-native{padding:12px;min-width:0}.native-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:12px}.native-context label{display:flex;align-items:center;gap:8px}.native-context select{max-width:min(400px,65vw);padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)}.native-sections{display:flex;gap:4px;overflow:auto;border-bottom:1px solid var(--border);margin-bottom:12px}.native-sections a{white-space:nowrap;padding:8px 14px;text-decoration:none;color:var(--muted);font-size:12px}.native-sections .router-link-active{color:var(--primary);border-bottom:2px solid var(--primary)}.portal-notice{position:fixed;bottom:24px;left:15%;max-width:70%;background:#18334b;color:white;padding:12px 24px;border-radius:8px;z-index:9999}
+
+.portal-native.native-terminal{height:100dvh;box-sizing:border-box;display:flex;flex-direction:column}.portal-native .terminal-page{display:flex;flex-direction:column;flex:1;min-height:0}.portal-native .terminal-page .terminal-sidebar{flex-direction:row;flex:none;gap:14px;align-items:flex-start;border-right:0;border-bottom:1px solid var(--border);padding:0 8px 8px}.portal-native .terminal-sidebar .hosts-section{width:230px;max-width:45%;padding:4px 0 0}.portal-native .terminal-sidebar .sessions-section{padding:4px 0 0;min-width:0}.portal-native .terminal-sidebar .session-list{flex-direction:row;overflow:auto}.portal-native .terminal-sidebar .session-item{flex:none;min-width:120px;max-width:220px}.portal-native .terminal-sidebar .sidebar-footnote{display:none}.portal-native .terminal-page .terminal-main{flex:1}.portal-native .db-view .layout{grid-template-columns:minmax(0,1fr)}.portal-native .db-view .instances{display:flex;align-items:center;gap:8px;overflow:auto}.portal-native .db-view .instance-head{flex:none;gap:8px}.portal-native .db-view .instance{flex:none;min-width:180px;width:auto}
 </style>
