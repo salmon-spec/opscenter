@@ -26,8 +26,8 @@ let timer
 function toast(e){notice.value=e.detail.msg;clearTimeout(timer);timer=setTimeout(()=>notice.value='',5000)}
 function openExternal(event){const link=event.target.closest?.('a[target="_blank"]');if(!link||event.defaultPrevented)return;const url=new URL(link.href);if(['http:','https:'].includes(url.protocol)&&url.origin!==location.origin){event.preventDefault();openPortalApp(url.href)}}
 async function loadHosts(){error.value='';try{await refreshHosts(true)}catch(e){error.value=e.message}}
-onMounted(()=>{window.addEventListener('ops-toast',toast);document.addEventListener('click',openExternal);if(hostRequired.value)loadHosts()})
-onBeforeUnmount(()=>{window.removeEventListener('ops-toast',toast);document.removeEventListener('click',openExternal);clearTimeout(timer)})
+onMounted(()=>{window.addEventListener('ops-toast',toast);document.addEventListener('click',openExternal,true);if(hostRequired.value)loadHosts()})
+onBeforeUnmount(()=>{window.removeEventListener('ops-toast',toast);document.removeEventListener('click',openExternal,true);clearTimeout(timer)})
 </script>
 <style>
 html,body,#app{min-height:100%;margin:0}.portal-native{padding:12px;min-width:0}.native-context{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;font-size:12px}.native-context label{display:flex;align-items:center;gap:8px}.native-context select{max-width:min(400px,65vw);padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text)}.native-sections{display:flex;gap:4px;overflow:auto;border-bottom:1px solid var(--border);margin-bottom:12px}.native-sections a{white-space:nowrap;padding:8px 14px;text-decoration:none;color:var(--muted);font-size:12px}.native-sections .router-link-active{color:var(--primary);border-bottom:2px solid var(--primary)}.portal-notice{position:fixed;bottom:24px;left:15%;max-width:70%;background:#18334b;color:white;padding:12px 24px;border-radius:8px;z-index:9999}
