@@ -15,6 +15,24 @@
     }
 }
 
+:8087 {
+    header +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"
+    handle / {
+        header Content-Type "text/html; charset=utf-8"
+        respond "<!doctype html><html lang='zh-CN'><meta charset='utf-8'><title>Nacos</title><style>html,body,iframe{width:100%;height:100%;margin:0;border:0;display:block}</style><iframe title='Nacos 应用'></iframe><script src='/portal-shell.js'></script></html>" 200
+    }
+    handle /portal-shell.js {
+        header Content-Type "application/javascript"
+        respond "fetch('/nacos/',{credentials:'same-origin'}).then(r=>{if(!r.ok)throw Error('Nacos 页面读取失败');return r.text()}).then(html=>{document.querySelector('iframe').srcdoc='<meta http-equiv=\"Content-Security-Policy\" content=\"script-src &#39;self&#39;\"><base href=\"/nacos/\">'+html}).catch(e=>{document.body.textContent=e.message})" 200
+    }
+    handle /nacos/* {
+        reverse_proxy http://10.66.66.13:8848
+    }
+    handle {
+        respond 404
+    }
+}
+
 :8081 {
     header {
         +Content-Security-Policy "frame-ancestors 'self' http://10.66.66.13:30092"

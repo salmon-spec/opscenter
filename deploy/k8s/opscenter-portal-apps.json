@@ -77,6 +77,10 @@
                   {
                     "name": "minio",
                     "containerPort": 8086
+                  },
+                  {
+                    "name": "nacos",
+                    "containerPort": 8087
                   }
                 ],
                 "resources": {
@@ -191,6 +195,12 @@
             "port": 8086,
             "targetPort": 8086,
             "nodePort": 30098
+          },
+          {
+            "name": "nacos",
+            "port": 8087,
+            "targetPort": 8087,
+            "nodePort": 30099
           }
         ]
       }
@@ -248,6 +258,10 @@
               },
               {
                 "port": 8086,
+                "protocol": "TCP"
+              },
+              {
+                "port": 8087,
                 "protocol": "TCP"
               }
             ]

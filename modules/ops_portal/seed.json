@@ -231,7 +231,7 @@
     {
       "id": "nacos",
       "name": "Nacos",
-      "url": "http://10.66.66.13:8848/nacos/",
+      "url": "http://10.66.66.13:30099/",
       "category": "中间件",
       "description": "服务注册与配置中心",
       "code": 200,
@@ -242,10 +242,13 @@
       "html": true,
       "title": "Nacos",
       "status": "reachable",
-      "embedding": "unverified",
+      "embedding": "adapted",
       "error": "",
       "checked_at": "2026-11-05T02:52:38.676933+00:00",
-      "enabled": true
+      "enabled": true,
+      "aliases": [
+        "http://10.66.66.13:8848/nacos/"
+      ]
     },
     {
       "id": "pve",
