@@ -709,19 +709,6 @@
       "status": "unverified",
       "embedding": "adapted",
       "aliases": []
-    },
-    {
-      "id": "core-password",
-      "name": "密码管理",
-      "description": "密码管理与运维操作",
-      "url": "http://10.66.66.13:30092/host/core-password/ui/",
-      "module_key": "core-password",
-      "category": "运维管理",
-      "domain": "运维场景",
-      "enabled": true,
-      "status": "unverified",
-      "embedding": "adapted",
-      "aliases": []
     }
   ],
   "default_favorites": [

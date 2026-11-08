@@ -33,8 +33,6 @@ def native_access(key, path, method):
         return False
     prefixes = ['/api/v2/' + p for p in item['prefixes']]
     prefixes += [f'/modules/{p}/api/v1' for p in item.get('modules', [])]
-    if key == 'core-password':
-        prefixes.append('/modules/password-manager/status')
     if any(path == p or path.startswith(p + '/') for p in prefixes):
         return True
     # Shared selectors and dashboards read summaries, never another module's write APIs.

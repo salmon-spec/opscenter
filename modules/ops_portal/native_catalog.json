@@ -1,18 +1,142 @@
 [
- {"key":"core-overview","name":"值班首页","route":"/","prefixes":[]},
- {"key":"core-hosts","name":"主机管理","route":"/hosts","prefixes":["servers","agents","terminal","metrics"],"modules":["host-inventory","host-monitor"]},
- {"key":"core-kubernetes","name":"容器管理","route":"/kubernetes/overview","prefixes":["clusters"],"modules":["k3s"]},
- {"key":"core-logs","name":"日志中心","route":"/logs","prefixes":["logs"],"modules":["logs"]},
- {"key":"core-monitor","name":"系统监控","route":"/system/monitor","prefixes":["servers","agents","metrics"],"modules":["host-monitor"]},
- {"key":"core-alerts","name":"告警中心","route":"/alerts","prefixes":[],"modules":["alerts"]},
- {"key":"core-screen","name":"监控大屏","route":"/screen","prefixes":["screen-boards"]},
- {"key":"core-services","name":"服务广场","route":"/services","prefixes":[],"modules":["service-catalog"]},
- {"key":"core-database","name":"数据库","route":"/database","prefixes":["servers","databases"]},
- {"key":"core-files","name":"文件管理","route":"/system/files","prefixes":["servers"]},
- {"key":"core-firewall","name":"防火墙","route":"/system/firewall","prefixes":["servers"]},
- {"key":"core-ssh","name":"SSH 管理","route":"/system/ssh","prefixes":["servers"]},
- {"key":"core-terminal","name":"终端","route":"/system/terminal","prefixes":["terminal","servers"]},
- {"key":"core-processes","name":"进程管理","route":"/system/processes","prefixes":["servers"]},
- {"key":"core-modules","name":"模块管理","route":"/modules","prefixes":["modules"]},
- {"key":"core-password","name":"密码管理","route":"/extensions/password-manager","prefixes":[],"modules":["password-manager"]}
+  {
+    "key": "core-overview",
+    "name": "值班首页",
+    "route": "/",
+    "prefixes": []
+  },
+  {
+    "key": "core-hosts",
+    "name": "主机管理",
+    "route": "/hosts",
+    "prefixes": [
+      "servers",
+      "agents",
+      "terminal",
+      "metrics"
+    ],
+    "modules": [
+      "host-inventory",
+      "host-monitor"
+    ]
+  },
+  {
+    "key": "core-kubernetes",
+    "name": "容器管理",
+    "route": "/kubernetes/overview",
+    "prefixes": [
+      "clusters"
+    ],
+    "modules": [
+      "k3s"
+    ]
+  },
+  {
+    "key": "core-logs",
+    "name": "日志中心",
+    "route": "/logs",
+    "prefixes": [
+      "logs"
+    ],
+    "modules": [
+      "logs"
+    ]
+  },
+  {
+    "key": "core-monitor",
+    "name": "系统监控",
+    "route": "/system/monitor",
+    "prefixes": [
+      "servers",
+      "agents",
+      "metrics"
+    ],
+    "modules": [
+      "host-monitor"
+    ]
+  },
+  {
+    "key": "core-alerts",
+    "name": "告警中心",
+    "route": "/alerts",
+    "prefixes": [],
+    "modules": [
+      "alerts"
+    ]
+  },
+  {
+    "key": "core-screen",
+    "name": "监控大屏",
+    "route": "/screen",
+    "prefixes": [
+      "screen-boards"
+    ]
+  },
+  {
+    "key": "core-services",
+    "name": "服务广场",
+    "route": "/services",
+    "prefixes": [],
+    "modules": [
+      "service-catalog"
+    ]
+  },
+  {
+    "key": "core-database",
+    "name": "数据库",
+    "route": "/database",
+    "prefixes": [
+      "servers",
+      "databases"
+    ]
+  },
+  {
+    "key": "core-files",
+    "name": "文件管理",
+    "route": "/system/files",
+    "prefixes": [
+      "servers"
+    ]
+  },
+  {
+    "key": "core-firewall",
+    "name": "防火墙",
+    "route": "/system/firewall",
+    "prefixes": [
+      "servers"
+    ]
+  },
+  {
+    "key": "core-ssh",
+    "name": "SSH 管理",
+    "route": "/system/ssh",
+    "prefixes": [
+      "servers"
+    ]
+  },
+  {
+    "key": "core-terminal",
+    "name": "终端",
+    "route": "/system/terminal",
+    "prefixes": [
+      "terminal",
+      "servers"
+    ]
+  },
+  {
+    "key": "core-processes",
+    "name": "进程管理",
+    "route": "/system/processes",
+    "prefixes": [
+      "servers"
+    ]
+  },
+  {
+    "key": "core-modules",
+    "name": "模块管理",
+    "route": "/modules",
+    "prefixes": [
+      "modules"
+    ]
+  }
 ]

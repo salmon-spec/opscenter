@@ -23,7 +23,7 @@ try {saved=JSON.parse(localStorage.getItem(storageKey)||'{}');} catch {}
 let favorites=new Set(Array.isArray(saved.favorites)?saved.favorites:[]), recent=Array.isArray(saved.recent)?saved.recent:[];
 let verified=saved.verified && typeof saved.verified==='object'?saved.verified:{}, section='all', category='平台支撑', active=null;
 const opened=new Map(); let base=[], snapshot={}, modules=new Map();
-const moduleHost=createModuleHost({token:()=>sessionToken,frames:opened,expired:logout,openModule:key=>{const app=apps().find(a=>a.module_key===key);if(app)openApp(app.id);}});
+const moduleHost=createModuleHost({token:()=>sessionToken,frames:opened,expired:logout,openModule:key=>{const app=apps().find(a=>a.module_key===key||(key==='password-manager'&&/Vaultwarden/.test(a.name)));if(app)openApp(app.id);}});
 function validateApp(app) {
  if (!app || typeof app.name!=='string' || !app.name.trim() || app.name.length>80) throw Error('请填写有效的应用名称');
  const url=new URL(app.url);
