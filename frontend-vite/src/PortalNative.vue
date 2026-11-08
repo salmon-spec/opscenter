@@ -18,7 +18,7 @@ import ClusterSelector from './components/workbench/ClusterSelector.vue'
 import {routes} from './routes'
 const route=useRoute(), notice=ref(''),error=ref('')
 const {hosts,selectedHostId,selectHost,refreshHosts}=useHostContext()
-const hostRequired=computed(()=>route.meta.hostScope==='required')
+const hostRequired=computed(()=>route.meta.hostScope==='required'||route.name==='LogCenter')
 const clusterRequired=computed(()=>route.meta.clusterScope==='required')
 const clusterPages=routes.filter(r=>r.path.startsWith('/kubernetes/'))
 let timer
