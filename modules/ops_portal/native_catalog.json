@@ -29,6 +29,14 @@
     ],
     "modules": [
       "k3s"
+    ],
+    "routes": [
+      "/kubernetes/overview",
+      "/kubernetes/workloads",
+      "/kubernetes/pods",
+      "/kubernetes/network",
+      "/kubernetes/storage",
+      "/kubernetes/operations"
     ]
   },
   {
@@ -44,15 +52,26 @@
   },
   {
     "key": "core-monitor",
-    "name": "系统监控",
+    "name": "系统应用",
     "route": "/system/monitor",
     "prefixes": [
       "servers",
       "agents",
-      "metrics"
+      "metrics",
+      "terminal",
+      "databases"
     ],
     "modules": [
       "host-monitor"
+    ],
+    "routes": [
+      "/system/monitor",
+      "/system/files",
+      "/system/processes",
+      "/system/ssh",
+      "/system/firewall",
+      "/system/terminal",
+      "/database"
     ]
   },
   {
@@ -79,56 +98,6 @@
     "prefixes": [],
     "modules": [
       "service-catalog"
-    ]
-  },
-  {
-    "key": "core-database",
-    "name": "数据库",
-    "route": "/database",
-    "prefixes": [
-      "servers",
-      "databases"
-    ]
-  },
-  {
-    "key": "core-files",
-    "name": "文件管理",
-    "route": "/system/files",
-    "prefixes": [
-      "servers"
-    ]
-  },
-  {
-    "key": "core-firewall",
-    "name": "防火墙",
-    "route": "/system/firewall",
-    "prefixes": [
-      "servers"
-    ]
-  },
-  {
-    "key": "core-ssh",
-    "name": "SSH 管理",
-    "route": "/system/ssh",
-    "prefixes": [
-      "servers"
-    ]
-  },
-  {
-    "key": "core-terminal",
-    "name": "终端",
-    "route": "/system/terminal",
-    "prefixes": [
-      "terminal",
-      "servers"
-    ]
-  },
-  {
-    "key": "core-processes",
-    "name": "进程管理",
-    "route": "/system/processes",
-    "prefixes": [
-      "servers"
     ]
   },
   {

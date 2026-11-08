@@ -1,5 +1,5 @@
 // The portal owns operator credentials; child documents receive only a scoped message channel.
-export function createModuleHost({token, frames, expired, openModule, openUrl}) {
+export function createModuleHost({token, frames, expired, openModule, openUrl, functionsChanged}) {
  const sockets=new Map();
  const detach=item=>{for(const [id,value] of sockets)if(value.item===item){value.cancelled=true;value.socket?.close();sockets.delete(id)}};
  const nonce=()=>Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,'0')).join('');
@@ -9,7 +9,11 @@ export function createModuleHost({token, frames, expired, openModule, openUrl}) 
   if(!item)return;
   const data=event.data||{};
   if(data.type==='ops-module-ready'){item.ready=true;clearTimeout(item.retryTimer);item.loading?.remove();announce(item);return;}
-  if(data.type==='ops-module-open'&&data.nonce===item.nonce){openModule(String(data.key||''));return;}
+  if(data.type==='ops-module-functions'&&data.nonce===item.nonce){
+   if(!Array.isArray(data.items)||data.items.length>60)return;
+   item.functions=data.items.filter(i=>i&&typeof i.id==='string'&&/^f\d+$/.test(i.id)&&typeof i.label==='string'&&i.label.trim()).map(i=>({id:i.id,label:i.label.slice(0,80),group:typeof i.group==='string'?i.group.slice(0,80):'',active:!!i.active,disabled:!!i.disabled}));functionsChanged?.(item);if(item.functions.length)event.source.postMessage({type:'ops-module-functions-accepted',nonce:item.nonce},'*');return;
+  }
+  if(data.type==='ops-module-open'&&data.nonce===item.nonce){openModule(String(data.key||''),typeof data.view==='string'?data.view.slice(0,512):undefined);return;}
   if(data.type==='ops-module-open-url'&&data.nonce===item.nonce){openUrl?.(String(data.url||''));return;}
   if(data.type?.startsWith('ops-module-socket-')&&data.nonce===item.nonce){
    const id=String(data.id||'');if(!id||id.length>200)return;
@@ -56,5 +60,5 @@ export function createModuleHost({token, frames, expired, openModule, openUrl}) 
   finally{clearTimeout(timer);}
  }
  window.addEventListener('message',message);
- return {attach(item){item.nonce=nonce();item.frame.addEventListener('load',()=>{detach(item);announce(item)});},announce,detach};
+ return {attach(item){item.nonce=nonce();item.frame.addEventListener('load',()=>{detach(item);announce(item)});},announce,detach,selectFunction(item,id){if(item.functions?.some(f=>f.id===id&&!f.disabled))item.frame.contentWindow?.postMessage({type:'ops-module-select-function',nonce:item.nonce,id},'*');}};
 }

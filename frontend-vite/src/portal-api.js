@@ -8,7 +8,7 @@ window.addEventListener('message',event=>{
  const data=event.data||{};
  if(data.type==='ops-module-socket-event'&&data.nonce===nonce){const socket=sockets.get(data.id);if(socket){socket.readyState=data.event==='open'?1:data.event==='close'?3:socket.readyState;socket['on'+data.event]?.(data);if(data.event==='close')sockets.delete(data.id)}return;}
  if(data.type==='ops-module-info'&&typeof data.nonce==='string'){
-  nonce=data.nonce;readyResolve(data.module);return;
+  nonce=data.nonce;readyResolve(data.module);if(typeof data.module?.view==='string')window.dispatchEvent(new CustomEvent('ops-portal-view',{detail:data.module.view}));return;
  }
  if(data.type!=='ops-module-api-response'||data.nonce!==nonce)return;
  const item=pending.get(data.id);if(!item)return;
@@ -18,7 +18,7 @@ window.addEventListener('message',event=>{
 const handshake=setInterval(()=>{if(nonce)clearInterval(handshake);else parent.postMessage({type:'ops-module-ready'},'*');},500);
 parent.postMessage({type:'ops-module-ready'},'*');
 export const portalReady=ready;
-export function openPortalModule(key){parent.postMessage({type:'ops-module-open',nonce,key},'*');}
+export function openPortalModule(key,view){parent.postMessage({type:'ops-module-open',nonce,key,view},'*');}
 export function openPortalApp(url){parent.postMessage({type:'ops-module-open-url',nonce,url},'*');}
 // UI capability marker; operator credentials remain in the parent document.
 export const getAccessToken=()=>nonce?'portal-session':'';

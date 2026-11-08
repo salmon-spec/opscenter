@@ -93,7 +93,7 @@ def test_native_permissions(module,monkeypatch,key,path,method,allowed):
 
 def test_socket_tickets_are_scoped_and_single_use(module):
     _,client,token=module
-    payload={'module':'core-terminal','path':'/ws/terminal/session-1'}
+    payload={'module':'core-monitor','path':'/ws/terminal/session-1'}
     assert client.post('/session/socket-ticket',json=payload).status_code==401
     assert client.post('/session/socket-ticket',json={**payload,'module':'core-logs'},headers=token()).status_code==403
     assert client.post('/session/socket-ticket',json={**payload,'path':'//other/ws'},headers=token()).status_code==400
@@ -121,7 +121,7 @@ def test_terminal_upload_streams_authenticated_multipart(module,monkeypatch):
         calls.append((path,credential,kwargs['params'],body.read()))
         return Reply()
     monkeypatch.setattr(hosting,'upstream',upstream)
-    response=client.post('/session/upload/core-terminal',params={'path':'/api/v2/terminal/sessions/session-1/files/upload','directory':'/tmp'},headers=token(),files={'file':('sample.txt',b'portal upload sample','text/plain')})
+    response=client.post('/session/upload/core-monitor',params={'path':'/api/v2/terminal/sessions/session-1/files/upload','directory':'/tmp'},headers=token(),files={'file':('sample.txt',b'portal upload sample','text/plain')})
     assert response.status_code==200 and response.json()=={'ok':True}
     assert calls[0][1] and calls[0][2]=={'path':'/tmp'}
     assert b'portal upload sample' in calls[0][3] and b'filename="sample.txt"' in calls[0][3]

@@ -24,8 +24,8 @@ try {saved=JSON.parse(localStorage.getItem(storageKey)||'{}');} catch {}
 let favorites=new Set(Array.isArray(saved.favorites)?saved.favorites:[]), recent=Array.isArray(saved.recent)?saved.recent:[];
 let verified=saved.verified && typeof saved.verified==='object'?saved.verified:{}, section='all', category='平台支撑', active=null;
 const opened=new Map(); let base=[], snapshot={}, modules=new Map();
-const moduleHost=createModuleHost({token:()=>sessionToken,frames:opened,expired:logout,openModule:openRegisteredModule,openUrl:openCatalogueUrl});
-function openRegisteredModule(key){if(key==='ops-portal')return openManagement();const aliases={'host-inventory':'core-hosts','host-monitor':'core-monitor','k3s':'core-kubernetes','logs':'core-logs','alerts':'core-alerts','service-catalog':'core-services'},target=aliases[key]||key,app=apps().find(a=>a.module_key===target||(key==='password-manager'&&/Vaultwarden/.test(a.name)));if(app)openApp(app.id);else toast('该模块尚未配置门户入口');}
+const moduleHost=createModuleHost({token:()=>sessionToken,frames:opened,expired:logout,openModule:openRegisteredModule,openUrl:openCatalogueUrl,functionsChanged:item=>{if(item.app.id===active)renderFunctions();}});
+function openRegisteredModule(key,view){if(key==='ops-portal')return openManagement();const aliases={'host-inventory':'core-hosts','host-monitor':'core-monitor','k3s':'core-kubernetes','logs':'core-logs','alerts':'core-alerts','service-catalog':'core-services'},target=aliases[key]||key,app=apps().find(a=>a.module_key===target||(key==='password-manager'&&/Vaultwarden/.test(a.name)));if(app)openApp(app.id,undefined,view);else toast('该模块尚未配置门户入口');}
 function openCatalogueUrl(value){try{const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)return;const rows=apps(),addresses=a=>[a.url,...(a.aliases||[])];const app=rows.find(a=>addresses(a).some(v=>new URL(v).href===url.href))||rows.find(a=>addresses(a).some(v=>new URL(v).origin===url.origin));if(app)openApp(app.id);else toast('请先在门户配置管理中添加该服务入口');}catch{toast('服务地址无效');}}
 function validateApp(app) {
  if (!app || typeof app.name!=='string' || !app.name.trim() || app.name.length>80) throw Error('请填写有效的应用名称');
@@ -46,7 +46,7 @@ const colorOf = app => /Forgejo|Nexus|SonarQube/.test(app.name)?'#bd7044':/Grafa
 function appIcon(app){return `<span class="app-icon" style="--icon-color:${colorOf(app)}">${svg(iconOf(app))}</span>`;}
 function render(){
  const all=apps();
- const menuGroups=[['基础设施','server',all.filter(a=>/Proxmox|Nacos|MinIO|主机管理|容器管理|OSS|文件管理|防火墙|SSH 管理|终端|进程管理|数据库|服务广场/.test(a.name))],['可观测性','chart',all.filter(a=>/OpsCenter|Grafana|日志中心|系统监控|告警中心|大屏/.test(a.name))],['交付协作','code',all.filter(a=>/Forgejo|Jenkins|SonarQube|Nexus|自动化/.test(a.name))],['工具服务','tool',all.filter(a=>domainOf(a)==='众创共享')],['门户管理','gear',all.filter(a=>a.module_key==='core-modules')]];
+ const menuGroups=[['基础设施','server',all.filter(a=>/Proxmox|Nacos|MinIO|主机管理|容器管理|系统应用|OSS|文件管理|防火墙|SSH 管理|终端|进程管理|数据库|服务广场/.test(a.name))],['可观测性','chart',all.filter(a=>/OpsCenter|Grafana|日志中心|系统监控|告警中心|大屏/.test(a.name))],['交付协作','code',all.filter(a=>/Forgejo|Jenkins|SonarQube|Nexus|自动化/.test(a.name))],['工具服务','tool',all.filter(a=>domainOf(a)==='众创共享')],['门户管理','gear',all.filter(a=>a.module_key==='core-modules')]];
  $('#navigation').innerHTML=menuGroups.map(([name,icon,rows],n)=>`<div class="menu-group"><button data-menu="menu-${n}" aria-expanded="false">${svg(icon)}${name}<span class="chevron">⌄</span></button><div class="menu-popup" id="menu-${n}" hidden>${rows.map(a=>`<button data-open="${esc(a.id)}">${esc(a.name)}</button>`).join('')}${name==='门户管理'?'<button data-settings>快捷访问</button><button data-admin>门户配置管理</button>':''}${!rows.length&&name!=='门户管理'?'<small>暂无应用</small>':''}</div></div>`).join('');
  $('#launcher').innerHTML=svg('grid');$('#catalog-summary').textContent=`${all.length} 个应用入口`;
  $('#categories').innerHTML=['平台支撑','运维场景','众创共享'].map(c=>`<button role="tab" aria-selected="${c===category}" data-filter="${c}" class="${c===category?'active':''}">${({'平台支撑':'基础平台','运维场景':'运维工作台','众创共享':'工具与应用'})[c]}<span class="domain-count">${all.filter(a=>domainOf(a)===c).length}</span></button>`).join('');
@@ -61,7 +61,9 @@ function render(){
  $('#dock').innerHTML=quick.slice(0,7).map(a=>`<button data-open="${esc(a.id)}" aria-label="快捷访问 ${esc(a.name)}">${appIcon(a)}<span class="dock-label">${esc(a.name)}</span></button>`).join('');
  renderWorkspace();
 }
+function renderFunctions(){const pane=$('#module-functions'),item=opened.get(active);pane.hidden=!item?.functions?.length;if(pane.hidden){pane.innerHTML='';return;}let group='';pane.innerHTML='<div class="module-functions-title">'+esc(item.app.name)+'</div>'+item.functions.map(f=>{const heading=f.group!==group?'<div class="function-group">'+esc(f.group)+'</div>':'';group=f.group;return heading+'<button data-function-id="'+esc(f.id)+'" class="function-link '+(f.active?'active':'')+'" '+(f.disabled?'disabled':'')+' aria-current="'+(f.active?'page':'false')+'">'+esc(f.label)+'</button>';}).join('');}
 function renderWorkspace(){
+ renderFunctions();
  $('#tabs').innerHTML=opened.size?`<button data-home class="${active===null?'active':''}">应用中心</button>`+[...opened].map(([id,{app}])=>`<button data-tab="${esc(id)}" class="${active===id?'active':''}">${esc(app.name)}<span class="close-tab" role="button" tabindex="0" data-close-tab="${esc(id)}" aria-label="关闭 ${esc(app.name)}">×</span></button>`).join(''):'';
  $('#home').hidden=active!==null;$('#workspace').hidden=active===null;
  for(const [id,item] of opened){item.frame.hidden=id!==active;if(item.loading)item.loading.hidden=id!==active||item.ready;}
@@ -73,10 +75,11 @@ function renderWorkspace(){
 }
 function nativeDocument(item){return item.module&&(item.module.key.startsWith('core-')||['subscriptions','home-inventory','life-reminders'].includes(item.module.key));}
 function navigateFrame(item){moduleHost.detach(item);if(nativeDocument(item)){item.pageController?.abort();const controller=new AbortController();item.pageController=controller;loadNativeDocument(item.frame,item.module.entry_url,controller.signal).catch(error=>{if(!controller.signal.aborted&&opened.get(item.app.id)===item&&item.loading)item.loading.textContent=error.message;});}else item.frame.src=item.module?item.module.entry_url:item.app.url;}
-function openApp(id,override){const app=override||apps().find(a=>a.id===id);if(!app)return;
- if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.get(app.module_key);frame.title=app.name;frame.loading='eager';frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);active=id;renderWorkspace();if(module)moduleHost.attach(item);$('#frames').append(frame);navigateFrame(item);
+function openApp(id,override,view){const app=override||apps().find(a=>a.id===id);if(!app)return;
+ if(!opened.has(id)){const frame=document.createElement('iframe'),module=modules.has(app.module_key)?{...modules.get(app.module_key),...(typeof view==='string'&&view.startsWith('/')&&!view.startsWith('//')?{view}:{} )}:undefined;frame.title=app.name;frame.loading='eager';frame.referrerPolicy='no-referrer';frame.setAttribute('sandbox',module?module.manifest.sandbox.join(' '):'allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox allow-modals');const item={app,frame,module};opened.set(id,item);active=id;renderWorkspace();if(module)moduleHost.attach(item);$('#frames').append(frame);navigateFrame(item);
  if(nativeDocument(item)){const loading=document.createElement('div');loading.className='frame-loading';loading.setAttribute('role','status');loading.textContent='正在加载应用…';item.loading=loading;$('#frames').append(loading);item.retryTimer=setTimeout(()=>{if(opened.get(id)!==item||item.ready)return;navigateFrame(item);loading.textContent='正在重新加载应用…';item.retryTimer=setTimeout(()=>{if(!item.ready)loading.textContent='应用加载较慢，请点击上方刷新重试。';},10000);},8000);}
  }
+ if(view&&opened.get(id)?.module){const item=opened.get(id);item.module={...item.module,view};moduleHost.announce(item);}
  active=id;recent=[id,...recent.filter(r=>r!==id)].slice(0,20);save();render();
 }
 function closeTab(id){const item=opened.get(id);if(!item)return;moduleHost.detach(item);item.pageController?.abort();clearTimeout(item.retryTimer);item.loading?.remove();item.frame.remove();opened.delete(id);if(active===id)active=[...opened.keys()].at(-1)||null;renderWorkspace();}
@@ -89,7 +92,8 @@ function showDetails(id){const app=apps().find(a=>a.id===id);if(!app)return;
 }
 document.addEventListener('click',e=>{
  const el=e.target.closest('button,[data-close-tab]');if(!el)return;
- if(el.dataset.closeTab){e.stopPropagation();closeTab(el.dataset.closeTab);}
+ if(el.dataset.functionId){const item=opened.get(active);if(item)moduleHost.selectFunction(item,el.dataset.functionId);}
+ else if(el.dataset.closeTab){e.stopPropagation();closeTab(el.dataset.closeTab);}
  else if(el.dataset.close)$('#'+el.dataset.close).close();
  else if(el.dataset.section)selectSection(el.dataset.section);
  else if(el.dataset.category){section='all';category=el.dataset.category;active=null;render();}
@@ -115,6 +119,7 @@ async function loadCatalogue(){
  const registry=await fetch('/session/modules',{headers:{Authorization:'Bearer '+sessionToken},cache:'no-store'});if(!registry.ok)throw Error('模块目录暂不可用');
  modules=new Map((await registry.json()).items.map(m=>[m.key,m]));
  base=snapshot.apps.map(validateApp).map(a=>{const url=new URL(a.url),key=a.module_key||a.url.match(/#\/extensions\/([a-z0-9-]+)/)?.[1]||(url.origin===location.origin?url.pathname.match(/^\/host\/([a-z0-9-]+)\/ui\/$/)?.[1]:null);return modules.has(key)?{...a,module_key:key,url:new URL(modules.get(key).entry_url,location.origin).href}:a;});
+ const system=base.find(a=>a.module_key==='core-monitor');if(system){const grouped=new Set(['core-database','core-files','core-processes','core-ssh','core-firewall','core-terminal']);favorites=new Set([...favorites].map(id=>grouped.has(id)?system.id:id));recent=[...new Set(recent.map(id=>grouped.has(id)?system.id:id))];}
  if(!Object.hasOwn(saved,'favorites'))favorites=new Set(snapshot.default_favorites||[]);
  document.body.classList.remove('locked');$('#portal-login').hidden=true;render();
 }

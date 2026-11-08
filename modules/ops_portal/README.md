@@ -1,5 +1,7 @@
 # 运维门户模块宿主
 
+0.7.0：应用入口沿用工作台原有模块。系统应用包含监控、文件、进程、SSH、防火墙、终端、数据库；容器管理包含原有六项功能。模块侧栏使用共享路由定义，扩展页面的既有导航通过带窗口及 nonce 校验的消息桥呈现，点击仍由原组件处理。目录迁移归并六个功能入口并保留快捷项。门户顶栏保持44px。
+
 0.5.0：门户直接承载已注册扩展模块。门户会话由统一认证服务验证；模块页面通过消息桥使用业务 API，模块不接收登录令牌。
 
 注册模块的 `entry_url` 使用 `/modules/<key>/ui/` 或 `/v3/extension-modules/<key>/index.html`，`manifest.api_prefixes` 只能授权模块自己的 `/modules/<key>/` 路径。页面发送 `ops-module-ready`，接收宿主的 `ops-module-info`（module、nonce），每次请求回传 nonce。宿主按窗口身份及模块前缀检查请求；服务端再次读取注册目录、验证路径和权限，上游继续执行原有角色鉴权。下载使用 `ops-module-download-request`。

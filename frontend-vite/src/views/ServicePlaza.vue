@@ -7,9 +7,11 @@
       </div>
       <div style="display:flex;gap:8px">
         <input v-model="search" class="input" style="width:280px" placeholder="搜索服务名称 / 地址…" />
+        <span role="tablist" aria-label="服务功能" style="display:contents">
         <button class="btn" :class="{ 'btn-primary': viewMode === 'plaza' }" @click="viewMode = 'plaza'">服务广场</button>
         <button v-if="canEditCatalog" class="btn" :class="{ 'btn-primary': viewMode === 'inventory' }" @click="viewMode = 'inventory'">完整服务清单 ({{ inventory.length }})</button>
         <button class="btn" :disabled="!canEditCatalog" @click="openManager">服务管理</button>
+        </span>
         <button class="btn" @click="viewMode === 'plaza' ? reload() : loadInventory()">刷新</button>
       </div>
     </div>
