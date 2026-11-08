@@ -1,7 +1,7 @@
 {
   "key": "codex-agent",
   "name": "Codex",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Codex 官方执行引擎：持续会话、文件和图片、工具审批与流式输出",
   "icon": "CX",
   "entry_url": "/modules/codex-agent/ui/",

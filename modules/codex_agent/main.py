@@ -31,7 +31,7 @@ from runtime.auth import SessionVerifier
 from rpc import server
 from provider import flatten, restore_event, restore_response, has_image, chat_request, chat_events
 
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 ROOT = Path(os.getenv('CODEX_WORKSPACE', '/workspace'))
 STATE = Path(os.getenv('CODEX_GATEWAY_DATA', '/state/gateway'))
 workspace = ContextVar('workspace', default='default')
