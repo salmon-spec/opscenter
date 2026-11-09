@@ -75,7 +75,7 @@ class AppServer:
                                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                                             env=env, bufsize=1)
             threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
-            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.6.4'},
+            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.7.0'},
                                         'capabilities':{'experimentalApi':True}}, start=False)
             self.send({'method':'initialized', 'params':{}})
             self.initialized = True
@@ -108,9 +108,9 @@ class AppServer:
                 raise HTTPException(502, message)
             value = result.get('result', {})
             with self.lock:
-                if method in {'thread/start','thread/resume'}:
+                if method in {'thread/start','thread/resume','thread/fork'}:
                     self.loaded_threads.add(value['thread']['id'])
-                elif method=='thread/archive':
+                elif method in {'thread/archive','thread/delete'}:
                     self.loaded_threads.discard(params['threadId'])
             return value
         finally:

@@ -28,8 +28,9 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from runtime.app import create_module_app
 from runtime.auth import SessionVerifier
@@ -37,8 +38,11 @@ from rpc import server
 from provider import flatten, restore_event, restore_response, has_image, chat_request, chat_events
 from images import generate as generate_image, MAX_IMAGE, raster_type
 from changes import read_changes
+import lifecycle
+from conversation_ops import fork_conversation, cleanup_conversation
+from gateway_history import copy_public_history, cleanup_public_history
 
-VERSION = '0.6.4'
+VERSION = '0.7.0'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
@@ -156,6 +160,7 @@ def database():
                 db.execute("insert or ignore into workspaces values('default','默认工作区')")
                 db.execute('create table if not exists threads(id text primary key,workspace text,title text,archived integer default 0)')
                 db.execute('create table if not exists audit(id integer primary key,action text,target text,created_at text)')
+                lifecycle.initialize(db)
                 db.commit()
                 initialized_databases.add(STATE)
         yield db
@@ -172,6 +177,7 @@ def audit(action, target=''):
 
 def directory():
     path = ROOT if workspace.get() == 'default' else ROOT/'projects'/workspace.get()
+    if not path.resolve().is_relative_to(ROOT.resolve()):raise HTTPException(422,'项目目录超出工作区')
     path.mkdir(parents=True, exist_ok=True)
     return path.resolve()
 
@@ -191,7 +197,43 @@ def own(ident):
         row = db.execute('select * from threads where id=? and workspace=?', (ident,workspace.get())).fetchone()
     if row is None:
         raise HTTPException(404, '任务不存在')
-    return dict(row)
+    result=dict(row)
+    with database() as db:result['deleted']=lifecycle.state(db,'thread',ident)['deleted']
+    return result
+
+
+def project_record(ident):
+    with database() as db:
+        row=db.execute('select * from workspaces where id=?',(ident,)).fetchone()
+        if row is None:raise HTTPException(404,'项目不存在')
+        flags=lifecycle.state(db,'workspace',ident)
+    return {**dict(row),'archived':flags['archived'],'deleted':flags['deleted']}
+
+
+def require_project_active(ident):
+    row=project_record(ident)
+    if row['deleted'] or row['archived']:raise HTTPException(409,'项目已归档或移入回收站，请先恢复项目')
+    return row
+
+
+def project_chats(ident):
+    with database() as db:return [dict(row) for row in db.execute('select * from threads where workspace=?',(ident,))]
+
+
+def require_chat_editable(row):
+    require_project_active(row['workspace'])
+    if row.get('deleted'):raise HTTPException(409,'对话已移入回收站，请先恢复')
+    lifecycle.require_idle(server,[row['id']])
+
+
+def project_path(ident):
+    root=ROOT.resolve();projects=root/'projects'
+    if ident=='default':return root
+    if not re.fullmatch('[a-z0-9][a-z0-9_-]{0,40}',ident):raise HTTPException(422,'项目名称无效')
+    target=projects/ident
+    if projects.is_symlink() or target.is_symlink() or not target.resolve().is_relative_to(root):
+        raise HTTPException(422,'项目目录边界无效')
+    return target
 
 
 def health():
@@ -309,12 +351,36 @@ async def invalid(request, exc):
 
 
 class Input(BaseModel):
-    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    model_config = ConfigDict(extra='forbid')
+
+    @field_validator('title','name',mode='before',check_fields=False)
+    @classmethod
+    def clean_display_name(cls,value):
+        return value.strip() if isinstance(value,str) else value
 
 
 class NewWorkspace(Input):
-    name: str = Field(pattern='^[a-z0-9][a-z0-9_-]{0,40}$')
+    name: str | None = Field(default=None,pattern='^[a-z0-9][a-z0-9_-]{0,40}$')
     title: str = Field(min_length=1,max_length=100)
+
+
+class WorkspaceEdit(Input):
+    title: str | None = Field(default=None,min_length=1,max_length=100)
+    archived: bool | None = None
+
+
+class WorkspaceCopy(Input):
+    title: str | None = Field(default=None,min_length=1,max_length=100)
+    include_files: bool = True
+    include_threads: bool = True
+
+
+class ThreadCopy(Input):
+    title: str | None = Field(default=None,min_length=1,max_length=120)
+
+
+class ThreadFork(ThreadCopy):
+    turn_id: str | None = Field(default=None,pattern='^[A-Za-z0-9_-]{1,100}$')
 
 
 class ThreadCreate(Input):
@@ -490,35 +556,89 @@ def models():
 
 
 @app.get('/api/v1/workspaces')
-def workspaces():
-    with database() as db: return {'items':[dict(r) for r in db.execute('select * from workspaces')]}
+def workspaces(view:Literal['active','archived','deleted','all']='active'):
+    with database() as db:
+        items=[]
+        for row in db.execute('select * from workspaces'):
+            flags=lifecycle.state(db,'workspace',row['id'])
+            if view=='deleted' and not flags['deleted']:continue
+            if view=='archived' and (flags['deleted'] or not flags['archived']):continue
+            if view=='active' and (flags['deleted'] or flags['archived']):continue
+            items.append({**dict(row),'archived':flags['archived'],'deleted':flags['deleted']})
+    return {'items':items}
 
 
 @app.post('/api/v1/workspaces')
 def workspace_create(body:NewWorkspace):
-    if body.name=='default': raise HTTPException(409,'工作区已存在')
-    with database() as db:
-        try: db.execute('insert into workspaces values(?,?)',(body.name,body.title))
-        except sqlite3.IntegrityError: raise HTTPException(409,'工作区已存在') from None
-    audit('workspace.create',body.name)
-    return {'id':body.name}
+    ident=body.name or 'project-'+uuid.uuid4().hex[:16]
+    if ident=='default': raise HTTPException(409,'工作区已存在')
+    with mutation:
+        project_path(ident)
+        with database() as db:
+            try: db.execute('insert into workspaces values(?,?)',(ident,body.title))
+            except sqlite3.IntegrityError: raise HTTPException(409,'工作区已存在') from None
+        audit('workspace.create',ident)
+    return {'id':ident,'title':body.title}
+
+
+@app.post('/api/v1/workspaces/{ident}/edit')
+def workspace_edit(ident:str,body:WorkspaceEdit):
+    with mutation:
+        row=project_record(ident);lifecycle.require_idle(server,[r['id'] for r in project_chats(ident)],check_goals=body.archived is True)
+        if row['deleted']:raise HTTPException(409,'项目已移入回收站，请先恢复')
+        if ident=='default' and body.archived is not None:raise HTTPException(409,'默认项目不能归档')
+        with database() as db:
+            if body.title is not None:db.execute('update workspaces set title=? where id=?',(body.title,ident))
+            if body.archived is not None:lifecycle.update(db,'workspace',ident,archived=body.archived)
+        audit('workspace.edit',ident)
+    return {'updated':True,**project_record(ident)}
+
+
+@app.post('/api/v1/workspaces/{ident}/delete')
+def workspace_delete(ident:str):
+    with mutation:
+        project_record(ident)
+        if ident=='default':raise HTTPException(409,'默认项目不能删除')
+        lifecycle.require_idle(server,[r['id'] for r in project_chats(ident)],check_goals=True)
+        with database() as db:lifecycle.update(db,'workspace',ident,deleted=True)
+        audit('workspace.delete',ident)
+    return {'id':ident,'deleted':True,'recoverable':True}
+
+
+@app.post('/api/v1/workspaces/{ident}/restore')
+def workspace_restore(ident:str):
+    with mutation:
+        project_record(ident);lifecycle.require_idle(server,[r['id'] for r in project_chats(ident)])
+        with database() as db:lifecycle.update(db,'workspace',ident,deleted=False)
+        audit('workspace.restore',ident)
+    return {'restored':True,**project_record(ident)}
 
 
 @app.get('/api/v1/threads')
-def threads(archived:bool=False):
+def threads(archived:bool=False,deleted:bool=False):
     with database() as db:
-        return {'items':[dict(r) for r in db.execute('select * from threads where workspace=? and archived=? order by rowid desc',(workspace.get(),int(archived)))]}
+        items=[]
+        for row in db.execute('select * from threads where workspace=? order by rowid desc',(workspace.get(),)):
+            removed=lifecycle.state(db,'thread',row['id'])['deleted']
+            if removed!=deleted or not deleted and bool(row['archived'])!=archived:continue
+            items.append({**dict(row),'archived':bool(row['archived']),'deleted':removed})
+    return {'items':items}
 
 
 @app.post('/api/v1/threads')
 def thread_create(body:ThreadCreate):
-    result = server.request('thread/start',{'cwd':str(directory()),'model':body.model or os.getenv('CODEX_MODEL') or None,
-        'approvalPolicy':'on-request','sandbox':'workspace-write',
-        'developerInstructions':IMAGE_INSTRUCTIONS})
-    ident = result['thread']['id']
-    with database() as db: db.execute('insert into threads(id,workspace,title) values(?,?,?)',(ident,workspace.get(),body.title))
-    server.request('thread/name/set',{'threadId':ident,'name':body.title})
-    audit('thread.create',ident)
+    with mutation:
+        require_project_active(workspace.get())
+        result = server.request('thread/start',{'cwd':str(directory()),'model':body.model or os.getenv('CODEX_MODEL') or None,
+            'approvalPolicy':'on-request','sandbox':'workspace-write',
+            'developerInstructions':IMAGE_INSTRUCTIONS})
+        ident = result['thread']['id']
+        try:
+            server.request('thread/name/set',{'threadId':ident,'name':body.title})
+            with database() as db: db.execute('insert into threads(id,workspace,title) values(?,?,?)',(ident,workspace.get(),body.title))
+        except BaseException:
+            cleanup_conversation(server,ident);raise
+        audit('thread.create',ident)
     return {'id':ident}
 
 
@@ -531,6 +651,16 @@ def thread_read(ident:str):
         for turn in result['thread'].get('turns',[]):
             if turn['id']==active:turn['status']='inProgress'
     result['running_turn_id']=active
+    with database() as db:mapping=lifecycle.state(db,'thread',ident)['metadata'].get('path_map',{})
+    if isinstance(mapping,dict):
+        for turn in result['thread'].get('turns',[]):
+            for item in turn.get('items',[]):
+                if item.get('type')=='imageView' and item.get('path') in mapping:item['path']=mapping[item['path']]
+                for part in item.get('content',[]) if isinstance(item.get('content'),list) else []:
+                    if part.get('path') in mapping:part['path']=mapping[part['path']]
+                if item.get('type')=='agentMessage':
+                    for old,new in mapping.items():
+                        item['text']=item.get('text','').replace(']('+old+')',']('+new+')').replace('](<'+old+'>)','](<'+new+'>)').replace('`'+old+'`','`'+new+'`')
     images=generated_images(ident)
     for turn in result['thread'].get('turns',[]):
         turn['images']=[i for i in images if i['turn_id']==turn['id']]
@@ -543,21 +673,203 @@ def thread_read(ident:str):
 
 @app.post('/api/v1/threads/{ident}/edit')
 def thread_edit(ident:str,body:ThreadEdit):
-    own(ident)
-    if body.title is not None:
-        server.request('thread/name/set',{'threadId':ident,'name':body.title})
-        with database() as db: db.execute('update threads set title=? where id=?',(body.title,ident))
-    if body.archived is not None:
-        server.request('thread/archive' if body.archived else 'thread/unarchive',{'threadId':ident})
-        with database() as db: db.execute('update threads set archived=? where id=?',(int(body.archived),ident))
-    audit('thread.edit',ident)
+    with mutation:
+        row=own(ident);require_chat_editable(row)
+        if body.archived is True:lifecycle.require_idle(server,[ident],check_goals=True)
+        if body.title is not None:server.request('thread/name/set',{'threadId':ident,'name':body.title})
+        if body.archived is not None:server.request('thread/archive' if body.archived else 'thread/unarchive',{'threadId':ident})
+        with database() as db:
+            if body.title is not None:db.execute('update threads set title=? where id=?',(body.title,ident))
+            if body.archived is not None:db.execute('update threads set archived=? where id=?',(int(body.archived),ident))
+        audit('thread.edit',ident)
     return {'updated':True}
+
+
+@app.post('/api/v1/threads/{ident}/delete')
+def thread_delete(ident:str):
+    with mutation:
+        row=own(ident);lifecycle.require_idle(server,[ident],check_goals=True)
+        with database() as db:lifecycle.update(db,'thread',ident,deleted=True)
+        audit('thread.delete',ident)
+    return {'id':ident,'deleted':True,'recoverable':True}
+
+
+@app.post('/api/v1/threads/{ident}/restore')
+def thread_restore(ident:str):
+    with mutation:
+        row=own(ident);lifecycle.require_idle(server,[ident])
+        with database() as db:lifecycle.update(db,'thread',ident,deleted=False)
+        audit('thread.restore',ident)
+    return {'id':ident,'restored':True,'deleted':False,'archived':bool(row['archived'])}
+
+
+def copied_instructions(target_root):
+    return IMAGE_INSTRUCTIONS+' Current project cwd: '+str(target_root)+'. Absolute paths in copied history are source-project references. Perform all new writes only in the current project; do not modify the source project.'
+
+
+def clone_native(row,title,target_root,turn_id=None):
+    source=server.request('thread/read',{'threadId':row['id'],'includeTurns':True})['thread']
+    retained=list(source.get('turns',[]))
+    if turn_id is not None:
+        index=next((i for i,t in enumerate(retained) if t['id']==turn_id),None)
+        if index is None:raise HTTPException(422,'分支轮次不属于当前对话')
+        retained=retained[:index+1]
+    created=fork_conversation(server,row['id'],title,target_root,turn_id,copied_instructions(target_root))
+    try:
+        target=server.request('thread/read',{'threadId':created,'includeTurns':True})['thread']
+        turns=target.get('turns',[])
+        if len(turns)!=len(retained):raise HTTPException(502,'复制后的对话轮次不完整，已撤销复制')
+        mapping={old['id']:new['id'] for old,new in zip(retained,turns)}
+        return created,mapping,source
+    except BaseException:
+        cleanup_conversation(server,created);raise
+
+
+def copy_chat(ident,body,turn_id=None):
+    with mutation:
+        row=own(ident);require_chat_editable(row)
+        lifecycle.require_idle(server,[r['id'] for r in project_chats(row['workspace'])],check_goals=True)
+        title=body.title or (row['title']+(' 分支' if isinstance(body,ThreadFork) else ' 副本'))[:120]
+        created,turn_map,_=clone_native(row,title,directory(),turn_id)
+        history_created=False
+        try:
+            with database() as db:metadata=lifecycle.state(db,'thread',ident)['metadata']
+            metadata={**metadata,'source_id':ident,'source_root':str(directory())}
+            copy_public_history(STATE,ident,created,turn_map)
+            history_created=True
+            with database() as db:
+                db.execute('insert into threads(id,workspace,title) values(?,?,?)',(created,row['workspace'],title))
+                lifecycle.update(db,'thread',created,metadata=metadata)
+                db.execute('insert into audit(action,target,created_at) values(?,?,?)',
+                    ('thread.fork' if isinstance(body,ThreadFork) else 'thread.copy',created,datetime.now(timezone.utc).isoformat()))
+        except BaseException:
+            history_cleaned=not history_created or cleanup_public_history(STATE,created)
+            native_cleaned=cleanup_conversation(server,created)
+            if not history_cleaned or not native_cleaned:raise HTTPException(502,'复制失败，部分新副本未能清理，请刷新检查') from None
+            raise
+    return {'id':created,'title':title}
+
+
+@app.post('/api/v1/threads/{ident}/copy')
+def thread_copy(ident:str,body:ThreadCopy):return copy_chat(ident,body)
+
+
+@app.post('/api/v1/threads/{ident}/fork')
+def thread_fork(ident:str,body:ThreadFork):return copy_chat(ident,body,body.turn_id)
+
+
+@app.get('/api/v1/threads/{ident}/export')
+def thread_export(ident:str):
+    from urllib.parse import quote
+    data=thread_read(ident);parts=['# '+data['metadata']['title']+'\n']
+    for turn in data['thread'].get('turns',[]):
+        for item in turn.get('items',[]):
+            if item.get('type')=='userMessage':
+                text='\n'.join(c.get('text','') for c in item.get('content',[]) if c.get('type')=='text')
+                if text:parts.append('## 用户\n\n'+text+'\n')
+                for content in item.get('content',[]):
+                    if content.get('type') in {'localImage','image'}:
+                        value=content.get('path') or content.get('url')
+                        if isinstance(value,str):parts.append('![用户图片]('+value+')\n')
+            elif item.get('type')=='agentMessage' and item.get('phase')!='analysis':
+                text=re.sub(r'<(think|thinking|analysis)\b[^>]*>[\s\S]*?(?:</\1\s*>|$)','',item.get('text',''),flags=re.I).strip()
+                if text:parts.append('## '+('进展' if item.get('phase')=='commentary' else 'Codex')+'\n\n'+text+'\n')
+            elif item.get('type')=='plan' and item.get('text'):parts.append('## 建议计划\n\n'+item['text']+'\n')
+        if turn.get('plan'):parts.append('## 执行计划\n\n'+'\n'.join('- '+str(p.get('step','')) for p in turn['plan'])+'\n')
+        for image in turn.get('images',[]):parts.append('![对话图片]('+image['path']+')\n')
+    filename=re.sub(r'[\x00-\x1f/\\]','_',data['metadata']['title'])[:80]+'.md'
+    return Response('\n'.join(parts),media_type='text/markdown; charset=utf-8',
+                    headers={'Content-Disposition':"attachment; filename*=UTF-8''"+quote(filename,safe='')})
+
+
+def conversation_image_mapping(source_id,native,source_root,target_root,staging,include_files,budget):
+    """Copy image attachments only when full files were not requested."""
+    with database() as db:previous=lifecycle.state(db,'thread',source_id)['metadata'].get('path_map',{})
+    if not isinstance(previous,dict):previous={}
+    values=set()
+    for turn in native.get('turns',[]):
+        for item in turn.get('items',[]):
+            if item.get('type')=='imageView' and isinstance(item.get('path'),str):values.add(item['path'])
+            for part in item.get('content',[]) if isinstance(item.get('content'),list) else []:
+                if part.get('type') in {'localImage','image'} and isinstance(part.get('path'),str):values.add(part['path'])
+    for record in (STATE/'images'/source_id).glob('*.json'):
+        try:
+            if record.stat().st_size>64*1024:continue
+            value=json.loads(record.read_text(encoding='utf8')).get('path')
+            if isinstance(value,str):values.add(value)
+        except (OSError,ValueError,AttributeError):continue
+    mapping={};copied=0
+    for value in values:
+        current=previous.get(value,value)
+        try:
+            path=Path(current);path=(path if path.is_absolute() else source_root/path).resolve()
+            relative=path.relative_to(source_root)
+            if path.is_symlink() or not path.is_file() or not 0<path.stat().st_size<=MAX_IMAGE:continue
+            if mimetypes.guess_type(path.name)[0] not in RASTER:continue
+            with path.open('rb') as stream:raster_type(stream.read(12))
+        except (ValueError,OSError):continue
+        destination=staging/relative
+        if not include_files and not destination.exists():
+            lifecycle.copy_regular(path,destination,budget);copied+=1
+        if not destination.is_file():raise HTTPException(409,'图片附件在复制期间发生变化，请重试')
+        mapped=str((target_root/relative).resolve())
+        mapping[value]=mapped;mapping[str(path)]=mapped
+        for old,new in previous.items():
+            if new==str(path):mapping[old]=mapped
+    return mapping,copied
+
+
+@app.post('/api/v1/workspaces/{ident}/copy')
+def workspace_copy(ident:str,body:WorkspaceCopy):
+    if not body.include_files and not body.include_threads:raise HTTPException(422,'至少选择对话或项目文件')
+    with mutation:
+        source=project_record(ident)
+        if ident=='default':raise HTTPException(409,'默认项目包含其他项目，不能整体复制')
+        if source['deleted']:raise HTTPException(409,'项目已移入回收站，请先恢复')
+        chats=project_chats(ident);lifecycle.require_idle(server,[row['id'] for row in chats],check_goals=True)
+        with database() as db:chats=[row for row in chats if not lifecycle.state(db,'thread',row['id'])['deleted']]
+        source_root=project_path(ident).resolve();created='project-'+uuid.uuid4().hex[:16]
+        target_root=project_path(created);projects=target_root.parent;projects.mkdir(parents=True,exist_ok=True)
+        if target_root.exists():raise HTTPException(409,'目标项目目录已存在，请重试')
+        staging=Path(tempfile.mkdtemp(prefix='.copy-',dir=projects));owned=staging
+        title=body.title or (source['title']+' 副本')[:100]
+        budget={'files':0,'bytes':0};copies=[];assets=0
+        try:
+            if body.include_files:lifecycle.copy_tree(source_root,staging,budget)
+            os.replace(staging,target_root);owned=target_root
+            if body.include_threads:
+                for row in chats:
+                    new_id,turn_map,native=clone_native(row,row['title'],target_root)
+                    row['_history_created']=False
+                    copies.append((new_id,row))
+                    path_map,count=conversation_image_mapping(row['id'],native,source_root,target_root,target_root,body.include_files,budget)
+                    assets+=count
+                    copy_public_history(STATE,row['id'],new_id,turn_map,{old:new for old,new in path_map.items() if Path(old).is_absolute()})
+                    row['_history_created']=True
+                    if row['archived']:server.request('thread/archive',{'threadId':new_id})
+                    row['_path_map']=path_map
+            with database() as db:
+                db.execute('insert into workspaces(id,title) values(?,?)',(created,title))
+                for new_id,row in copies:
+                    db.execute('insert into threads(id,workspace,title,archived) values(?,?,?,?)',(new_id,created,row['title'],row['archived']))
+                    lifecycle.update(db,'thread',new_id,metadata={'source_id':row['id'],'source_root':str(source_root),'path_map':row['_path_map']})
+                db.execute('insert into audit(action,target,created_at) values(?,?,?)',('workspace.copy',created,datetime.now(timezone.utc).isoformat()))
+        except BaseException:
+            cleaned=True
+            for new_id,copied_row in reversed(copies):
+                if copied_row['_history_created']:cleaned=cleanup_public_history(STATE,new_id) and cleaned
+                cleaned=cleanup_conversation(server,new_id) and cleaned
+            lifecycle.remove_created(owned,projects)
+            if not cleaned:raise HTTPException(502,'项目复制失败，部分新对话未能清理，请刷新检查') from None
+            raise
+    return {'id':created,'title':title,'copied_threads':len(copies),'image_assets_copied':assets}
 
 
 @app.post('/api/v1/threads/{ident}/prompt')
 def prompt(ident:str,body:Prompt):
-    own(ident)
     with mutation:
+        row=own(ident);require_chat_editable(row)
+        if row['archived']:raise HTTPException(409,'对话已归档，请先恢复对话')
         server.start()
         retry_after=provider_state()['retry_after']
         if retry_after:
@@ -567,8 +879,9 @@ def prompt(ident:str,body:Prompt):
                 raise HTTPException(409,'已有任务正在执行，请等待完成或先停止该任务。')
         with server.lock: loaded=ident in server.loaded_threads
         if not loaded:
+            with database() as db:copied=lifecycle.state(db,'thread',ident)['metadata'].get('source_id')
             server.request('thread/resume',{'threadId':ident,'cwd':str(directory()),'excludeTurns':True,
-                                          'developerInstructions':IMAGE_INSTRUCTIONS})
+                                          'developerInstructions':copied_instructions(directory()) if copied else IMAGE_INSTRUCTIONS})
         inputs = [{'type':'text','text':body.text}]
         for value in body.attachments:
             path = file_path(value)

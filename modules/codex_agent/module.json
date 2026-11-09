@@ -1,8 +1,8 @@
 {
   "key": "codex-agent",
   "name": "Codex",
-  "version": "0.6.4",
-  "description": "Codex 官方执行引擎：持续会话、文件和图片、工具审批与流式输出",
+  "version": "0.7.0",
+  "description": "Codex 执行引擎：项目与对话管理、分支、归档回收、文件图片及原生计划",
   "icon": "CX",
   "entry_url": "/modules/codex-agent/ui/",
   "capabilities": ["agent:execute", "agent:approve", "agent:stop", "files:write"],
