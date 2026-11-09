@@ -42,7 +42,7 @@ import lifecycle
 from conversation_ops import fork_conversation, cleanup_conversation
 from gateway_history import copy_public_history, cleanup_public_history
 
-VERSION = '0.7.0'
+VERSION = '0.7.1'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
@@ -655,11 +655,12 @@ def thread_read(ident:str):
     if isinstance(mapping,dict):
         for turn in result['thread'].get('turns',[]):
             for item in turn.get('items',[]):
-                if item.get('type')=='imageView' and item.get('path') in mapping:item['path']=mapping[item['path']]
+                if item.get('type')=='imageView' and isinstance(item.get('path'),str) and item['path'] in mapping:item['path']=mapping[item['path']]
                 for part in item.get('content',[]) if isinstance(item.get('content'),list) else []:
-                    if part.get('path') in mapping:part['path']=mapping[part['path']]
+                    if isinstance(part,dict) and isinstance(part.get('path'),str) and part['path'] in mapping:part['path']=mapping[part['path']]
                 if item.get('type')=='agentMessage':
                     for old,new in mapping.items():
+                        if not isinstance(old,str) or not isinstance(new,str):continue
                         item['text']=item.get('text','').replace(']('+old+')',']('+new+')').replace('](<'+old+'>)','](<'+new+'>)').replace('`'+old+'`','`'+new+'`')
     images=generated_images(ident)
     for turn in result['thread'].get('turns',[]):
@@ -765,11 +766,14 @@ def thread_export(ident:str):
     for turn in data['thread'].get('turns',[]):
         for item in turn.get('items',[]):
             if item.get('type')=='userMessage':
-                text='\n'.join(c.get('text','') for c in item.get('content',[]) if c.get('type')=='text')
+                content=item.get('content',[])
+                content=[content] if isinstance(content,str) else content if isinstance(content,list) else []
+                text='\n'.join(c if isinstance(c,str) else c['text'] for c in content
+                    if isinstance(c,str) or isinstance(c,dict) and c.get('type')=='text' and isinstance(c.get('text'),str))
                 if text:parts.append('## 用户\n\n'+text+'\n')
-                for content in item.get('content',[]):
-                    if content.get('type') in {'localImage','image'}:
-                        value=content.get('path') or content.get('url')
+                for part in content:
+                    if isinstance(part,dict) and part.get('type') in {'localImage','image'}:
+                        value=part.get('path') or part.get('url')
                         if isinstance(value,str):parts.append('![用户图片]('+value+')\n')
             elif item.get('type')=='agentMessage' and item.get('phase')!='analysis':
                 text=re.sub(r'<(think|thinking|analysis)\b[^>]*>[\s\S]*?(?:</\1\s*>|$)','',item.get('text',''),flags=re.I).strip()
@@ -791,7 +795,7 @@ def conversation_image_mapping(source_id,native,source_root,target_root,staging,
         for item in turn.get('items',[]):
             if item.get('type')=='imageView' and isinstance(item.get('path'),str):values.add(item['path'])
             for part in item.get('content',[]) if isinstance(item.get('content'),list) else []:
-                if part.get('type') in {'localImage','image'} and isinstance(part.get('path'),str):values.add(part['path'])
+                if isinstance(part,dict) and part.get('type') in {'localImage','image'} and isinstance(part.get('path'),str):values.add(part['path'])
     for record in (STATE/'images'/source_id).glob('*.json'):
         try:
             if record.stat().st_size>64*1024:continue
@@ -999,40 +1003,44 @@ def file_content(path:str):
 
 @app.post('/api/v1/files/write')
 def write(body:FileWrite):
-    target=file_path(body.path)
-    try: content=base64.b64decode(body.content,validate=True) if body.encoding=='base64' else body.content.encode()
-    except (ValueError,binascii.Error): raise HTTPException(422,'文件编码无效') from None
-    if len(content)>2*1024*1024: raise HTTPException(413,'单文件限 2 MiB')
-    target.parent.mkdir(parents=True,exist_ok=True)
-    try:
-        if body.overwrite:
-            fd,name=tempfile.mkstemp(dir=target.parent,prefix='.codex-')
-            try:
-                with os.fdopen(fd,'wb') as f: f.write(content)
-                os.replace(name,target)
-            finally: Path(name).unlink(missing_ok=True)
-        else:
-            with target.open('xb') as f: f.write(content)
-    except FileExistsError: raise HTTPException(409,'文件已存在，请确认覆盖') from None
-    audit('file.write',body.path)
+    with mutation:
+        require_project_active(workspace.get())
+        target=file_path(body.path)
+        try: content=base64.b64decode(body.content,validate=True) if body.encoding=='base64' else body.content.encode()
+        except (ValueError,binascii.Error): raise HTTPException(422,'文件编码无效') from None
+        if len(content)>2*1024*1024: raise HTTPException(413,'单文件限 2 MiB')
+        target.parent.mkdir(parents=True,exist_ok=True)
+        try:
+            if body.overwrite:
+                fd,name=tempfile.mkstemp(dir=target.parent,prefix='.codex-')
+                try:
+                    with os.fdopen(fd,'wb') as f: f.write(content)
+                    os.replace(name,target)
+                finally: Path(name).unlink(missing_ok=True)
+            else:
+                with target.open('xb') as f: f.write(content)
+        except FileExistsError: raise HTTPException(409,'文件已存在，请确认覆盖') from None
+        audit('file.write',body.path)
     return {'saved':True}
 
 
 @app.post('/api/v1/terminal')
 def terminal(body:Command):
-    audit('terminal.execute')
-    try:
-        # An administrator's direct terminal; bounded process group and output file.
-        with tempfile.TemporaryFile() as output:
-            proc=subprocess.Popen(['bash','-lc',body.command],cwd=directory(),stdout=output,stderr=subprocess.STDOUT,start_new_session=True)
-            try: proc.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                import signal
-                os.killpg(proc.pid,signal.SIGKILL);proc.wait()
-                raise HTTPException(504,'命令超过 20 秒，已终止进程组') from None
-            output.seek(0)
-            return redact({'exit_code':proc.returncode,'output':output.read(256*1024).decode(errors='replace')})
-    except FileNotFoundError: raise HTTPException(503,'终端不可用') from None
+    with mutation:
+        require_project_active(workspace.get())
+        audit('terminal.execute')
+        try:
+            # An administrator's direct terminal; bounded process group and output file.
+            with tempfile.TemporaryFile() as output:
+                proc=subprocess.Popen(['bash','-lc',body.command],cwd=directory(),stdout=output,stderr=subprocess.STDOUT,start_new_session=True)
+                try: proc.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    import signal
+                    os.killpg(proc.pid,signal.SIGKILL);proc.wait()
+                    raise HTTPException(504,'命令超过 20 秒，已终止进程组') from None
+                output.seek(0)
+                return redact({'exit_code':proc.returncode,'output':output.read(256*1024).decode(errors='replace')})
+        except FileNotFoundError: raise HTTPException(503,'终端不可用') from None
 
 
 @app.get('/api/v1/extensions')

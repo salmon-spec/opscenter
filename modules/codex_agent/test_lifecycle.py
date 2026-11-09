@@ -237,3 +237,105 @@ def test_project_copy_rejects_external_git_references(native,relative):
     result=client.post('/api/v1/workspaces/'+workspace+'/copy',headers=token(),json={'include_threads':False})
     assert result.status_code==422 and 'Git' in result.json()['detail']
     assert pointer.read_text()=='external-reference' and [p.name for p in source.parent.iterdir()]==[workspace]
+
+
+@pytest.mark.parametrize('state',['archived','deleted'])
+def test_inactive_project_rejects_files_and_terminal_before_side_effects(native,monkeypatch,state):
+    client,token,_,_=native;workspace=project(native)
+    params={'workspace':workspace}
+    assert client.post('/api/v1/files/write',headers=token(),params=params,json={'path':'keep.txt','content':'original'}).status_code==200
+    if state=='archived':
+        assert client.post('/api/v1/workspaces/'+workspace+'/edit',headers=token(),json={'archived':True}).status_code==200
+    else:assert client.post('/api/v1/workspaces/'+workspace+'/delete',headers=token(),json={}).status_code==200
+    def forbidden(*args,**kwargs):raise AssertionError('Inactive project must never spawn a process')
+    monkeypatch.setattr(main.subprocess,'Popen',forbidden)
+    for path,body in [('/files/write',{'path':'keep.txt','content':'changed','overwrite':True}),
+                      ('/files/write',{'path':'new/fresh.txt','content':'new'}),
+                      ('/terminal',{'command':'must-not-run'})]:
+        assert client.post('/api/v1'+path,headers=token(),params=params,json=body).status_code==409
+    root=main.ROOT/'projects'/workspace
+    assert (root/'keep.txt').read_text()=='original' and not (root/'new').exists()
+    assert client.get('/api/v1/files/content',headers=token(),params={**params,'path':'keep.txt'}).json()['content']=='original'
+
+
+def test_archived_chat_does_not_disable_active_project_file_tools(native,monkeypatch):
+    from types import SimpleNamespace
+    client,token,_,_=native;workspace=project(native);ident=chat(native,workspace)
+    assert client.post('/api/v1/threads/'+ident+'/edit',headers=token(),params={'workspace':workspace},json={'archived':True}).status_code==200
+    spawned=[]
+    def spawn(*args,**kwargs):
+        spawned.append(args[0]);return SimpleNamespace(wait=lambda timeout=None:0,returncode=0)
+    monkeypatch.setattr(main.subprocess,'Popen',spawn)
+    assert client.post('/api/v1/files/write',headers=token(),params={'workspace':workspace},json={'path':'allowed.txt','content':'ok'}).status_code==200
+    assert client.post('/api/v1/terminal',headers=token(),params={'workspace':workspace},json={'command':'administrator-command'}).status_code==200
+    assert spawned==[['bash','-lc','administrator-command']]
+
+
+@pytest.mark.parametrize('operation',['write','terminal'])
+def test_project_archive_waits_for_write_or_terminal_operation(native,monkeypatch,operation):
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    import threading
+    client,token,_,_=native;workspace=project(native)
+    params={'workspace':workspace};root=main.ROOT/'projects'/workspace
+    assert client.post('/api/v1/files/write',headers=token(),params=params,json={'path':'keep.txt','content':'original'}).status_code==200
+    started=threading.Event();release=threading.Event();archive_requested=threading.Event()
+    def wait_for_release():
+        started.set();assert release.wait(5),'Test operation was not released'
+    if operation=='write':
+        original=main.os.replace
+        def replace(source,target):
+            if Path(target)==root/'keep.txt':wait_for_release()
+            return original(source,target)
+        monkeypatch.setattr(main.os,'replace',replace)
+        path='/files/write';body={'path':'keep.txt','content':'updated','overwrite':True}
+    else:
+        def spawn(*args,**kwargs):
+            return SimpleNamespace(wait=lambda timeout=None:wait_for_release(),returncode=0)
+        monkeypatch.setattr(main.subprocess,'Popen',spawn)
+        path='/terminal';body={'command':'administrator-command'}
+    def archive():
+        archive_requested.set()
+        return client.post('/api/v1/workspaces/'+workspace+'/edit',headers=token(),json={'archived':True})
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        pending=workers.submit(lambda:client.post('/api/v1'+path,headers=token(),params=params,json=body))
+        try:
+            assert started.wait(5)
+            acquired=main.mutation.acquire(blocking=False)
+            if acquired:main.mutation.release()
+            assert not acquired,'The write/terminal must retain the lifecycle lock'
+            archived=workers.submit(archive);assert archive_requested.wait(5)
+            assert not archived.done() and not main.project_record(workspace)['archived']
+        finally:release.set()
+        assert pending.result(timeout=5).status_code==200
+        assert archived.result(timeout=5).status_code==200
+    assert main.project_record(workspace)['archived']
+    if operation=='write':assert (root/'keep.txt').read_text()=='updated'
+
+
+def test_native_mixed_content_preserves_fragments_during_read_export_and_copy(native):
+    import lifecycle
+    client,token,histories,_=native;workspace=project(native);ident=chat(native,workspace)
+    root=main.ROOT/'projects'/workspace;image=root/'mixed.png'
+    image.write_bytes(b'\x89PNG\r\n\x1a\nimage-data')
+    content=['native string fragment',{'type':'text','text':'object text'},
+             {'type':'localImage','path':str(image)},{'type':'localImage','path':['not-a-path']},None,7]
+    histories[ident]['turns'][0]['items'][0]['content']=copy.deepcopy(content)
+    histories[ident]['turns'][0]['items'].append({'id':'bad-path-view','type':'imageView','path':{'invalid':'path'}})
+    before=copy.deepcopy(histories[ident])
+    with main.database() as db:lifecycle.update(db,'thread',ident,metadata={'path_map':{str(image):str(image)}})
+    query={'workspace':workspace}
+    read=client.get('/api/v1/threads/'+ident,headers=token(),params=query)
+    assert read.status_code==200
+    assert read.json()['thread']['turns'][0]['items'][0]['content']==content
+    exported=client.get('/api/v1/threads/'+ident+'/export',headers=token(),params=query)
+    assert exported.status_code==200 and 'native string fragment' in exported.text and 'object text' in exported.text
+    copied=client.post('/api/v1/workspaces/'+workspace+'/copy',headers=token(),json={'include_files':False,'include_threads':True})
+    assert copied.status_code==200,copied.text
+    assert copied.json()['image_assets_copied']==1 and histories[ident]==before
+    target=copied.json()['id'];new_id=client.get('/api/v1/threads',headers=token(),params={'workspace':target}).json()['items'][0]['id']
+    reread=client.get('/api/v1/threads/'+new_id,headers=token(),params={'workspace':target})
+    assert reread.status_code==200
+    mapped=reread.json()['thread']['turns'][0]['items'][0]['content']
+    assert mapped[0:2]==content[0:2] and mapped[3:]==content[3:]
+    assert Path(mapped[2]['path']).is_relative_to(main.ROOT/'projects'/target)
