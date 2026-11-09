@@ -38,7 +38,7 @@ from provider import flatten, restore_event, restore_response, has_image, chat_r
 from images import generate as generate_image, MAX_IMAGE, raster_type
 from changes import read_changes
 
-VERSION = '0.6.3'
+VERSION = '0.6.4'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
@@ -248,7 +248,7 @@ async def provider_responses(request:Request):
         except httpx.HTTPError:
             await upstream.aclose();inference_gate.release()
             raise HTTPException(502,'Model provider error response unavailable') from None
-        provider_last_error={'status':upstream.status_code,'message':provider_message(content)}
+        provider_last_error={'status':upstream.status_code,'message':redact(provider_message(content))}
         headers={}
         if upstream.status_code==429:
             delay=retry_seconds(upstream.headers.get('retry-after'));provider_retry_at=time.time()+delay
@@ -581,10 +581,14 @@ def prompt(ident:str,body:Prompt):
         policy = {'type':'dangerFullAccess'} if body.mode=='full' else {'type':'readOnly','networkAccess':True} if body.mode=='plan' else {'type':'workspaceWrite','writableRoots':[str(directory())],'networkAccess':True}
         audit('turn.start',ident)
         result = server.request('turn/start',{'threadId':ident,'input':inputs,'model':body.model,'effort':body.effort,
-            'approvalPolicy':'never' if body.mode in {'full','plan'} else 'on-request','sandboxPolicy':policy})
+            'approvalPolicy':'never' if body.mode in {'full','plan'} else 'on-request','sandboxPolicy':policy,
+            'collaborationMode':{'mode':'plan' if body.mode=='plan' else 'default',
+                'settings':{'model':body.model,'reasoning_effort':body.effort,'developer_instructions':None}}})
         with server.lock:
-            server.active_turns[ident]=result['turn']['id']
-            server.turn_modes[(ident,result['turn']['id'])]=body.mode
+            pair=(ident,result['turn']['id'])
+            if result['turn'].get('status')=='inProgress' and pair not in server.completed_turns:
+                server.active_turns[ident]=result['turn']['id']
+                server.turn_modes[pair]=body.mode
         return result
 
 

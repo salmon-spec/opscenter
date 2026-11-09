@@ -38,6 +38,7 @@ def env(tmp_path,monkeypatch):
     main.server.active_turns.clear()
     main.server.active_calls.clear()
     main.server.turn_modes.clear()
+    main.server.completed_turns.clear()
     main.server.cancelled_turns.clear()
     main.server.loaded_threads.clear()
     def token(role='admin'):
@@ -93,6 +94,8 @@ def test_prompt_native_modes_and_attachment_contract(env):
         payload=next(p for m,p in reversed(calls) if m=='turn/start')
         assert payload['sandboxPolicy']['type']==policy and payload['approvalPolicy']==approval
         assert payload['input'][1]['type']=='localImage'
+        assert payload['collaborationMode']=={'mode':'plan' if mode=='plan' else 'default',
+            'settings':{'model':'agnes-2.5-flash','reasoning_effort':'medium','developer_instructions':None}}
     assert client.post('/api/v1/threads/'+ident+'/prompt',headers=token(),json={'text':'hello','model':'x','cwd':'/etc'}).status_code==422
 
 
@@ -199,6 +202,37 @@ def test_loaded_thread_sends_without_resuming_each_turn(env):
     assert [m for m,p in calls]==['turn/start']
 
 
+def test_fast_completion_before_start_returns_does_not_block_next_prompt(env,monkeypatch):
+    from types import SimpleNamespace
+    client,token,_=env;ident=create(client,token);original=main.server.request
+    def rpc(method,params=None,**kwargs):
+        if method=='turn/start':
+            events=[{'method':'turn/started','params':{'threadId':ident,'turn':{'id':'fast','status':'inProgress'}}},
+                    {'method':'turn/completed','params':{'threadId':ident,'turn':{'id':'fast','status':'completed'}}}]
+            main.server.read(SimpleNamespace(stdout=iter(json.dumps(event) for event in events)))
+            return {'turn':{'id':'fast','status':'inProgress','items':[]}}
+        return original(method,params,**kwargs)
+    monkeypatch.setattr(main.server,'request',rpc)
+    for _ in range(2):
+        response=client.post('/api/v1/threads/'+ident+'/prompt',headers=token(),json={'text':'test','model':'test'})
+        assert response.status_code==200
+        assert ident not in main.server.active_turns
+        assert (ident,'fast') not in main.server.turn_modes
+
+
+def test_late_completion_does_not_clear_new_active_turn_or_approval():
+    from types import SimpleNamespace
+    from rpc import AppServer
+    server=AppServer();server.active_turns['thread']='new'
+    server.active_calls[('thread','old')]={'old-call'};server.turn_modes[('thread','old')]='ask'
+    server.approvals['new-approval']={'params':{'threadId':'thread','turnId':'new'}}
+    messages=[{'method':'turn/completed','params':{'threadId':'thread','turn':{'id':'old','status':'completed'}}},
+              {'method':'turn/started','params':{'threadId':'thread','turn':{'id':'old','status':'inProgress'}}}]
+    server.read(SimpleNamespace(stdout=iter(json.dumps(message) for message in messages)))
+    assert server.active_turns=={'thread':'new'} and 'new-approval' in server.approvals
+    assert ('thread','old') not in server.active_calls and ('thread','old') not in server.turn_modes
+
+
 def test_cooldown_and_active_turn_prevent_duplicate_inference(env,monkeypatch):
     client,token,calls=env;ident=create(client,token);calls.clear()
     monkeypatch.setattr(main,'provider_retry_at',time.time()+60)
@@ -228,6 +262,21 @@ def test_provider_429_is_not_retried_and_cooldown_does_not_contact_upstream(env,
     assert len(requests)==1
     assert main.provider_last_error['message']=='Too Many Requests'
     assert main.retry_seconds('invalid')==60 and main.retry_seconds('nan')==60
+
+
+@pytest.mark.parametrize('encoded',['synthetic\\u002dprivate\\u002dkey','synthetic&#45;private&#45;key'])
+def test_provider_error_redacts_key_after_json_and_html_decoding(env,monkeypatch,tmp_path,encoded):
+    import httpx
+    key=tmp_path/'key';key.write_text('synthetic-private-key')
+    monkeypatch.setenv('CODEX_API_KEY_FILE',str(key));monkeypatch.setenv('CODEX_API_BASE','https://provider.invalid/v1')
+    payload='{"error":{"message":"'+encoded+'"}}'
+    http=httpx.AsyncClient(transport=httpx.MockTransport(lambda request:httpx.Response(400,content=payload)))
+    monkeypatch.setattr(main,'provider_client',http)
+    local=TestClient(main.app,client=('127.0.0.1',12345))
+    response=local.post('/provider/v1/responses',headers={'Authorization':'Bearer synthetic-private-key'},json={'model':'test','input':[]})
+    assert response.status_code==400 and 'synthetic-private-key' not in response.text
+    assert main.provider_last_error['message']=='[REDACTED]'
+    assert 'synthetic-private-key' not in json.dumps(main.provider_state())
 
 
 def test_generated_image_is_owned_by_thread_and_survives_history_read(env,monkeypatch,tmp_path):

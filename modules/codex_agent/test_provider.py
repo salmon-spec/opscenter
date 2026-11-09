@@ -161,3 +161,15 @@ def test_chat_stream_preserves_late_valid_phase():
     async def collect():return [e async for e in chat_events(Stream(),'test')]
     events=asyncio.run(collect())
     assert events[-1]['response']['output'][0]['phase']=='partial_answer'
+
+
+def test_chat_stream_early_eof_fails_without_completing_partial_tools():
+    class Stream:
+        async def aiter_lines(self):
+            yield 'data: '+json.dumps({'choices':[{'delta':{'content':'正在检查',
+                'tool_calls':[{'index':0,'id':'c1','function':{'name':'functions__exec_command','arguments':'{"cmd":'}}]}}]})
+    async def collect():return [event async for event in chat_events(Stream(),'test')]
+    events=asyncio.run(collect())
+    assert events[-1]['type']=='response.failed' and events[-1]['response']['status']=='failed'
+    assert events[-1]['response']['error']['code']=='server_error'
+    assert not any(event['type'] in {'response.completed','response.output_item.done','response.function_call_arguments.done'} for event in events)

@@ -21,6 +21,7 @@ class AppServer:
         self.active_turns = {}
         self.active_calls = {}
         self.turn_modes = {}
+        self.completed_turns = collections.OrderedDict()
         self.cancelled_turns = set()
         self.loaded_threads = set()
         self.public_states = collections.OrderedDict()
@@ -44,6 +45,7 @@ class AppServer:
             self.active_turns.clear()
             self.active_calls.clear()
             self.turn_modes.clear()
+            self.completed_turns.clear()
             self.cancelled_turns.clear()
             self.loaded_threads.clear()
             self.public_states.clear()
@@ -56,7 +58,8 @@ class AppServer:
             if secret:
                 env['CODEX_PROVIDER_KEY'] = Path(secret).read_text().strip()
             args = [os.getenv('CODEX_BIN', 'codex'), 'app-server', '--listen', 'stdio://']
-            args.extend(['-c','features.multi_agent=false'])
+            args.extend(['-c','features.multi_agent=false','-c','tools.update_plan.enabled=true',
+                         '-c','tools.experimental_request_user_input.enabled=true'])
             base = os.getenv('CODEX_API_BASE', '')
             if base:
                 for value in ['model_provider="opscenter"', 'model_providers.opscenter.name="Existing Agent API"',
@@ -72,7 +75,8 @@ class AppServer:
                                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                                             env=env, bufsize=1)
             threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
-            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.6.3'}}, start=False)
+            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.6.4'},
+                                        'capabilities':{'experimentalApi':True}}, start=False)
             self.send({'method':'initialized', 'params':{}})
             self.initialized = True
 
@@ -134,14 +138,20 @@ class AppServer:
                     if method == 'serverRequest/resolved':
                         self.approvals.pop(str(params.get('requestId')), None)
                     if method == 'turn/completed':
-                        self.turn_modes.pop((params.get('threadId'),params.get('turn',{}).get('id')),None)
-                        self.active_turns.pop(params.get('threadId'),None)
-                        self.active_calls.pop((params.get('threadId'),params.get('turn',{}).get('id')),None)
+                        thread=params.get('threadId');turn=params.get('turn',{}).get('id');pair=(thread,turn)
+                        # A fast completion can beat the turn/start caller's state write.
+                        self.completed_turns[pair]=None;self.completed_turns.move_to_end(pair)
+                        while len(self.completed_turns)>200:self.completed_turns.popitem(last=False)
+                        self.turn_modes.pop(pair,None)
+                        if self.active_turns.get(thread)==turn:self.active_turns.pop(thread,None)
+                        self.active_calls.pop(pair,None)
                         for key, approval in list(self.approvals.items()):
-                            if approval.get('params', {}).get('threadId') == params.get('threadId'):
+                            pending=approval.get('params',{})
+                            if pending.get('threadId')==thread and (thread not in self.active_turns or pending.get('turnId')==turn):
                                 self.approvals.pop(key, None)
                     if method == 'turn/started':
-                        self.active_turns[params['threadId']]=params['turn']['id']
+                        if (params['threadId'],params['turn']['id']) not in self.completed_turns:
+                            self.active_turns[params['threadId']]=params['turn']['id']
                     if method == 'thread/closed':
                         self.loaded_threads.discard(params.get('threadId'))
                     if method=='item/started' and params.get('item',{}).get('type')=='commandExecution':

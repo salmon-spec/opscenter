@@ -70,11 +70,11 @@ async def chat_events(upstream,model):
     ident='resp_'+uuid.uuid4().hex
     response={'id':ident,'object':'response','created_at':int(time.time()),'model':model,'status':'in_progress','output':[]}
     yield {'type':'response.created','response':dict(response)}
-    text=None;calls={};items=[];usage={};finish=None;phase=None
+    text=None;calls={};items=[];usage={};finish=None;phase=None;done=False
     async for line in upstream.aiter_lines():
         if not line.startswith('data:'):continue
         raw=line[5:].strip()
-        if raw=='[DONE]':break
+        if raw=='[DONE]':done=True;break
         try:data=json.loads(raw)
         except ValueError:continue
         if data.get('error'):
@@ -111,6 +111,10 @@ async def chat_events(upstream,model):
                 if arguments:
                     item['arguments']+=arguments
                     yield {'type':'response.function_call_arguments.delta','output_index':items.index(item),'item_id':item['id'],'delta':arguments}
+    if not done and finish not in {'stop','length','tool_calls','function_call','content_filter'}:
+        yield {'type':'response.failed','response':{**response,'status':'failed',
+            'error':{'code':'server_error','message':'模型响应提前中断，请重试。'}}}
+        return
     for index,item in enumerate(items):
         item['status']='completed'
         if item['type']=='message':

@@ -1,4 +1,4 @@
-# Codex 工作台模块 0.6.3
+# Codex 工作台模块 0.6.4
 
 独立模块 `codex-agent`，使用官方 `@openai/codex` 0.166.0 的 app-server stdio 协议。网关复用工作台 JWT 管理员鉴权和沙箱 iframe 消息桥，前端不持有工作台 Token 或模型密钥。通过模块注册 API 加入侧栏，无需修改核心应用源码。
 
@@ -19,7 +19,7 @@
 
 新模块使用独立 PVC；旧 OpenCode 模块停用时保留其 PVC、会话、文件、配置和部署模板，便于恢复。
 
-验证：`python -m pytest modules/codex_agent/test_main.py -q`。部署清单 `deploy/k8s/opscenter-codex-module.yaml`；模块注册请求体 `module.json`。具体实测与发布记录以工作区 `artifacts/codex-module-20261105/report.md` 为准。
+验证：`python -m pytest modules/codex_agent -q`。部署清单 `deploy/k8s/opscenter-codex-module.yaml`；模块注册请求体 `module.json`。最新复查与发布记录见工作区 `artifacts/codex-recheck-20261109/report.md`，初始接入记录见 `artifacts/codex-module-20261105/report.md`。
 
 官方协议文档：https://learn.chatgpt.com/docs/app-server 。
 
@@ -44,3 +44,9 @@
 ## 实际图片生成与会话图片卡片
 
 内置image_tool.py调用服务端私有图片入口，使用既有Agnes API的agnes-image-2.5-flash生成1K图片，支持标准宽高比。图片文件保存至所属工作区output/imagegen，会话按实际生成轮次持久关联图片卡片，刷新可恢复，不依赖模型回复格式。原生imageView结果也会显示为独立卡片，限定当前工作区内的真实栅格文件，刷新时由原生历史恢复。已有线程resume覆盖图片工具指引，无需装SDK；规划模式拒绝生成，停止后不保存尚未返回的结果。图片服务沿用限流冷却、输出验证和16MiB图片上限，文本预览2MiB保持。工具历史、事件与终端结果屏蔽已配置的提供方密钥，发送给模型的历史也会脱敏。聊天模型列表排除图像/视频专用模型。
+
+## 会话恢复与原生计划模式
+
+快速切换会话会清除旧内容和待回答问题，并在当前读取结束后补读最新会话。发送失败且已有下一条草稿时，原消息和附件保留在当前聊天的失败区，可重试而不覆盖草稿；该失败区仅保存在当前页面内存，刷新页面不会恢复。图片异步加载跟随原本在底部的视图，用户向上滚动后保持阅读位置。
+
+Plan显式使用原生collaborationMode，同时保持只读沙箱；其他模式每轮恢复Default。开启固定CLI的update_plan及Plan提问工具，Default不开放仅限Plan的同步提问。计划、公开进度是否出现仍取决于模型实际调用，不合成推理。快速完成事件不会重新激活任务，迟到完成事件不清除新任务；缺少正常结束信号的Chat流按失败处理，错误正文解码后再次屏蔽配置密钥。
