@@ -37,7 +37,7 @@ spec:
         fsGroupChangePolicy: OnRootMismatch
       initContainers:
         - name: prepare-data
-          image: opscenter/module-codex-agent:0.7.0-release-20261109
+          image: opscenter/module-codex-agent:0.7.0-release-20261109-r2
           imagePullPolicy: Never
           command: [python, -c, "import pathlib; [(pathlib.Path('/state')/p).mkdir(parents=True,exist_ok=True,mode=0o700) for p in ['codex-state/codex','codex-state/gateway','workspace']]"]
           securityContext:
@@ -52,7 +52,7 @@ spec:
               mountPath: /state
       containers:
         - name: codex
-          image: opscenter/module-codex-agent:0.7.0-release-20261109
+          image: opscenter/module-codex-agent:0.7.0-release-20261109-r2
           imagePullPolicy: Never
           env:
             - name: CODEX_HOME
