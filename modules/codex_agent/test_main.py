@@ -25,6 +25,9 @@ def env(tmp_path,monkeypatch):
     monkeypatch.setattr(main,'STATE',tmp_path/'state');monkeypatch.setattr(main,'ROOT',tmp_path/'workspace')
     monkeypatch.setattr(main,'provider_retry_at',0)
     monkeypatch.setattr(main,'provider_last_error',None)
+    monkeypatch.setattr(main,'operation_threads',set())
+    monkeypatch.setattr(main,'operation_projects',set())
+    monkeypatch.setattr(main,'prompt_start_lock',__import__('threading').Lock())
     calls=[]
     def rpc(method,params=None,**kw):
         calls.append((method,params))

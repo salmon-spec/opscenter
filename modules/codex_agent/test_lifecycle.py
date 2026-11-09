@@ -119,7 +119,7 @@ def test_active_chat_blocks_all_related_lifecycle_mutations(native):
                       ('/workspaces/'+workspace+'/restore',{}),('/workspaces/'+workspace+'/copy',{})]:
         assert client.post('/api/v1'+path,headers=token(),params={'workspace':workspace},json=body).status_code==409,path
     other=chat(native,workspace)
-    assert client.post('/api/v1/threads/'+other+'/copy',headers=token(),params={'workspace':workspace},json={}).status_code==409
+    assert client.post('/api/v1/threads/'+other+'/copy',headers=token(),params={'workspace':workspace},json={}).status_code==200
 
 
 @pytest.mark.parametrize('include_files',[True,False])
@@ -272,7 +272,7 @@ def test_archived_chat_does_not_disable_active_project_file_tools(native,monkeyp
 
 
 @pytest.mark.parametrize('operation',['write','terminal'])
-def test_project_archive_waits_for_write_or_terminal_operation(native,monkeypatch,operation):
+def test_project_archive_rejects_target_write_or_terminal_without_holding_global_lock(native,monkeypatch,operation):
     from concurrent.futures import ThreadPoolExecutor
     from types import SimpleNamespace
     import threading
@@ -303,12 +303,12 @@ def test_project_archive_waits_for_write_or_terminal_operation(native,monkeypatc
             assert started.wait(5)
             acquired=main.mutation.acquire(blocking=False)
             if acquired:main.mutation.release()
-            assert not acquired,'The write/terminal must retain the lifecycle lock'
+            assert acquired,'Long write/terminal work must not retain the global lifecycle lock'
             archived=workers.submit(archive);assert archive_requested.wait(5)
-            assert not archived.done() and not main.project_record(workspace)['archived']
+            assert archived.result(timeout=2).status_code==409 and not main.project_record(workspace)['archived']
         finally:release.set()
         assert pending.result(timeout=5).status_code==200
-        assert archived.result(timeout=5).status_code==200
+    assert client.post('/api/v1/workspaces/'+workspace+'/edit',headers=token(),json={'archived':True}).status_code==200
     assert main.project_record(workspace)['archived']
     if operation=='write':assert (root/'keep.txt').read_text()=='updated'
 

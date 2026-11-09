@@ -79,7 +79,7 @@ class AppServer:
                                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                                             env=env, bufsize=1)
             threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
-            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.7.3'},
+            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.7.4'},
                                         'capabilities':{'experimentalApi':True}}, start=False)
             self.send({'method':'initialized', 'params':{}})
             self.initialized = True

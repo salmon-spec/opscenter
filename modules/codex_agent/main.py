@@ -42,7 +42,7 @@ import lifecycle
 from conversation_ops import fork_conversation, cleanup_conversation
 from gateway_history import copy_public_history, cleanup_public_history
 
-VERSION = '0.7.3'
+VERSION = '0.7.4'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
@@ -58,6 +58,9 @@ ROOT = Path(os.getenv('CODEX_WORKSPACE', '/workspace'))
 STATE = Path(os.getenv('CODEX_GATEWAY_DATA', '/state/gateway'))
 workspace = ContextVar('workspace', default='default')
 mutation = threading.RLock()
+prompt_start_lock = threading.Lock()
+operation_threads = set()
+operation_projects = set()
 RASTER = {'image/png', 'image/jpeg', 'image/gif', 'image/webp'}
 provider_models = (0, [])
 models_lock = threading.Lock()
@@ -218,6 +221,41 @@ def require_project_active(ident):
 
 def project_chats(ident):
     with database() as db:return [dict(row) for row in db.execute('select * from threads where workspace=?',(ident,))]
+
+
+@contextmanager
+def targeted_mutation(*,threads=(),project=None,whole_project=False):
+    # Reserve only affected targets; never hold the global lock through RPC/I/O.
+    with mutation:
+        affected=set(threads)
+        if whole_project:affected.update(row['id'] for row in project_chats(project))
+        if affected.intersection(operation_threads) or project is not None and project in operation_projects:
+            raise HTTPException(409,'该目标正在执行其他操作，请稍后重试')
+        operation_threads.update(affected)
+        if project is not None:operation_projects.add(project)
+    try:yield
+    finally:
+        with mutation:
+            operation_threads.difference_update(affected)
+            if project is not None:operation_projects.discard(project)
+
+
+@contextmanager
+def prompt_submission():
+    if not prompt_start_lock.acquire(blocking=False):raise HTTPException(409,'已有消息正在发送，请稍后重试')
+    try:yield
+    finally:prompt_start_lock.release()
+
+
+def activity_snapshot():
+    with server.lock:
+        active=dict(server.active_turns)
+        backgrounds={thread for (thread,turn),items in server.active_commands.items()
+                     if items and (thread,turn) in server.completed_turns}
+    with mutation:
+        for ident in operation_threads:active.setdefault(ident,None)
+        projects=set(operation_projects)
+    return active,backgrounds,projects
 
 
 def require_chat_editable(row):
@@ -557,6 +595,7 @@ def models():
 
 @app.get('/api/v1/workspaces')
 def workspaces(view:Literal['active','archived','deleted','all']='active'):
+    active,_,busy_projects=activity_snapshot()
     with database() as db:
         items=[]
         for row in db.execute('select * from workspaces'):
@@ -564,7 +603,9 @@ def workspaces(view:Literal['active','archived','deleted','all']='active'):
             if view=='deleted' and not flags['deleted']:continue
             if view=='archived' and (flags['deleted'] or not flags['archived']):continue
             if view=='active' and (flags['deleted'] or flags['archived']):continue
-            items.append({**dict(row),'archived':flags['archived'],'deleted':flags['deleted']})
+            running=[r[0] for r in db.execute('select id from threads where workspace=?',(row['id'],)) if r[0] in active]
+            items.append({**dict(row),'archived':flags['archived'],'deleted':flags['deleted'],
+                          'active':bool(running or row['id'] in busy_projects),'active_thread_ids':running})
     return {'items':items}
 
 
@@ -583,7 +624,7 @@ def workspace_create(body:NewWorkspace):
 
 @app.post('/api/v1/workspaces/{ident}/edit')
 def workspace_edit(ident:str,body:WorkspaceEdit):
-    with mutation:
+    with targeted_mutation(project=ident,whole_project=True):
         row=project_record(ident);lifecycle.require_idle(server,[r['id'] for r in project_chats(ident)],check_goals=body.archived is True)
         if row['deleted']:raise HTTPException(409,'项目已移入回收站，请先恢复')
         if ident=='default' and body.archived is not None:raise HTTPException(409,'默认项目不能归档')
@@ -596,7 +637,7 @@ def workspace_edit(ident:str,body:WorkspaceEdit):
 
 @app.post('/api/v1/workspaces/{ident}/delete')
 def workspace_delete(ident:str):
-    with mutation:
+    with targeted_mutation(project=ident,whole_project=True):
         project_record(ident)
         if ident=='default':raise HTTPException(409,'默认项目不能删除')
         lifecycle.require_idle(server,[r['id'] for r in project_chats(ident)],check_goals=True)
@@ -607,7 +648,7 @@ def workspace_delete(ident:str):
 
 @app.post('/api/v1/workspaces/{ident}/restore')
 def workspace_restore(ident:str):
-    with mutation:
+    with targeted_mutation(project=ident,whole_project=True):
         project_record(ident);lifecycle.require_idle(server,[r['id'] for r in project_chats(ident)])
         with database() as db:lifecycle.update(db,'workspace',ident,deleted=False)
         audit('workspace.restore',ident)
@@ -616,18 +657,21 @@ def workspace_restore(ident:str):
 
 @app.get('/api/v1/threads')
 def threads(archived:bool=False,deleted:bool=False):
+    active,backgrounds,_=activity_snapshot()
     with database() as db:
         items=[]
         for row in db.execute('select * from threads where workspace=? order by rowid desc',(workspace.get(),)):
             removed=lifecycle.state(db,'thread',row['id'])['deleted']
             if removed!=deleted or not deleted and bool(row['archived'])!=archived:continue
-            items.append({**dict(row),'archived':bool(row['archived']),'deleted':removed})
+            items.append({**dict(row),'archived':bool(row['archived']),'deleted':removed,
+                          'active':row['id'] in active,'running_turn_id':active.get(row['id']),
+                          'background_running':row['id'] in backgrounds})
     return {'items':items}
 
 
 @app.post('/api/v1/threads')
 def thread_create(body:ThreadCreate):
-    with mutation:
+    with targeted_mutation(project=workspace.get()):
         require_project_active(workspace.get())
         result = server.request('thread/start',{'cwd':str(directory()),'model':body.model or os.getenv('CODEX_MODEL') or None,
             'approvalPolicy':'on-request','sandbox':'workspace-write',
@@ -692,7 +736,7 @@ def thread_read(ident:str):
 
 @app.post('/api/v1/threads/{ident}/edit')
 def thread_edit(ident:str,body:ThreadEdit):
-    with mutation:
+    with targeted_mutation(threads=[ident]):
         row=own(ident);require_chat_editable(row)
         if body.archived is True:lifecycle.require_idle(server,[ident],check_goals=True)
         if body.title is not None:server.request('thread/name/set',{'threadId':ident,'name':body.title})
@@ -706,7 +750,7 @@ def thread_edit(ident:str,body:ThreadEdit):
 
 @app.post('/api/v1/threads/{ident}/delete')
 def thread_delete(ident:str):
-    with mutation:
+    with targeted_mutation(threads=[ident]):
         row=own(ident);lifecycle.require_idle(server,[ident],check_goals=True)
         with database() as db:lifecycle.update(db,'thread',ident,deleted=True)
         audit('thread.delete',ident)
@@ -715,7 +759,7 @@ def thread_delete(ident:str):
 
 @app.post('/api/v1/threads/{ident}/restore')
 def thread_restore(ident:str):
-    with mutation:
+    with targeted_mutation(threads=[ident]):
         row=own(ident);lifecycle.require_idle(server,[ident])
         with database() as db:lifecycle.update(db,'thread',ident,deleted=False)
         audit('thread.restore',ident)
@@ -745,9 +789,9 @@ def clone_native(row,title,target_root,turn_id=None):
 
 
 def copy_chat(ident,body,turn_id=None):
-    with mutation:
+    with targeted_mutation(threads=[ident]):
         row=own(ident);require_chat_editable(row)
-        lifecycle.require_idle(server,[r['id'] for r in project_chats(row['workspace'])],check_goals=True)
+        lifecycle.require_idle(server,[ident],check_goals=True)
         title=body.title or (row['title']+(' 分支' if isinstance(body,ThreadFork) else ' 副本'))[:120]
         created,turn_map,_=clone_native(row,title,directory(),turn_id)
         history_created=False
@@ -844,7 +888,7 @@ def conversation_image_mapping(source_id,native,source_root,target_root,staging,
 @app.post('/api/v1/workspaces/{ident}/copy')
 def workspace_copy(ident:str,body:WorkspaceCopy):
     if not body.include_files and not body.include_threads:raise HTTPException(422,'至少选择对话或项目文件')
-    with mutation:
+    with targeted_mutation(project=ident,whole_project=True):
         source=project_record(ident)
         if ident=='default':raise HTTPException(409,'默认项目包含其他项目，不能整体复制')
         if source['deleted']:raise HTTPException(409,'项目已移入回收站，请先恢复')
@@ -889,7 +933,7 @@ def workspace_copy(ident:str,body:WorkspaceCopy):
 
 @app.post('/api/v1/threads/{ident}/prompt')
 def prompt(ident:str,body:Prompt):
-    with mutation:
+    with prompt_submission(),targeted_mutation(threads=[ident],project=workspace.get()):
         row=own(ident);require_chat_editable(row)
         if row['archived']:raise HTTPException(409,'对话已归档，请先恢复对话')
         server.start()
@@ -930,7 +974,7 @@ def prompt(ident:str,body:Prompt):
 @app.post('/api/v1/threads/{ident}/stop')
 def stop(ident:str):
     own(ident)
-    with mutation:
+    with targeted_mutation(threads=[ident]):
         data = server.request('thread/read',{'threadId':ident,'includeTurns':True})
         with server.lock:
             finished=set(server.completed_turns)
@@ -976,9 +1020,12 @@ def events(cursor:int=0):
         params=message.get('params',{})
         ident=params.get('threadId') or params.get('thread',{}).get('id')
         return ident in owned
+    active,backgrounds,_=activity_snapshot()
     with server.lock:
         return redact({'cursor':server.cursor,'generation':server.generation,'provider':provider_state(),
             'refresh':bool(server.events and cursor<server.events[0]['cursor']-1),
+            'active_threads':[{'threadId':ident,'turnId':turn,'workspace':workspace.get(),'backgroundRunning':ident in backgrounds}
+                              for ident,turn in active.items() if ident in owned],
             'background_turns':[{'threadId':thread,'turnId':turn} for (thread,turn),items in server.active_commands.items()
                                 if thread in owned and items and (thread,turn) in server.completed_turns],
             'events':[e for e in server.events if e['cursor']>cursor and permitted(e)],
@@ -1030,7 +1077,7 @@ def file_content(path:str):
 
 @app.post('/api/v1/files/write')
 def write(body:FileWrite):
-    with mutation:
+    with targeted_mutation(project=workspace.get()):
         require_project_active(workspace.get())
         target=file_path(body.path)
         try: content=base64.b64decode(body.content,validate=True) if body.encoding=='base64' else body.content.encode()
@@ -1053,7 +1100,7 @@ def write(body:FileWrite):
 
 @app.post('/api/v1/terminal')
 def terminal(body:Command):
-    with mutation:
+    with targeted_mutation(project=workspace.get()):
         require_project_active(workspace.get())
         audit('terminal.execute')
         try:
