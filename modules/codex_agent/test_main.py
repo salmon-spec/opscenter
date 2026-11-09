@@ -37,6 +37,8 @@ def env(tmp_path,monkeypatch):
     main.server.approvals.clear();main.server.events.clear()
     main.server.active_turns.clear()
     main.server.active_calls.clear()
+    main.server.active_commands.clear()
+    main.server.recent_commands.clear()
     main.server.turn_modes.clear()
     main.server.completed_turns.clear()
     main.server.cancelled_turns.clear()
@@ -231,6 +233,76 @@ def test_late_completion_does_not_clear_new_active_turn_or_approval():
     server.read(SimpleNamespace(stdout=iter(json.dumps(message) for message in messages)))
     assert server.active_turns=={'thread':'new'} and 'new-approval' in server.approvals
     assert ('thread','old') not in server.active_calls and ('thread','old') not in server.turn_modes
+
+
+def test_native_finished_turn_holds_live_command_until_real_item_completion(env,monkeypatch):
+    from types import SimpleNamespace
+    import copy
+    client,token,_=env;ident=create(client,token);turn='background-turn';pair=(ident,turn)
+    main.server.turn_modes[pair]='ask'
+    item={'id':'background-call','type':'commandExecution','status':'inProgress','processId':'pty-1','aggregatedOutput':None}
+    messages=[{'method':'turn/started','params':{'threadId':ident,'turn':{'id':turn,'status':'inProgress'}}},
+              {'method':'item/started','params':{'threadId':ident,'turnId':turn,'item':item}},
+              {'method':'item/commandExecution/outputDelta','params':{'threadId':ident,'turnId':turn,'itemId':item['id'],'delta':'READY'}},
+              {'method':'turn/completed','params':{'threadId':ident,'turn':{'id':turn,'status':'completed','items':[]}}}]
+    main.server.read(SimpleNamespace(stdout=iter(json.dumps(message) for message in messages)))
+    assert main.server.active_turns[ident]==turn and main.server.turn_modes[pair]=='ask'
+    assert main.server.active_calls[pair]=={'background-call'}
+    native={'thread':{'id':ident,'turns':[{'id':turn,'status':'completed','items':[]}]}}
+    monkeypatch.setattr(main.server,'request',lambda *a,**k:copy.deepcopy(native))
+    current=client.get('/api/v1/threads/'+ident,headers=token()).json()
+    shown=current['thread']['turns'][0]
+    assert shown['status']=='completed' and shown['backgroundRunning'] and shown['activeCommandIds']==['background-call']
+    assert shown['items'][0]['status']=='inProgress' and shown['items'][0]['aggregatedOutput']=='READY'
+    import lifecycle
+    with pytest.raises(Exception) as blocked:lifecycle.require_idle(main.server,[ident])
+    assert blocked.value.status_code==409
+    events=client.get('/api/v1/events',headers=token()).json()
+    assert events['background_turns']==[{'threadId':ident,'turnId':turn}]
+    completed=next(e for e in events['events'] if e['method']=='turn/completed')
+    assert completed['params']['backgroundRunning'] and completed['params']['turn']['status']=='completed'
+    finished={**item,'status':'completed','exitCode':0,'aggregatedOutput':'READY'}
+    main.server.read(SimpleNamespace(stdout=iter([json.dumps({'method':'item/completed','params':{'threadId':ident,'turnId':turn,'item':finished}})])))
+    assert ident not in main.server.active_turns and pair not in main.server.active_calls and pair not in main.server.turn_modes
+    reread=client.get('/api/v1/threads/'+ident,headers=token()).json()['thread']['turns'][0]
+    assert reread['status']=='completed' and not reread['backgroundRunning'] and reread['activeCommandIds']==[]
+    assert reread['items'][0]['status']=='completed' and reread['items'][0]['processId']=='pty-1'
+    assert main.server.events[-1]['params']['refresh'] and not main.server.events[-1]['params']['backgroundRunning']
+
+
+def test_late_background_started_event_recovers_activity_without_overwriting_new_turn():
+    from types import SimpleNamespace
+    from rpc import AppServer
+    server=AppServer();server.completed_turns[('thread','old')]='completed'
+    def send(method,item):
+        server.read(SimpleNamespace(stdout=iter([json.dumps({'method':method,'params':{'threadId':'thread','turnId':'old','item':item}})])))
+    item={'id':'late-call','type':'commandExecution','status':'inProgress'}
+    send('item/started',item)
+    assert server.active_turns=={'thread':'old'} and server.events[-1]['params']['backgroundRunning']
+    server.active_turns['thread']='new'
+    send('item/completed',{**item,'status':'failed','exitCode':137})
+    assert server.active_turns=={'thread':'new'} and ('thread','old') not in server.active_commands
+
+
+def test_stop_native_completed_background_turn_only_cancels_exact_commands(env,monkeypatch):
+    from types import SimpleNamespace
+    client,token,_=env;ident=create(client,token);turn='completed-turn';pair=(ident,turn)
+    main.server.active_turns[ident]=turn;main.server.completed_turns[pair]='completed'
+    main.server.active_commands[pair]={'live-call':{'id':'live-call','type':'commandExecution','status':'inProgress'}}
+    main.server.active_calls[pair]={'live-call'}
+    requests=[];spawned=[]
+    def rpc(method,params=None,**kwargs):
+        requests.append(method)
+        if method=='turn/interrupt':raise AssertionError('A native completed turn must not be interrupted')
+        return {'thread':{'id':ident,'turns':[{'id':turn,'status':'completed','items':[]}]}}
+    monkeypatch.setattr(main.server,'request',rpc)
+    monkeypatch.setattr(main.subprocess,'Popen',lambda command,**kwargs:spawned.append(command) or SimpleNamespace())
+    response=client.post('/api/v1/threads/'+ident+'/stop',headers=token())
+    assert response.status_code==200 and response.json()['background_stop_requested']
+    assert not response.json()['interrupted'] and response.json()['cancelled_tool_calls']==1
+    assert requests==['thread/read'] and len(spawned)==1
+    assert spawned[0][-2]==ident and json.loads(spawned[0][-1])==['live-call']
+    assert pair in main.server.cancelled_turns and main.server.active_turns[ident]==turn
 
 
 def test_cooldown_and_active_turn_prevent_duplicate_inference(env,monkeypatch):

@@ -25,7 +25,7 @@ def chat_content(content):
 
 def chat_request(body):
     """The existing provider's Responses image converter is incomplete."""
-    messages=[];pending_images=[]
+    messages=[];pending_images=[];invalid_history_calls=set()
     def flush_images():
         # Parallel tool calls must receive all tool replies before another role.
         if pending_images:
@@ -39,7 +39,20 @@ def chat_request(body):
             messages.append({'role':item['role'],'content':chat_content(item.get('content',''))})
         elif kind=='function_call':
             flush_images()
-            call={'id':item['call_id'],'type':'function','function':{'name':item['name'],'arguments':item['arguments']}}
+            # Native history can retain a rejected malformed call. Chat gateways
+            # still require JSON on replay; this envelope records the failure and
+            # raw value without repairing or executing that historical call.
+            arguments=item['arguments']
+            try:
+                if not isinstance(arguments,str):raise ValueError()
+                json.loads(arguments)
+            except (TypeError,ValueError):
+                arguments=json.dumps({'_codex_history_parse_error':True,
+                    'original_name':item.get('name'),'original_raw':arguments},ensure_ascii=False)
+                invalid_history_calls.add(item['call_id'])
+            if not item.get('name'):invalid_history_calls.add(item['call_id'])
+            call={'id':item['call_id'],'type':'function','function':{
+                'name':item.get('name') or 'historical_invalid_tool_call','arguments':arguments}}
             if messages and messages[-1]['role']=='assistant':messages[-1].setdefault('tool_calls',[]).append(call)
             else:messages.append({'role':'assistant','content':None,'tool_calls':[call]})
         elif kind in {'function_call_output','custom_tool_call_output'}:
@@ -54,6 +67,8 @@ def chat_request(body):
                     output=''.join(c['text'] for c in converted if c['type']=='text') or 'Tool returned images attached in the following user message.'
                 else:output=converted
             if not isinstance(output,str):output=json.dumps(output)
+            if item['call_id'] in invalid_history_calls:
+                output='Historical tool call parsing failed; this records a rejected call, not a repaired execution. Original native result:\n'+output
             messages.append({'role':'tool','tool_call_id':item['call_id'],'content':output})
     flush_images()
     result={'model':body['model'],'messages':messages,'stream':True,

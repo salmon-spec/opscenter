@@ -20,6 +20,8 @@ class AppServer:
         self.approvals = {}
         self.active_turns = {}
         self.active_calls = {}
+        self.active_commands = {}
+        self.recent_commands = collections.OrderedDict()
         self.turn_modes = {}
         self.completed_turns = collections.OrderedDict()
         self.cancelled_turns = set()
@@ -44,6 +46,8 @@ class AppServer:
             self.approvals.clear()
             self.active_turns.clear()
             self.active_calls.clear()
+            self.active_commands.clear()
+            self.recent_commands.clear()
             self.turn_modes.clear()
             self.completed_turns.clear()
             self.cancelled_turns.clear()
@@ -75,7 +79,7 @@ class AppServer:
                                             stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
                                             env=env, bufsize=1)
             threading.Thread(target=self.read, args=(self.process,), daemon=True).start()
-            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.7.1'},
+            self.request('initialize', {'clientInfo': {'name':'opscenter_codex', 'title':'OpsCenter Codex', 'version':'0.7.2'},
                                         'capabilities':{'experimentalApi':True}}, start=False)
             self.send({'method':'initialized', 'params':{}})
             self.initialized = True
@@ -140,11 +144,12 @@ class AppServer:
                     if method == 'turn/completed':
                         thread=params.get('threadId');turn=params.get('turn',{}).get('id');pair=(thread,turn)
                         # A fast completion can beat the turn/start caller's state write.
-                        self.completed_turns[pair]=None;self.completed_turns.move_to_end(pair)
+                        self.completed_turns[pair]=params.get('turn',{}).get('status','completed');self.completed_turns.move_to_end(pair)
                         while len(self.completed_turns)>200:self.completed_turns.popitem(last=False)
-                        self.turn_modes.pop(pair,None)
-                        if self.active_turns.get(thread)==turn:self.active_turns.pop(thread,None)
-                        self.active_calls.pop(pair,None)
+                        if self.active_commands.get(pair):
+                            params=dict(params,backgroundRunning=True);message=dict(message,params=params)
+                            if thread not in self.active_turns:self.active_turns[thread]=turn
+                        else:self.release_turn(thread,turn)
                         for key, approval in list(self.approvals.items()):
                             pending=approval.get('params',{})
                             if pending.get('threadId')==thread and (thread not in self.active_turns or pending.get('turnId')==turn):
@@ -155,7 +160,31 @@ class AppServer:
                     if method == 'thread/closed':
                         self.loaded_threads.discard(params.get('threadId'))
                     if method=='item/started' and params.get('item',{}).get('type')=='commandExecution':
-                        self.active_calls.setdefault((params.get('threadId'),params.get('turnId')),set()).add(params['item']['id'])
+                        pair=(params.get('threadId'),params.get('turnId'));item=params['item']
+                        if item.get('status')=='inProgress':
+                            self.active_commands.setdefault(pair,{})[item['id']]=dict(item)
+                            self.active_calls.setdefault(pair,set()).add(item['id'])
+                            if pair[0] not in self.active_turns:self.active_turns[pair[0]]=pair[1]
+                            if pair in self.completed_turns:
+                                params=dict(params,backgroundRunning=True,refresh=True);message=dict(message,params=params)
+                    if method=='item/commandExecution/outputDelta':
+                        pair=(params.get('threadId'),params.get('turnId'))
+                        item=self.active_commands.get(pair,{}).get(params.get('itemId'))
+                        if item is not None:item['aggregatedOutput']=((item.get('aggregatedOutput') or '')+params.get('delta',''))[-128*1024:]
+                    if method=='item/completed' and params.get('item',{}).get('type')=='commandExecution':
+                        pair=(params.get('threadId'),params.get('turnId'));ident=params['item']['id']
+                        finished=dict(params['item'])
+                        if isinstance(finished.get('aggregatedOutput'),str):finished['aggregatedOutput']=finished['aggregatedOutput'][-128*1024:]
+                        key=(*pair,ident);self.recent_commands[key]=finished;self.recent_commands.move_to_end(key)
+                        while len(self.recent_commands)>64:self.recent_commands.popitem(last=False)
+                        commands=self.active_commands.get(pair,{})
+                        commands.pop(ident,None)
+                        if not commands:self.active_commands.pop(pair,None)
+                        calls=self.active_calls.get(pair,set());calls.discard(ident)
+                        if not calls:self.active_calls.pop(pair,None)
+                        if pair in self.completed_turns:
+                            if not commands:self.release_turn(*pair)
+                            params=dict(params,backgroundRunning=bool(commands),refresh=True);message=dict(message,params=params)
                     if method.startswith(('item/', 'turn/', 'thread/', 'error', 'account/', 'serverRequest/')):
                         self.cursor += 1
                         # Bound individual tool outputs in polling memory.
@@ -168,6 +197,15 @@ class AppServer:
                     for target in self.pending.values():
                         try: target.put_nowait({'error':{'message':'Codex 服务已停止'}})
                         except queue.Full: pass
+
+    def release_turn(self,thread,turn):
+        """Release a native-finished turn only after its real commands finish."""
+        pair=(thread,turn)
+        self.turn_modes.pop(pair,None);self.active_calls.pop(pair,None)
+        if self.active_turns.get(thread)==turn:
+            other=next((key[1] for key,commands in self.active_commands.items() if key[0]==thread and commands),None)
+            if other is None:self.active_turns.pop(thread,None)
+            else:self.active_turns[thread]=other
 
     def reply(self, ident, result):
         with self.lock:

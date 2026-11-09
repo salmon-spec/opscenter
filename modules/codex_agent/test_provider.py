@@ -50,6 +50,68 @@ def test_image_chat_bridge_preserves_tool_results_and_visual_input():
     assert chat['tools'][0]['function']['name']=='functions__exec_command'
 
 
+@pytest.mark.parametrize('arguments',['{','',{'cmd':'historical'},None])
+def test_chat_history_wraps_rejected_arguments_without_repair_or_execution(arguments):
+    original={'model':'test','input':[
+        {'type':'function_call','name':'','call_id':'rejected','arguments':arguments},
+        {'type':'function_call_output','call_id':'rejected','output':'Native argument parsing failed.'}],
+        'tools':[{'type':'function','name':'exec_command','parameters':{'type':'object'}}]}
+    before=json.loads(json.dumps(original))
+    result=chat_request(original)
+    call=result['messages'][0]['tool_calls'][0]
+    assert call['id']=='rejected' and call['function']['name']=='historical_invalid_tool_call'
+    assert json.loads(call['function']['arguments'])=={
+        '_codex_history_parse_error':True,'original_name':'','original_raw':arguments}
+    reply=result['messages'][1]
+    assert reply['role']=='tool' and reply['tool_call_id']=='rejected'
+    assert reply['content'].startswith('Historical tool call parsing failed;')
+    assert reply['content'].endswith('Native argument parsing failed.')
+    assert [tool['function']['name'] for tool in result['tools']]==['exec_command']
+    assert original==before
+
+
+@pytest.mark.parametrize('arguments',[' { "cmd" : "pwd" } \n','{"数字":1,"escaped":"\\u4e2d"}',
+                                     '[]','null','57','"quoted"'])
+def test_valid_history_json_is_preserved_byte_for_byte(arguments):
+    result=chat_request({'model':'test','input':[
+        {'type':'function_call','name':'exec_command','call_id':'valid','arguments':arguments}]})
+    call=result['messages'][0]['tool_calls'][0]['function']
+    assert call=={'name':'exec_command','arguments':arguments}
+
+
+def test_mixed_valid_and_rejected_history_marks_only_matching_tool_reply():
+    valid=' { "cmd": "historical only" } '
+    body={'model':'test','input':[
+        {'type':'function_call','name':'exec_command','call_id':'valid','arguments':valid},
+        {'type':'function_call','name':'','call_id':'bad','arguments':'{'},
+        {'type':'function_call_output','call_id':'valid','output':'Original successful result.'},
+        {'type':'function_call_output','call_id':'bad','output':'Original native parsing error.'}]}
+    original=json.loads(json.dumps(body))
+    result=chat_request(body)
+    calls=result['messages'][0]['tool_calls']
+    assert calls[0]['function']=={'name':'exec_command','arguments':valid}
+    assert calls[1]['function']['name']=='historical_invalid_tool_call'
+    assert json.loads(calls[1]['function']['arguments'])['original_raw']=='{'
+    replies={message['tool_call_id']:message['content'] for message in result['messages'] if message['role']=='tool'}
+    assert replies['valid']=='Original successful result.'
+    assert replies['bad'].startswith('Historical tool call parsing failed;')
+    assert replies['bad'].endswith('Original native parsing error.')
+    assert body==original
+
+
+def test_new_malformed_model_arguments_remain_unmodified_for_native_rejection():
+    class Stream:
+        async def aiter_lines(self):
+            yield 'data: '+json.dumps({'choices':[{'delta':{'tool_calls':[
+                {'index':0,'id':'new-call','function':{'name':'exec_command','arguments':'{'}}]},'finish_reason':'tool_calls'}]})
+            yield 'data: [DONE]'
+    async def collect():return [event async for event in chat_events(Stream(),'test')]
+    events=asyncio.run(collect())
+    call=events[-1]['response']['output'][0]
+    assert call['name']=='exec_command' and call['arguments']=='{'
+    with pytest.raises(ValueError):json.loads(call['arguments'])
+
+
 def test_native_image_tool_output_uses_visual_chat_bridge():
     image='data:image/png;base64,aW1hZ2U='
     for kind in ['function_call_output','custom_tool_call_output']:

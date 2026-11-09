@@ -42,7 +42,7 @@ import lifecycle
 from conversation_ops import fork_conversation, cleanup_conversation
 from gateway_history import copy_public_history, cleanup_public_history
 
-VERSION = '0.7.1'
+VERSION = '0.7.2'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
@@ -646,10 +646,28 @@ def thread_create(body:ThreadCreate):
 def thread_read(ident:str):
     row = own(ident)
     result = server.request('thread/read',{'threadId':ident,'includeTurns':True})
-    with server.lock:active=server.active_turns.get(ident)
+    with server.lock:
+        active=server.active_turns.get(ident)
+        native_finished=dict(server.completed_turns)
+        commands={turn:{key:dict(item) for key,item in items.items()}
+                  for (thread,turn),items in server.active_commands.items() if thread==ident}
+        recent={(turn,key):dict(item) for (thread,turn,key),item in server.recent_commands.items() if thread==ident}
     if active:
         for turn in result['thread'].get('turns',[]):
-            if turn['id']==active:turn['status']='inProgress'
+            if turn['id']==active and (ident,active) not in native_finished:turn['status']='inProgress'
+    turns=result['thread'].setdefault('turns',[])
+    for turn_id in set(commands)|{turn_id for turn_id,_ in recent}:
+        turn=next((turn for turn in turns if turn['id']==turn_id),None)
+        if turn is None:
+            turn={'id':turn_id,'status':native_finished.get((ident,turn_id),'inProgress'),'items':[],'runtimeOnly':True}
+            turns.append(turn)
+        items={item['id']:item for item in turn.get('items',[])}
+        for (record_turn,key),item in recent.items():
+            if record_turn==turn_id:items[key]=item
+        items.update(commands.get(turn_id,{}));turn['items']=list(items.values())
+    for turn in turns:
+        turn['activeCommandIds']=list(commands.get(turn['id'],{}))
+        turn['backgroundRunning']=bool(turn['activeCommandIds'] and (ident,turn['id']) in native_finished)
     result['running_turn_id']=active
     with database() as db:mapping=lifecycle.state(db,'thread',ident)['metadata'].get('path_map',{})
     if isinstance(mapping,dict):
@@ -903,7 +921,7 @@ def prompt(ident:str,body:Prompt):
                 'settings':{'model':body.model,'reasoning_effort':body.effort,'developer_instructions':None}}})
         with server.lock:
             pair=(ident,result['turn']['id'])
-            if result['turn'].get('status')=='inProgress' and pair not in server.completed_turns:
+            if result['turn'].get('status')=='inProgress' and (pair not in server.completed_turns or server.active_commands.get(pair)):
                 server.active_turns[ident]=result['turn']['id']
                 server.turn_modes[pair]=body.mode
         return result
@@ -914,31 +932,38 @@ def stop(ident:str):
     own(ident)
     with mutation:
         data = server.request('thread/read',{'threadId':ident,'includeTurns':True})
-        active = next((t for t in reversed(data['thread'].get('turns',[])) if t.get('status')=='inProgress'),None)
-        with server.lock:live_id=server.active_turns.get(ident)
-        if live_id and (not active or active['id']!=live_id):active={'id':live_id,'items':[]}
+        with server.lock:
+            finished=set(server.completed_turns)
+            live_pairs={pair:set(items) for pair,items in server.active_commands.items() if pair[0]==ident and items}
+            live_id=server.active_turns.get(ident)
+        active = next((t for t in reversed(data['thread'].get('turns',[]))
+                       if t.get('status')=='inProgress' and (ident,t['id']) not in finished),None)
+        if live_id and not active:active={'id':live_id,'items':[]}
+        if active and (ident,active['id']) in finished:active=None
         # Native unified-exec sessions can outlive a turn interrupt. Scope cleanup
         # to the thread id Codex injects into its tool process environment.
-        call_ids=[i['id'] for i in (active or {}).get('items',[]) if i.get('type')=='commandExecution']
+        call_ids=[call for calls in live_pairs.values() for call in calls]
+        call_ids.extend(i['id'] for i in (active or {}).get('items',[]) if i.get('type')=='commandExecution' and i.get('status')=='inProgress')
         if active:
             with server.lock:
                 call_ids.extend(server.active_calls.get((ident,active['id']),set()))
-                call_ids.extend(e['params']['item']['id'] for e in server.events
-                    if e.get('method') in {'item/started','item/completed'}
-                    and e.get('params',{}).get('threadId')==ident
-                    and e['params'].get('turnId')==active['id']
-                    and e['params'].get('item',{}).get('type')=='commandExecution')
-            call_ids=list(set(call_ids))
+        call_ids=list(set(call_ids))
+        with server.lock:
+            server.cancelled_turns.update(live_pairs)
+            if active:server.cancelled_turns.add((ident,active['id']))
         if call_ids:
             # Separate watcher handles native late-spawn races. Native call ids
             # prevent it from affecting any subsequent turn in this thread.
             subprocess.Popen([sys.executable,str(Path(__file__).with_name('cancel_tools.py')),ident,json.dumps(call_ids)],
                 stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
         if active:
-            with server.lock: server.cancelled_turns.add((ident,active['id']))
-            server.request('turn/interrupt',{'threadId':ident,'turnId':active['id']})
+            try:server.request('turn/interrupt',{'threadId':ident,'turnId':active['id']})
+            except HTTPException:
+                with server.lock:ended=(ident,active['id']) in server.completed_turns
+                if not ended:raise
+                active=None
     audit('turn.stop',ident)
-    return {'interrupted':bool(active),'cancelled_tool_calls':len(call_ids)}
+    return {'interrupted':bool(active),'cancelled_tool_calls':len(call_ids),'background_stop_requested':bool(live_pairs)}
 
 
 
@@ -954,6 +979,8 @@ def events(cursor:int=0):
     with server.lock:
         return redact({'cursor':server.cursor,'generation':server.generation,'provider':provider_state(),
             'refresh':bool(server.events and cursor<server.events[0]['cursor']-1),
+            'background_turns':[{'threadId':thread,'turnId':turn} for (thread,turn),items in server.active_commands.items()
+                                if thread in owned and items and (thread,turn) in server.completed_turns],
             'events':[e for e in server.events if e['cursor']>cursor and permitted(e)],
             'pending':[m for m in server.approvals.values() if permitted(m)]})
 
