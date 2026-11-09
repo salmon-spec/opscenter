@@ -130,5 +130,5 @@ def test_goal_read_failure_fails_closed_without_exposing_native_error(tmp_path):
 
 def test_public_goal_guard_only_reads_goal_state():
     native=Native()
-    assert require_no_running_goal(native,'source') is None
+    assert require_no_running_goal(native,'source') is False
     assert native.calls==[('thread/goal/get',{'threadId':'source'})]

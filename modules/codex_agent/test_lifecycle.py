@@ -339,3 +339,39 @@ def test_native_mixed_content_preserves_fragments_during_read_export_and_copy(na
     mapped=reread.json()['thread']['turns'][0]['items'][0]['content']
     assert mapped[0:2]==content[0:2] and mapped[3:]==content[3:]
     assert Path(mapped[2]['path']).is_relative_to(main.ROOT/'projects'/target)
+
+
+def test_native_archived_chat_can_recycle_restore_and_copy_project_without_changing_source(native,monkeypatch,tmp_path):
+    from fastapi import HTTPException
+    import sqlite3
+    client,token,histories,calls=native;workspace=project(native);ident=chat(native,workspace)
+    home=tmp_path/'native-home';home.mkdir();monkeypatch.setenv('CODEX_HOME',str(home))
+    with sqlite3.connect(home/'state_5.sqlite') as db:
+        db.execute('create table threads(id text primary key,archived integer not null)')
+        db.execute('insert into threads values(?,0)',(ident,))
+    with sqlite3.connect(home/'goals_1.sqlite') as db:
+        db.execute('create table thread_goals(thread_id text primary key,goal_id text,objective text,status text,token_budget integer,tokens_used integer,time_used_seconds integer,created_at_ms integer,updated_at_ms integer)')
+    original=main.server.request
+    def rpc(method,params=None,**kwargs):
+        params=params or {};target=params.get('threadId')
+        with sqlite3.connect(home/'state_5.sqlite') as db:row=db.execute('select archived from threads where id=?',(target,)).fetchone()
+        if method=='thread/goal/get' and row and row[0]:raise HTTPException(502,'thread not found: '+target)
+        result=original(method,params,**kwargs)
+        if method=='thread/fork':
+            with sqlite3.connect(home/'state_5.sqlite') as db:db.execute('insert into threads values(?,0)',(result['thread']['id'],))
+        if method in {'thread/archive','thread/unarchive'}:
+            with sqlite3.connect(home/'state_5.sqlite') as db:db.execute('update threads set archived=? where id=?',(int(method=='thread/archive'),target))
+        return result
+    monkeypatch.setattr(main.server,'request',rpc)
+    query={'workspace':workspace};root=main.ROOT/'projects'/workspace
+    (root/'keep.txt').write_text('source file preserved');before=copy.deepcopy(histories[ident])
+    assert client.post('/api/v1/threads/'+ident+'/edit',headers=token(),params=query,json={'archived':True}).status_code==200
+    assert client.post('/api/v1/threads/'+ident+'/delete',headers=token(),params=query,json={}).status_code==200
+    restored=client.post('/api/v1/threads/'+ident+'/restore',headers=token(),params=query,json={})
+    assert restored.status_code==200 and restored.json()['archived']
+    copied=client.post('/api/v1/workspaces/'+workspace+'/copy',headers=token(),json={})
+    assert copied.status_code==200,copied.text
+    assert copied.json()['copied_threads']==1
+    assert histories[ident]==before and (root/'keep.txt').read_text()=='source file preserved'
+    with sqlite3.connect(home/'state_5.sqlite') as db:assert db.execute('select archived from threads where id=?',(ident,)).fetchone()==(1,)
+    assert client.get('/api/v1/threads/'+ident,headers=token(),params=query).json()['metadata']['archived']

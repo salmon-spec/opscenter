@@ -42,7 +42,7 @@ import lifecycle
 from conversation_ops import fork_conversation, cleanup_conversation
 from gateway_history import copy_public_history, cleanup_public_history
 
-VERSION = '0.7.2'
+VERSION = '0.7.3'
 IMAGE_INSTRUCTIONS = ("Work in the current workspace and preserve user files. Reply in Chinese unless requested otherwise. "
     "For image creation requests, an installed image tool uses the configured Agent API. "
     "Run python /opt/module/codex_agent/image_tool.py --prompt '<image description>' using the terminal tool, "
